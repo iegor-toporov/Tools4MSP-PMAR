@@ -277,6 +277,66 @@ function WindFarmsLayer({ geojson, visible }) {
   return null
 }
 
+// ── EMODnet MSP aquaculture zones overlay ─────────────────────────────────────
+function MspZonesLayer({ geojson, visible }) {
+  const map        = useMap()
+  const layerRef   = useRef(null)
+  const markersRef = useRef([])
+
+  useEffect(() => {
+    layerRef.current?.remove()
+    layerRef.current = null
+    markersRef.current.forEach(m => m.remove())
+    markersRef.current = []
+    if (!geojson?.features?.length) return
+
+    const icon = createPinIcon('#a5f3fc', '#0891b2')
+
+    layerRef.current = L.geoJSON(geojson, {
+      style: {
+        color:       '#06b6d4',
+        fillColor:   '#cffafe',
+        fillOpacity: 0.25,
+        weight:      1.5,
+        opacity:     0.85,
+        dashArray:   '6 3',
+      },
+      pointToLayer: (_feature, latlng) => {
+        const m = L.marker(latlng, { icon, interactive: false, zIndexOffset: 500 })
+        markersRef.current.push(m)
+        return m
+      },
+    }).addTo(map)
+
+    geojson.features.forEach(feature => {
+      const type = feature.geometry?.type
+      if (type === 'Point' || type === 'MultiPoint') return
+      try {
+        const bounds = L.geoJSON(feature).getBounds()
+        if (!bounds.isValid()) return
+        const m = L.marker(bounds.getCenter(), { icon, interactive: false, zIndexOffset: 500 }).addTo(map)
+        markersRef.current.push(m)
+      } catch { /* geometria non valida, skip */ }
+    })
+
+    return () => {
+      layerRef.current?.remove()
+      markersRef.current.forEach(m => m.remove())
+    }
+  }, [geojson, map])
+
+  useEffect(() => {
+    if (!layerRef.current) return
+    layerRef.current.setStyle({ opacity: visible ? 0.85 : 0, fillOpacity: visible ? 0.25 : 0 })
+    markersRef.current.forEach(m => {
+      const el = m.getElement()
+      if (el) el.style.opacity = visible ? '1' : '0'
+    })
+  }, [visible])
+
+  return null
+}
+
 // ── EMODnet Natura 2000 sites overlay ────────────────────────────────────────
 function Natura2000Layer({ geojson, visible }) {
   const map      = useMap()
@@ -676,6 +736,10 @@ export default function App() {
   const [pmarErrorMsg,    setPmarErrorMsg]    = useState(null)
   const [showPmarRaster,   setShowPmarRaster]   = useState(true)
   const [showWindFarms,    setShowWindFarms]    = useState(true)
+  const [mspZonesPreview, setMspZonesPreview] = useState(null)
+  const [mspZonesLoading, setMspZonesLoading] = useState(false)
+  const [mspZonesEmpty,   setMspZonesEmpty]   = useState(false)
+  const [showMspZones,    setShowMspZones]    = useState(true)
   const [activeIndicator,  setActiveIndicator]  = useState('ppi')
   const [activeMapTool,     setActiveMapTool]     = useState(null)
   const [histograms,        setHistograms]        = useState([])
@@ -704,6 +768,7 @@ export default function App() {
 
   const windfarmsGeoJSON = pmarData?.windfarms_geojson ?? windfarmsPreview
   const offshoreGeoJSON  = pmarData?.offshore_geojson  ?? offshorePreview
+  const mspZonesGeoJSON  = pmarData?.msp_zones_geojson ?? mspZonesPreview
 
   const timerRef = useRef(null)
 
@@ -765,6 +830,36 @@ export default function App() {
       })
       .catch(() => { setOffshoreEmpty(true) })
       .finally(() => setOffshoreLoading(false))
+  }, [useSource, seedShape])
+
+  // ── MSP zones preview fetch ────────────────────────────────────────────────
+  useEffect(() => {
+    if (useSource !== 'msp_zones' || !seedShape) {
+      setMspZonesPreview(null)
+      return
+    }
+    const bounds = seedShapeBounds(seedShape)
+    if (!bounds) return
+
+    setMspZonesPreview(null)
+    setMspZonesEmpty(false)
+    setMspZonesLoading(true)
+    fetch('/processes/msp_zones/execution', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ inputs: bounds }),
+    })
+      .then(r => r.json())
+      .then(raw => {
+        const data = raw.result ?? raw
+        if (data?.features?.length > 0) {
+          setMspZonesPreview(data)
+        } else {
+          setMspZonesEmpty(true)
+        }
+      })
+      .catch(() => { setMspZonesEmpty(true) })
+      .finally(() => setMspZonesLoading(false))
   }, [useSource, seedShape])
 
   function handleToolChange(tool) {
@@ -936,7 +1031,7 @@ export default function App() {
       }
       const resp = await fetch('/processes/pmar/execution', {
         method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Prefer': 'respond-async' },
         body:    JSON.stringify({ inputs }),
       })
 
@@ -950,8 +1045,28 @@ export default function App() {
         throw new Error(message)
       }
 
-      const raw  = await resp.json()
-      const data = raw.result ?? raw
+      const { jobID } = await resp.json()
+      const jsonHeaders = { 'Accept': 'application/json' }
+
+      await new Promise((resolve, reject) => {
+        const iv = setInterval(async () => {
+          try {
+            const jobResp = await fetch(`/jobs/${jobID}`, { headers: jsonHeaders })
+            const job     = await jobResp.json()
+            if (job.status === 'successful') {
+              clearInterval(iv)
+              resolve()
+            } else if (job.status === 'failed') {
+              clearInterval(iv)
+              reject(new Error(job.message || t.status.badResponse))
+            }
+          } catch (e) { clearInterval(iv); reject(e) }
+        }, 3000)
+      })
+
+      const resResp = await fetch(`/jobs/${jobID}/results`, { headers: jsonHeaders })
+      const raw     = await resResp.json()
+      const data    = raw.result ?? raw
 
       if (!data.raster_values || !data.bounds) throw new Error(t.status.badResponse)
 
@@ -1124,6 +1239,7 @@ export default function App() {
         <SeedingAreaLayer geojson={pmarData?.seeding_geojson ?? null} visible={showSeedShape} />
         <WindFarmsLayer geojson={windfarmsGeoJSON} visible={showWindFarms} />
         <OffshoreInstallationsLayer geojson={offshoreGeoJSON} visible={showOffshoreInstallations} />
+        <MspZonesLayer geojson={mspZonesGeoJSON} visible={showMspZones} />
         <Natura2000Layer geojson={natura2000Geojson} visible={showNatura2000} />
         <SeedDrawer
           drawMode={drawMode}
@@ -1228,11 +1344,13 @@ export default function App() {
         activeTool={activeTool}
         onToolChange={handleToolChange}
         useSource={useSource}
-        onUseSourceChange={src => { setUseSource(src); setWindfarmsEmpty(false); setOffshoreEmpty(false) }}
+        onUseSourceChange={src => { setUseSource(src); setWindfarmsEmpty(false); setOffshoreEmpty(false); setMspZonesEmpty(false) }}
         windfarmsLoading={windfarmsLoading}
         windfarmsEmpty={windfarmsEmpty}
         offshoreLoading={offshoreLoading}
         offshoreEmpty={offshoreEmpty}
+        mspZonesLoading={mspZonesLoading}
+        mspZonesEmpty={mspZonesEmpty}
         natura2000Loading={natura2000Loading}
         natura2000Empty={natura2000Empty}
         natura2000Geojson={natura2000Geojson}
@@ -1267,6 +1385,9 @@ export default function App() {
           showOffshoreInstallations={showOffshoreInstallations}
           onToggleOffshoreInstallations={() => setShowOffshoreInstallations(v => !v)}
           hasOffshoreInstallations={!!offshoreGeoJSON}
+          showMspZones={showMspZones}
+          onToggleMspZones={() => setShowMspZones(v => !v)}
+          hasMspZones={!!mspZonesGeoJSON}
           onDownloadPmar={handleDownloadPmar}
           elevated={!!simData}
           activeIndicator={activeIndicator}

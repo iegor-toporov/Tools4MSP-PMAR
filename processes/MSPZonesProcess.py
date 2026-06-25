@@ -4,20 +4,20 @@ import os
 
 import geopandas as gpd
 from pygeoapi.process.base import BaseProcessor, ProcessorExecuteError
-from processes.emodnet_fetch import _fetch_windfarms, EMODNET_CACHE_DIR
+from processes.emodnet_fetch import _fetch_msp_zones, EMODNET_CACHE_DIR
 from processes.logging_utils import setup_logger
 
-logger = setup_logger('windfarms_process', 'windfarms', 'windfarms.log')
+logger = setup_logger('msp_zones_process', 'msp_zones', 'msp_zones.log')
 
 PROCESS_METADATA = {
     'version': '0.1.0',
-    'id': 'windfarms',
-    'title': {'en': 'Wind Farms Query'},
+    'id': 'msp_zones',
+    'title': {'en': 'MSP Aquaculture Zones Query'},
     'description': {
-        'en': 'Returns EMODnet offshore wind farm polygons for a given bounding box.'
+        'en': 'Returns EMODnet MSP zoning polygons for Italian aquaculture (priority) areas within a given bounding box.'
     },
     'jobControlOptions': ['sync-execute'],
-    'keywords': ['windfarms', 'emodnet', 'geojson'],
+    'keywords': ['msp', 'zones', 'aquaculture', 'emodnet', 'geojson'],
     'inputs': {
         'lon_min': {'schema': {'type': 'number'}, 'minOccurs': 1, 'maxOccurs': 1},
         'lat_min': {'schema': {'type': 'number'}, 'minOccurs': 1, 'maxOccurs': 1},
@@ -26,27 +26,27 @@ PROCESS_METADATA = {
     },
     'outputs': {
         'result': {
-            'title': 'GeoJSON FeatureCollection of wind farms',
+            'title': 'GeoJSON FeatureCollection of MSP aquaculture zones',
             'schema': {'type': 'object', 'contentMediaType': 'application/json'},
         }
     },
 }
 
 
-class WindfarmsProcessor(BaseProcessor):
-    """OGC API Process that returns EMODnet offshore wind farm polygons for a given bounding box."""
+class MSPZonesProcessor(BaseProcessor):
+    """OGC API Process that returns EMODnet MSP aquaculture zoning polygons for Italy within a given bounding box."""
 
     def __init__(self, processor_def):
         """Initialise the processor with its OGC API metadata definition."""
         super().__init__(processor_def, PROCESS_METADATA)
 
     def execute(self, data):
-        """Execute the wind farms spatial query.
+        """Execute the MSP zones spatial query.
 
         Validates the input bounding box, delegates the WFS fetch (with 7-day
-        file-level caching) to :func:`~processes.emodnet_fetch._fetch_windfarms`,
-        simplifies polygon geometries to a 0.005° tolerance to reduce payload size,
-        and serialises the result as a GeoJSON FeatureCollection.
+        file-level caching) to :func:`~processes.emodnet_fetch._fetch_msp_zones`,
+        and serialises the result as a GeoJSON FeatureCollection containing only
+        the geometries of matching features.
 
         Args:
             data (dict): OGC API input payload. Required keys:
@@ -56,7 +56,7 @@ class WindfarmsProcessor(BaseProcessor):
         Returns:
             tuple[str, dict]: ``('application/json', geojson)`` where *geojson*
             is a GeoJSON FeatureCollection. Returns an empty FeatureCollection
-            when no wind farms intersect the requested bbox.
+            when no zones intersect the requested bbox.
 
         Raises:
             ProcessorExecuteError: If any bounding-box parameter is missing,
@@ -71,17 +71,17 @@ class WindfarmsProcessor(BaseProcessor):
             raise ProcessorExecuteError(f'Parametri bbox non validi: {e}')
 
         study_area = [lon_min, lat_min, lon_max, lat_max]
-        logger.info(f'Windfarms query: bbox={study_area}')
+        logger.info(f'MSP zones query: bbox={study_area}')
 
-        gdf = _fetch_windfarms(study_area, EMODNET_CACHE_DIR)
+        gdf = _fetch_msp_zones(study_area, EMODNET_CACHE_DIR)
 
         if gdf.empty:
             return 'application/json', {'type': 'FeatureCollection', 'features': []}
 
         geojson = json.loads(gdf[['geometry']].simplify(0.005).to_json())
-        logger.info(f'Windfarms restituiti: {len(gdf)} feature')
+        logger.info(f'Zone MSP acquacoltura restituite: {len(gdf)} feature')
         return 'application/json', geojson
 
     def __repr__(self):
         """Return an unambiguous string representation of this processor."""
-        return '<WindfarmsProcessor>'
+        return '<MSPZonesProcessor>'

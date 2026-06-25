@@ -87,6 +87,11 @@ resources:
       processor:
             name: processes.OffshoreInstallationsProcess.OffshoreInstallationsProcessor
 
+    msp_zones:
+      type: process
+      processor:
+            name: processes.MSPZonesProcess.MSPZonesProcessor
+
     natura2000:
       type: process
       processor:

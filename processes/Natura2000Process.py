@@ -4,7 +4,7 @@ import os
 
 import geopandas as gpd
 from pygeoapi.process.base import BaseProcessor, ProcessorExecuteError
-from processes.PMARProcess import _fetch_natura2000, EMODNET_CACHE_DIR
+from processes.emodnet_fetch import _fetch_natura2000, EMODNET_CACHE_DIR
 from processes.logging_utils import setup_logger
 
 logger = setup_logger('natura2000_process', 'natura2000', 'natura2000.log')
@@ -44,7 +44,7 @@ class Natura2000Processor(BaseProcessor):
         """Execute the Natura 2000 spatial query.
 
         Validates the input bounding box, delegates the WFS fetch (with 7-day
-        file-level caching) to :func:`~processes.PMARProcess._fetch_natura2000`,
+        file-level caching) to :func:`~processes.emodnet_fetch._fetch_natura2000`,
         and serialises the result as a GeoJSON FeatureCollection containing only
         the polygon geometries of matching Natura 2000 marine protected areas.
 

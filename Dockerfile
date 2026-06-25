@@ -41,7 +41,7 @@ RUN --mount=type=secret,id=git_token \
     if [ -f /run/secrets/git_token ]; then \
         TOKEN=$(tr -d '[:space:]' < /run/secrets/git_token) && \
         GIT_TERMINAL_PROMPT=0 pip install --no-cache-dir \
-            "git+https://iegor-toporov:${TOKEN}@github.com/iegor-toporov/pmar.git"; \
+            "git+https://iegor-toporov:${TOKEN}@github.com/iegor-toporov/pmar.git@bugfix/fix-streaming"; \
     fi
 
 # Copy application source

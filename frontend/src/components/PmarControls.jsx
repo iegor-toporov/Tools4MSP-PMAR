@@ -1,5 +1,5 @@
 import { Paper, Stack, Group, SegmentedControl, ActionIcon, Tooltip, Text, Divider } from '@mantine/core'
-import { IconEye, IconEyeOff, IconDownload, IconCircle, IconWind, IconDroplet } from '@tabler/icons-react'
+import { IconEye, IconEyeOff, IconDownload, IconCircle, IconWind, IconDroplet, IconFish } from '@tabler/icons-react'
 import { useLang } from '../LanguageContext'
 
 const INDICATORS_BASE = [
@@ -21,6 +21,9 @@ export default function PmarControls({
   showOffshoreInstallations,
   onToggleOffshoreInstallations,
   hasOffshoreInstallations,
+  showMspZones,
+  onToggleMspZones,
+  hasMspZones,
   onDownloadPmar,
   elevated,
   activeIndicator,
@@ -121,6 +124,19 @@ export default function PmarControls({
                 onClick={onToggleOffshoreInstallations}
               >
                 <IconDroplet size={14} />
+              </ActionIcon>
+            </Tooltip>
+          )}
+
+          {hasMspZones && (
+            <Tooltip label={showMspZones ? c.hideMspZones : c.showMspZones} withArrow>
+              <ActionIcon
+                size="sm"
+                variant={showMspZones ? 'filled' : 'subtle'}
+                color="blue"
+                onClick={onToggleMspZones}
+              >
+                <IconFish size={14} />
               </ActionIcon>
             </Tooltip>
           )}

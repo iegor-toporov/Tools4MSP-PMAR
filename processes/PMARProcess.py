@@ -24,9 +24,13 @@ from processes.OpenDriftProcess import (
     _get_max_depth_for_area,
     _build_model, _ROOT, _LOG_DIR, OUT_DIR, CACHE_DIR,
 )
-
-EMODNET_CACHE_DIR = os.path.join(CACHE_DIR, 'emodnet')
-os.makedirs(EMODNET_CACHE_DIR, exist_ok=True)
+from processes.emodnet_fetch import (
+    EMODNET_CACHE_DIR,
+    _fetch_windfarms,
+    _fetch_offshore_installations,
+    _fetch_msp_zones,
+    _fetch_natura2000,
+)
 
 SCENARIOS_DIR     = os.path.join(_ROOT, 'scenarios')
 SCENARIOS_SHP_DIR = os.path.join(SCENARIOS_DIR, 'shapefiles')
@@ -161,7 +165,7 @@ PROCESS_METADATA = {
     'description': {
         'en': 'Lagrangian particle density raster computed with PMAR (CNR-ISMAR).'
     },
-    'jobControlOptions': ['sync-execute'],
+    'jobControlOptions': ['sync-execute', 'async-execute'],
     'keywords': ['pmar', 'particles', 'density', 'raster', 'ocean'],
     'inputs': {
         'geojson': {
@@ -210,7 +214,7 @@ PROCESS_METADATA = {
         },
         'use_source': {
             'title': 'Anthropogenic use layer',
-            'description': '"none" (default), "windfarms", "offshore_installations" or "geotiff".',
+            'description': '"none" (default), "windfarms", "offshore_installations", "msp_zones" or "geotiff".',
             'schema': {'type': 'string', 'default': 'none'},
             'minOccurs': 0, 'maxOccurs': 1,
         },
@@ -528,6 +532,23 @@ class PMARProcessor(BaseProcessor):
                     else:
                         logger.warning("Nessun impianto offshore trovato nell'area di studio")
 
+                elif use_source == 'msp_zones':
+                    logger.info('Recupero zone MSP acquacoltura (Italia) da EMODnet...')
+                    gdf_mz = _fetch_msp_zones(study_area, EMODNET_CACHE_DIR)
+                    if not gdf_mz.empty:
+                        use_raster = _gdf_to_use_raster(gdf_mz, p.grid)
+                        if float(use_raster.max()) > 0:
+                            use_weighted = True
+                            use_geojson  = json.loads(
+                                gdf_mz[['geometry']].simplify(0.005).to_json()
+                            )
+                            logger.info(f'Zone MSP raster pronto: {len(gdf_mz)} feature')
+                        else:
+                            logger.warning("Nessuna zona MSP sovrapposta all'area di seeding")
+                            use_raster = None
+                    else:
+                        logger.warning("Nessuna zona MSP trovata nell'area di studio")
+
                 elif use_source == 'geotiff':
                     if not geotiff_b64 and geotiff_url:
                         import urllib.request
@@ -644,6 +665,8 @@ class PMARProcessor(BaseProcessor):
                         result['windfarms_geojson'] = use_geojson
                     elif use_source == 'offshore_installations':
                         result['offshore_geojson'] = use_geojson
+                    elif use_source == 'msp_zones':
+                        result['msp_zones_geojson'] = use_geojson
 
                 # ── Deviazione standard (solo multi-seeding) ─────────────
                 if h_std is not None:
@@ -892,147 +915,6 @@ def _serialize_indicator(da, res):
         'vmax':               float(vmax),
         'geotiff_b64':        _histogram_to_geotiff(da),
     }
-
-
-def _fetch_windfarms(study_area, cache_dir):
-    """Query EMODnet WFS for wind farm polygons within study_area, with 7-day file cache."""
-    import hashlib
-    import pickle
-
-    lon_min, lat_min, lon_max, lat_max = study_area
-    cache_key  = hashlib.md5(
-        f'wf_{lon_min:.3f}_{lat_min:.3f}_{lon_max:.3f}_{lat_max:.3f}'.encode()
-    ).hexdigest()
-    cache_file = os.path.join(cache_dir, f'windfarms_{cache_key}.pkl')
-
-    if os.path.exists(cache_file):
-        age = _time.time() - os.path.getmtime(cache_file)
-        if age < 7 * 86400:
-            with open(cache_file, 'rb') as f:
-                return pickle.load(f)
-
-    bbox_str = f'{lon_min},{lat_min},{lon_max},{lat_max},EPSG:4326'
-    base_url = 'https://ows.emodnet-humanactivities.eu/wfs?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature&OUTPUTFORMAT=application/json'
-    gdf = None
-    for layer in ('emodnet:windfarmspoly', 'emodnet:windfarms'):
-        url = f'{base_url}&TYPENAMES={layer}&BBOX={bbox_str}'
-        try:
-            candidate = gpd.read_file(url)
-            if not candidate.empty:
-                gdf = candidate
-                logger.info(f'EMODnet layer usato: {layer}, features: {len(gdf)}')
-                break
-            logger.debug(f'EMODnet layer {layer}: 0 features nell\'area')
-        except Exception as exc:
-            logger.warning(f'EMODnet WFS {layer} fallito: {exc}')
-
-    if gdf is None:
-        return gpd.GeoDataFrame(geometry=gpd.GeoSeries([], dtype='geometry', crs='EPSG:4326'))
-
-    if gdf.crs is None:
-        gdf = gdf.set_crs('EPSG:4326')
-    else:
-        gdf = gdf.to_crs('EPSG:4326')
-
-    os.makedirs(cache_dir, exist_ok=True)
-    with open(cache_file, 'wb') as f:
-        pickle.dump(gdf, f)
-
-    return gdf
-
-
-def _fetch_offshore_installations(study_area, cache_dir):
-    """Query EMODnet WFS for offshore installation features within study_area, with 7-day file cache."""
-    import hashlib
-    import pickle
-
-    lon_min, lat_min, lon_max, lat_max = study_area
-    cache_key  = hashlib.md5(
-        f'oi_{lon_min:.3f}_{lat_min:.3f}_{lon_max:.3f}_{lat_max:.3f}'.encode()
-    ).hexdigest()
-    cache_file = os.path.join(cache_dir, f'offshore_{cache_key}.pkl')
-
-    if os.path.exists(cache_file):
-        age = _time.time() - os.path.getmtime(cache_file)
-        if age < 7 * 86400:
-            with open(cache_file, 'rb') as f:
-                return pickle.load(f)
-
-    bbox_str = f'{lon_min},{lat_min},{lon_max},{lat_max},EPSG:4326'
-    base_url = 'https://ows.emodnet-humanactivities.eu/wfs?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature&OUTPUTFORMAT=application/json'
-    gdf = None
-    for layer in ('emodnet:offshorefacilities', 'emodnet:offshore_installations', 'emodnet:platforms'):
-        url = f'{base_url}&TYPENAMES={layer}&BBOX={bbox_str}'
-        try:
-            candidate = gpd.read_file(url)
-            if not candidate.empty:
-                gdf = candidate
-                logger.info(f'EMODnet layer usato: {layer}, features: {len(gdf)}')
-                break
-            logger.debug(f'EMODnet layer {layer}: 0 features nell\'area')
-        except Exception as exc:
-            logger.warning(f'EMODnet WFS {layer} fallito: {exc}')
-
-    if gdf is None:
-        return gpd.GeoDataFrame(geometry=gpd.GeoSeries([], dtype='geometry', crs='EPSG:4326'))
-
-    if gdf.crs is None:
-        gdf = gdf.set_crs('EPSG:4326')
-    else:
-        gdf = gdf.to_crs('EPSG:4326')
-
-    os.makedirs(cache_dir, exist_ok=True)
-    with open(cache_file, 'wb') as f:
-        pickle.dump(gdf, f)
-
-    return gdf
-
-
-def _fetch_natura2000(study_area, cache_dir):
-    """Query EMODnet WFS for Natura 2000 marine sites within study_area, with 7-day file cache."""
-    import hashlib
-    import pickle
-
-    lon_min, lat_min, lon_max, lat_max = study_area
-    cache_key  = hashlib.md5(
-        f'n2k_{lon_min:.3f}_{lat_min:.3f}_{lon_max:.3f}_{lat_max:.3f}'.encode()
-    ).hexdigest()
-    cache_file = os.path.join(cache_dir, f'natura2000_{cache_key}.pkl')
-
-    if os.path.exists(cache_file):
-        age = _time.time() - os.path.getmtime(cache_file)
-        if age < 7 * 86400:
-            with open(cache_file, 'rb') as f:
-                return pickle.load(f)
-
-    bbox_str = f'{lon_min},{lat_min},{lon_max},{lat_max},EPSG:4326'
-    base_url = 'https://ows.emodnet-humanactivities.eu/wfs?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature&OUTPUTFORMAT=application/json'
-    gdf = None
-    for layer in ('emodnet:natura2000areas', 'emodnet:marineprotectedareas'):
-        url = f'{base_url}&TYPENAMES={layer}&BBOX={bbox_str}'
-        try:
-            candidate = gpd.read_file(url)
-            if not candidate.empty:
-                gdf = candidate
-                logger.info(f'EMODnet layer usato: {layer}, features: {len(gdf)}')
-                break
-            logger.debug(f'EMODnet layer {layer}: 0 features nell\'area')
-        except Exception as exc:
-            logger.warning(f'EMODnet WFS {layer} fallito: {exc}')
-
-    if gdf is None:
-        return gpd.GeoDataFrame(geometry=gpd.GeoSeries([], dtype='geometry', crs='EPSG:4326'))
-
-    if gdf.crs is None:
-        gdf = gdf.set_crs('EPSG:4326')
-    else:
-        gdf = gdf.to_crs('EPSG:4326')
-
-    os.makedirs(cache_dir, exist_ok=True)
-    with open(cache_file, 'wb') as f:
-        pickle.dump(gdf, f)
-
-    return gdf
 
 
 def _geotiff_to_use_raster(geotiff_b64, grid):

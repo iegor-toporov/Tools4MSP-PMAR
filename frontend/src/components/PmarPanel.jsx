@@ -67,6 +67,7 @@ const USE_SOURCES = [
   { key: 'none'                   },
   { key: 'windfarms'              },
   { key: 'offshore_installations' },
+  { key: 'msp_zones'              },
   { key: 'geotiff'               },
 ]
 
@@ -153,6 +154,7 @@ export default function PmarPanel({
   useSource, onUseSourceChange,
   windfarmsLoading, windfarmsEmpty,
   offshoreLoading, offshoreEmpty,
+  mspZonesLoading, mspZonesEmpty,
   natura2000Loading, natura2000Empty, natura2000Geojson,
   showNatura2000, onFetchNatura2000, onToggleNatura2000,
   hasSeedShape,
@@ -808,6 +810,7 @@ export default function PmarPanel({
                   >
                     {u.key === 'windfarms' && windfarmsLoading ? '...'
                       : u.key === 'offshore_installations' && offshoreLoading ? '...'
+                      : u.key === 'msp_zones' && mspZonesLoading ? '...'
                       : p.useSources[u.key]}
                   </Button>
                 ))}
@@ -831,6 +834,16 @@ export default function PmarPanel({
               {useSource === 'offshore_installations' && offshoreEmpty && (
                 <Text size="xs" c="red.4" p="xs" style={{ background: 'rgba(239,68,68,0.07)', borderRadius: 6, borderLeft: '2px solid rgba(239,68,68,0.4)' }}>
                   {p.useOffshoreEmpty}
+                </Text>
+              )}
+              {useSource === 'msp_zones' && !mspZonesEmpty && (
+                <Text size="xs" c="blue.4" p="xs" style={{ background: 'rgba(10,132,255,0.07)', borderRadius: 6, borderLeft: '2px solid rgba(10,132,255,0.45)' }}>
+                  {p.useMspZonesInfo}
+                </Text>
+              )}
+              {useSource === 'msp_zones' && mspZonesEmpty && (
+                <Text size="xs" c="red.4" p="xs" style={{ background: 'rgba(239,68,68,0.07)', borderRadius: 6, borderLeft: '2px solid rgba(239,68,68,0.4)' }}>
+                  {p.useMspZonesEmpty}
                 </Text>
               )}
 
