@@ -13,7 +13,7 @@ from pygeoapi.process.base import (
 )
 from pygeoapi.util import JobStatus, RequestedResponse, Subscriber
 
-_TTL = 7 * 24 * 3600  # 7 giorni
+_TTL = 7 * 24 * 3600  # 7 days
 
 
 class CeleryManager(BaseManager):

@@ -174,11 +174,11 @@ def _save_custom_shapefile(geojson_input, shapefile_b64, dest_dir, custom_id):
                 zf.extractall(tmpdir)
             shp_files = glob.glob(os.path.join(tmpdir, '**', '*.shp'), recursive=True)
             if not shp_files:
-                raise ProcessorExecuteError('Nessun file .shp trovato nello ZIP.')
+                raise ProcessorExecuteError('No .shp file found in the ZIP.')
             gdf = gpd.read_file(shp_files[0]).to_crs('EPSG:4326')
         gdf.to_file(shp_path)
         return shp_path
-    raise ProcessorExecuteError('Fornire geojson oppure shapefile_b64.')
+    raise ProcessorExecuteError('Provide geojson or shapefile_b64.')
 
 
 def _build_custom_scenario(data, shp_path=None, area_label=None):
@@ -207,7 +207,7 @@ def _build_custom_scenario(data, shp_path=None, area_label=None):
     shapefile_b64 = data.get('shapefile_b64')
     pressure      = data.get('pressure', 'generic')
     if pressure not in PRESSURE_MODELS:
-        raise ProcessorExecuteError(f'Pressione non valida: {pressure!r}')
+        raise ProcessorExecuteError(f'Invalid pressure: {pressure!r}')
 
     duration_days   = int(data.get('duration_days', 30))
     pnum            = min(int(data.get('pnum', 1000)), 100000)
@@ -222,7 +222,7 @@ def _build_custom_scenario(data, shp_path=None, area_label=None):
         try:
             datetime.fromisoformat(start_time_str)
         except ValueError:
-            raise ProcessorExecuteError(f'start_time non valido: {start_time_str!r}')
+            raise ProcessorExecuteError(f'Invalid start_time: {start_time_str!r}')
 
     label     = data.get('label') or f'{PRESSURE_MODELS[pressure]["label_en"]} — {start_time_str[:10]}'
     custom_id = f'custom_{uuid.uuid4().hex[:8]}'
@@ -262,7 +262,7 @@ def _build_custom_scenario(data, shp_path=None, area_label=None):
     with open(meta_path, 'w') as f:
         json.dump(sc, f, indent=2)
 
-    logger.info(f'[PrecomputeProcess] Scenario custom creato: {custom_id}, label={label!r}')
+    logger.info(f'[PrecomputeProcess] Custom scenario created: {custom_id}, label={label!r}')
     return sc, custom_id, shp_path
 
 
@@ -288,10 +288,10 @@ def _run_scenario(scenario_id, sc, shp_path, cmems_creds=None):
     nc_output = os.path.join(SCENARIOS_DIR, sc['nc_filename'])
 
     if os.path.exists(nc_output):
-        logger.info(f'[{scenario_id}] NC già presente, salto.')
+        logger.info(f'[{scenario_id}] NC already exists, skipping.')
         return
 
-    logger.info(f'[{scenario_id}] Avvio pre-calcolo: {sc["label_en"]}')
+    logger.info(f'[{scenario_id}] Starting pre-computation: {sc["label_en"]}')
 
     start_time      = datetime.fromisoformat(sc['start_time'])
     end_time        = start_time + timedelta(days=sc['duration_days'])
@@ -314,9 +314,9 @@ def _run_scenario(scenario_id, sc, shp_path, cmems_creds=None):
         )
         if dynamic is not None:
             max_depth = dynamic
-            logger.info(f'[{scenario_id}] Profondità dinamica: {max_depth:.0f} m')
+            logger.info(f'[{scenario_id}] Dynamic depth: {max_depth:.0f} m')
         else:
-            logger.warning(f'[{scenario_id}] Batimetria non disponibile, uso default {max_depth:.0f} m')
+            logger.warning(f'[{scenario_id}] Bathymetry not available, using default {max_depth:.0f} m')
     forcing_paths = [_get_forcing_file(
         bounds[0], bounds[2], bounds[1], bounds[3],
         start_time, end_time, time_step_hours, max_depth, cmems_margin,
@@ -327,19 +327,19 @@ def _run_scenario(scenario_id, sc, shp_path, cmems_creds=None):
         if wind_path:
             forcing_paths.append(wind_path)
         else:
-            logger.warning(f'[{scenario_id}] Vento non disponibile, solo correnti')
+            logger.warning(f'[{scenario_id}] Wind not available, currents only')
     if pm_cfg.get('needs_waves'):
         waves_path = _get_waves_file(bounds[0], bounds[2], bounds[1], bounds[3], start_time, end_time, cmems_margin, cmems_creds=cmems_creds)
         if waves_path:
             forcing_paths.append(waves_path)
         else:
-            logger.warning(f'[{scenario_id}] Onde non disponibili: deriva di Stokes parametrizzata dal vento')
+            logger.warning(f'[{scenario_id}] Waves not available: Stokes drift parametrised from wind')
     if pm_cfg.get('needs_thermo'):
         thermo_path = _get_thermo_file(bounds[0], bounds[2], bounds[1], bounds[3], start_time, end_time, cmems_margin, cmems_creds=cmems_creds)
         if thermo_path:
             forcing_paths.append(thermo_path)
         else:
-            logger.warning(f'[{scenario_id}] T/S non disponibili: weathering con valori costanti')
+            logger.warning(f'[{scenario_id}] T/S not available: weathering with constant values')
 
     logger.info(f'[{scenario_id}] Forcing files: {forcing_paths}')
 
@@ -371,13 +371,13 @@ def _run_scenario(scenario_id, sc, shp_path, cmems_creds=None):
                         sim_day = (sim_time - start_time).total_seconds() / 86400
                         pct     = sim_day / duration_days * 100
                         logger.info(
-                            f'[{scenario_id}] giorno {sim_day:.0f}/{duration_days} ({pct:.0f}%) '
-                            f'— {active} particelle attive — {elapsed_now:.1f} min'
+                            f'[{scenario_id}] day {sim_day:.0f}/{duration_days} ({pct:.0f}%) '
+                            f'— {active} active particles — {elapsed_now:.1f} min'
                         )
                     else:
                         logger.info(
-                            f'[{scenario_id}] inizializzazione in corso '
-                            f'— {active} particelle attive — {elapsed_now:.1f} min'
+                            f'[{scenario_id}] initialising '
+                            f'— {active} active particles — {elapsed_now:.1f} min'
                         )
                 except Exception:
                     pass
@@ -396,13 +396,13 @@ def _run_scenario(scenario_id, sc, shp_path, cmems_creds=None):
             stop_progress.set()
             _progress_thread.join()
         elapsed = (_time.monotonic() - t0) / 60
-        logger.info(f'[{scenario_id}] Simulazione completata in {elapsed:.1f} minuti')
+        logger.info(f'[{scenario_id}] Simulation completed in {elapsed:.1f} minutes')
 
         shutil.move(tmp_nc, nc_output)
-        logger.info(f'[{scenario_id}] NC salvato: {nc_output}')
+        logger.info(f'[{scenario_id}] NC saved: {nc_output}')
 
     except Exception as e:
-        logger.error(f'[{scenario_id}] Fallito: {e}', exc_info=True)
+        logger.error(f'[{scenario_id}] Failed: {e}', exc_info=True)
         if os.path.exists(tmp_nc):
             os.remove(tmp_nc)
         raise
@@ -429,14 +429,14 @@ def _run_multi_scenario(scenario_id, sc, shp_path, cmems_creds=None):
     for n in range(seedings):
         nc_path = os.path.join(SCENARIOS_DIR, nc_filenames[n])
         if os.path.exists(nc_path):
-            logger.info(f'[{scenario_id}] Seeding {n+1}/{seedings}: NC già presente, salto.')
+            logger.info(f'[{scenario_id}] Seeding {n+1}/{seedings}: NC already exists, skipping.')
             continue
         start_n = datetime.fromisoformat(sc['start_time']) + timedelta(days=tshift * n)
         sc_n = {**sc, 'start_time': start_n.isoformat(), 'nc_filename': nc_filenames[n]}
         logger.info(f'[{scenario_id}] Seeding {n+1}/{seedings}: start={start_n.date()}')
         _run_scenario(scenario_id, sc_n, shp_path, cmems_creds=cmems_creds)
 
-    logger.info(f'[{scenario_id}] Multi-seeding completato ({seedings} run).')
+    logger.info(f'[{scenario_id}] Multi-seeding complete ({seedings} runs).')
 
 
 class PrecomputeProcessor(BaseProcessor):
@@ -487,7 +487,7 @@ class PrecomputeProcessor(BaseProcessor):
             cmems_creds = {'username': u, 'password': p}
 
         if not geojson_input and not shapefile_b64 and not t4msp_area_id:
-            raise ProcessorExecuteError('Fornire geojson, shapefile_b64 oppure t4msp_area_id.')
+            raise ProcessorExecuteError('Provide geojson, shapefile_b64, or t4msp_area_id.')
 
         shp_path   = None
         area_label = data.get('area_name') or None
@@ -501,20 +501,20 @@ class PrecomputeProcessor(BaseProcessor):
 
         sc, scenario_id, shp_path = _build_custom_scenario(data, shp_path=shp_path, area_label=area_label)
 
-        logger.info(f'[PrecomputeProcess] Avvio pre-calcolo scenario: {scenario_id}')
+        logger.info(f'[PrecomputeProcess] Starting pre-computation for scenario: {scenario_id}')
 
         if not _precompute_lock.acquire(blocking=False):
-            raise ProcessorExecuteError('Un pre-calcolo è già in corso. Riprova al termine.')
+            raise ProcessorExecuteError('A pre-computation is already running. Please wait for it to finish.')
 
         try:
             _run_multi_scenario(scenario_id, sc, shp_path, cmems_creds=cmems_creds)
         except Exception as e:
-            logger.error(f'[PrecomputeProcess] Errore nel pre-calcolo di {scenario_id}: {e}', exc_info=True)
+            logger.error(f'[PrecomputeProcess] Error during pre-computation of {scenario_id}: {e}', exc_info=True)
             raise ProcessorExecuteError(str(e))
         finally:
             _precompute_lock.release()
 
-        logger.info(f'[PrecomputeProcess] Pre-calcolo completato: {sc["nc_filenames"]}')
+        logger.info(f'[PrecomputeProcess] Pre-computation complete: {sc["nc_filenames"]}')
 
         return 'application/json', {
             'scenario_id':  scenario_id,

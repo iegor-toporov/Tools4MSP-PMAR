@@ -79,7 +79,7 @@ class OffshoreInstallationsProcessor(BaseProcessor):
             return 'application/json', {'type': 'FeatureCollection', 'features': []}
 
         geojson = json.loads(gdf[['geometry']].to_json())
-        logger.info(f'Impianti offshore restituiti: {len(gdf)} feature')
+        logger.info(f'Returned Offshore Installations: {len(gdf)} features.')
         return 'application/json', geojson
 
     def __repr__(self):

@@ -38,11 +38,11 @@ def _fetch_windfarms(study_area, cache_dir):
             candidate = gpd.read_file(url)
             if not candidate.empty:
                 gdf = candidate
-                logger.info(f'EMODnet layer usato: {layer}, features: {len(gdf)}')
+                logger.info(f'EMODnet layer used: {layer}, features: {len(gdf)}')
                 break
-            logger.debug(f'EMODnet layer {layer}: 0 features nell\'area')
+            logger.debug(f'EMODnet layer {layer}: 0 features inside the area')
         except Exception as exc:
-            logger.warning(f'EMODnet WFS {layer} fallito: {exc}')
+            logger.warning(f'EMODnet WFS {layer} failed: {exc}')
 
     if gdf is None:
         return gpd.GeoDataFrame(geometry=gpd.GeoSeries([], dtype='geometry', crs='EPSG:4326'))
@@ -82,11 +82,11 @@ def _fetch_offshore_installations(study_area, cache_dir):
             candidate = gpd.read_file(url)
             if not candidate.empty:
                 gdf = candidate
-                logger.info(f'EMODnet layer usato: {layer}, features: {len(gdf)}')
+                logger.info(f'EMODnet layer used: {layer}, features: {len(gdf)}')
                 break
-            logger.debug(f'EMODnet layer {layer}: 0 features nell\'area')
+            logger.debug(f'EMODnet layer {layer}: 0 features inside area.')
         except Exception as exc:
-            logger.warning(f'EMODnet WFS {layer} fallito: {exc}')
+            logger.warning(f'EMODnet WFS {layer} failed: {exc}')
 
     if gdf is None:
         return gpd.GeoDataFrame(geometry=gpd.GeoSeries([], dtype='geometry', crs='EPSG:4326'))
@@ -128,9 +128,9 @@ def _fetch_msp_zones(study_area, cache_dir):
         if gdf.empty:
             gdf = None
         else:
-            logger.info(f'Zone MSP acquacoltura (Italia totale): {len(gdf)} feature')
+            logger.info(f'MSP Zone aquaculture (Italy): {len(gdf)} features')
     except Exception as exc:
-        logger.warning(f'EMODnet WFS mspzoningpoly fallito: {exc}')
+        logger.warning(f'EMODnet WFS mspzoningpoly failed: {exc}')
         gdf = None
 
     if gdf is None:
@@ -144,7 +144,7 @@ def _fetch_msp_zones(study_area, cache_dir):
     from shapely.geometry import box
     bbox_geom = box(lon_min, lat_min, lon_max, lat_max)
     gdf = gdf[gdf.intersects(bbox_geom)].copy()
-    logger.info(f'Zone MSP nell\'area di studio: {len(gdf)} feature')
+    logger.info(f'MSP Zones in the study area: {len(gdf)} features')
 
     os.makedirs(cache_dir, exist_ok=True)
     with open(cache_file, 'wb') as f:
@@ -176,11 +176,11 @@ def _fetch_natura2000(study_area, cache_dir):
             candidate = gpd.read_file(url)
             if not candidate.empty:
                 gdf = candidate
-                logger.info(f'EMODnet layer usato: {layer}, features: {len(gdf)}')
+                logger.info(f'EMODnet layer used: {layer}, features: {len(gdf)}')
                 break
-            logger.debug(f'EMODnet layer {layer}: 0 features nell\'area')
+            logger.debug(f'EMODnet layer {layer}: 0 features inside area.')
         except Exception as exc:
-            logger.warning(f'EMODnet WFS {layer} fallito: {exc}')
+            logger.warning(f'EMODnet WFS {layer} failed: {exc}')
 
     if gdf is None:
         return gpd.GeoDataFrame(geometry=gpd.GeoSeries([], dtype='geometry', crs='EPSG:4326'))

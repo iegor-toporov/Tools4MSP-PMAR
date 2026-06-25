@@ -91,11 +91,11 @@ class ScenarioStatusProcessor(BaseProcessor):
                     'tshift':          sc.get('tshift', 0),
                 }
             except Exception as e:
-                logger.warning(f'[ScenarioStatus] Impossibile caricare {meta_file}: {e}')
+                logger.warning(f'[ScenarioStatus] Failed to load {meta_file}: {e}')
 
         t4msp_areas = [{'id': a['id'], 'label': a['label']} for a in _fetch_t4msp_areas()]
 
-        logger.info(f'[ScenarioStatus] Scenari custom: {len(scenarios)}, aree T4MSP: {len(t4msp_areas)}')
+        logger.info(f'[ScenarioStatus] Custom scenarios: {len(scenarios)}, T4MSP areas: {len(t4msp_areas)}')
         return 'application/json', {'scenarios': scenarios, 't4msp_areas': t4msp_areas}
 
     def __repr__(self):

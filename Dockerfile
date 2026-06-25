@@ -45,6 +45,7 @@ RUN --mount=type=secret,id=git_token \
     fi
 
 # Copy application source
+COPY data/ ./data/
 COPY processes/ ./processes/
 COPY pygeoapi-config.yml ./
 COPY scripts/entrypoint.sh ./scripts/entrypoint.sh

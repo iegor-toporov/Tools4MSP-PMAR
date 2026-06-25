@@ -68,7 +68,7 @@ class WindfarmsProcessor(BaseProcessor):
             lon_max = float(data['lon_max'])
             lat_max = float(data['lat_max'])
         except (KeyError, TypeError, ValueError) as e:
-            raise ProcessorExecuteError(f'Parametri bbox non validi: {e}')
+            raise ProcessorExecuteError(f'Invalid bbox parameters: {e}')
 
         study_area = [lon_min, lat_min, lon_max, lat_max]
         logger.info(f'Windfarms query: bbox={study_area}')
@@ -79,7 +79,7 @@ class WindfarmsProcessor(BaseProcessor):
             return 'application/json', {'type': 'FeatureCollection', 'features': []}
 
         geojson = json.loads(gdf[['geometry']].simplify(0.005).to_json())
-        logger.info(f'Windfarms restituiti: {len(gdf)} feature')
+        logger.info(f'Windfarms returned: {len(gdf)} features')
         return 'application/json', geojson
 
     def __repr__(self):

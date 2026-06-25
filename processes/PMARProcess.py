@@ -311,9 +311,7 @@ class PMARProcessor(BaseProcessor):
         import xarray as xr
         from pmar.pmar import PMAR
         from pmar.utils import make_grid
-        # pmar.py (riga 41) setta PROJ_LIB a un path conda hardcoded inesistente su questo sistema,
-        # corrompendo PROJ per pyproj e rasterio. Lo rimuoviamo così entrambe le librerie
-        # usano i propri data dir di default, che funzionano correttamente.
+        # Libraries will find on their own the right paths. There was a bug in pmar.py
         os.environ.pop('PROJ_LIB', None)
         os.environ.pop('PROJ_DATA', None)
 

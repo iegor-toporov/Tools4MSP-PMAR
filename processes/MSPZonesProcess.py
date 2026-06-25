@@ -79,7 +79,7 @@ class MSPZonesProcessor(BaseProcessor):
             return 'application/json', {'type': 'FeatureCollection', 'features': []}
 
         geojson = json.loads(gdf[['geometry']].simplify(0.005).to_json())
-        logger.info(f'Zone MSP acquacoltura restituite: {len(gdf)} feature')
+        logger.info(f'Returned MSP Zones aquaculture: {len(gdf)} features')
         return 'application/json', geojson
 
     def __repr__(self):

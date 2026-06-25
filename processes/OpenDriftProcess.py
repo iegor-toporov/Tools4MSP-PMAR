@@ -19,40 +19,16 @@ os.makedirs(_LOG_DIR,  exist_ok=True)
 from processes.logging_utils import setup_logger
 logger = setup_logger('opendrift_process', 'opendrift', 'opendrift.log')
 
-# ── Dataset CMEMS per correnti (usati da tutti i modelli) ────────────────────
-CMEMS_CURRENT_DATASETS_HOURLY = [
-    {'dataset_id': 'cmems_mod_med_phy-cur_anfc_0.042deg_PT1H-m', 'variables': ['uo', 'vo']},
-    {'dataset_id': 'cmems_mod_glo_phy-cur_anfc_0.083deg_P1D-m',  'variables': ['uo', 'vo']},
-]
-CMEMS_CURRENT_DATASETS_DAILY = [
-    {'dataset_id': 'cmems_mod_glo_phy-cur_anfc_0.083deg_P1D-m',  'variables': ['uo', 'vo']},
-    {'dataset_id': 'cmems_mod_glo_phy_my_0.083deg_P1D-m',         'variables': ['uo', 'vo']},
-]
+from data.cmems_datasets import (
+    CMEMS_CURRENT_DATASETS_HOURLY,
+    CMEMS_CURRENT_DATASETS_DAILY,
+    CMEMS_WAVES_DATASETS,
+    CMEMS_BATHY_DATASETS,
+    CMEMS_THERMO_DATASETS,
+    CMEMS_WIND_DATASETS,
+)
 
-# ── Dataset CMEMS per onde — deriva di Stokes (PlastDrift, OpenOil) ──────────
-CMEMS_WAVES_DATASETS = [
-    {'dataset_id': 'cmems_mod_med_wav_anfc_4.2km_PT1H-i',     'variables': ['VSDX', 'VSDY']},
-    {'dataset_id': 'cmems_mod_glo_wav_anfc_0.083deg_PT3H-i',  'variables': ['VSDX', 'VSDY']},
-    {'dataset_id': 'cmems_mod_glo_wav_my_0.2deg_PT3H-i',      'variables': ['VSDX', 'VSDY']},
-]
-
-# ── Dataset CMEMS per batimetria statica (profondità fondale) ────────────────
-CMEMS_BATHY_DATASETS = [
-    {'dataset_id': 'cmems_mod_med_phy_anfc_4.2km_static',    'variables': ['deptho']},
-    {'dataset_id': 'cmems_mod_glo_phy_anfc_0.083deg_static', 'variables': ['deptho']},
-]
-
-# ── Dataset CMEMS per temperatura e salinità (OpenOil weathering) ────────────
-# Prova prima dataset che contengono entrambe le variabili, poi temperature-only
-CMEMS_THERMO_DATASETS = [
-    {'dataset_id': 'cmems_mod_glo_phy_anfc_0.083deg_P1D-m',         'variables': ['thetao', 'so']},
-    {'dataset_id': 'cmems_mod_glo_phy_my_0.083deg_P1D-m',           'variables': ['thetao', 'so']},
-    {'dataset_id': 'cmems_mod_med_phy-tem_anfc_4.2km_PT1H-m',       'variables': ['thetao']},
-    {'dataset_id': 'cmems_mod_med_phy-tem_anfc_0.042deg_PT1H-m',    'variables': ['thetao']},
-    {'dataset_id': 'cmems_mod_glo_phy-thetao_anfc_0.083deg_PT6H-i', 'variables': ['thetao']},
-]
-
-# ── Modelli disponibili con metadati UI ──────────────────────────────────────
+# ── Available models with UI metadata ───────────────────────────────────────
 AVAILABLE_MODELS = {
     'OceanDrift': {
         'label':          'Tracciante passivo',
@@ -268,7 +244,7 @@ class OpenDriftProcessor(BaseProcessor):
                     f'Rectangle seeding requires lon_min, lon_max, lat_min, lat_max: {e}'
                 )
             logger.info(
-                f'Avvio simulazione: model={model_name}, seeding=rectangle, '
+                f'Starting simulation: model={model_name}, seeding=rectangle, '
                 f'bbox=[{lon_min:.3f},{lat_min:.3f} → {lon_max:.3f},{lat_max:.3f}], '
                 f'start={start_time.isoformat()}, duration={duration_hours}h, particles={number}'
             )
@@ -284,7 +260,7 @@ class OpenDriftProcessor(BaseProcessor):
             lon_min, lon_max = lon - r_deg, lon + r_deg
             lat_min, lat_max = lat - r_deg, lat + r_deg
             logger.info(
-                f'Avvio simulazione: model={model_name}, seeding=circle, '
+                f'Starting simulation: model={model_name}, seeding=circle, '
                 f'lon={lon}, lat={lat}, radius={radius}m, '
                 f'start={start_time.isoformat()}, duration={duration_hours}h, particles={number}'
             )
@@ -294,9 +270,9 @@ class OpenDriftProcessor(BaseProcessor):
             dynamic = _get_max_depth_for_area(lon_min, lon_max, lat_min, lat_max, cmems_creds=cmems_creds)
             if dynamic is not None:
                 max_depth = dynamic
-                logger.info(f'Profondità dinamica per {model_name}: {max_depth:.0f} m')
+                logger.info(f'Dynamic depth for {model_name}: {max_depth:.0f} m')
             else:
-                logger.warning(f'Batimetria non disponibile per {model_name}, uso default {max_depth:.0f} m')
+                logger.warning(f'Bathymetry not available for {model_name}, using default {max_depth:.0f} m')
         forcing_paths = [_get_forcing_file(lon_min, lon_max, lat_min, lat_max, start_time, end_time, max_depth=max_depth, cmems_creds=cmems_creds)]
         if model_meta['needs_wind']:
             wind_path = _get_wind_file(lon_min, lon_max, lat_min, lat_max, start_time, end_time, cmems_creds=cmems_creds)
@@ -307,13 +283,13 @@ class OpenDriftProcessor(BaseProcessor):
             if waves_path:
                 forcing_paths.append(waves_path)
             else:
-                logger.warning(f'Onde non disponibili per {model_name}: deriva di Stokes parametrizzata dal vento')
+                logger.warning(f'Waves not available for {model_name}: Stokes drift parametrised from wind')
         if model_meta.get('needs_thermo'):
             thermo_path = _get_thermo_file(lon_min, lon_max, lat_min, lat_max, start_time, end_time, cmems_creds=cmems_creds)
             if thermo_path:
                 forcing_paths.append(thermo_path)
             else:
-                logger.warning(f'T/S non disponibili per {model_name}: weathering con valori costanti')
+                logger.warning(f'T/S not available for {model_name}: weathering with constant values')
 
         logger.debug(f'Forcing files: {forcing_paths}')
 
@@ -331,7 +307,7 @@ class OpenDriftProcessor(BaseProcessor):
             o.run(duration=timedelta(hours=duration_hours), time_step=3600, outfile=nc_output)
             result = _read_trajectories(nc_output)
         except ValueError as e:
-            logger.error(f'Simulazione fallita: {e}')
+            logger.error(f'Simulation failed: {e}')
             if 'first timestep' in str(e):
                 raise ProcessorExecuteError(
                     "La simulazione si è fermata subito: l'area di seeding è "
@@ -340,7 +316,7 @@ class OpenDriftProcessor(BaseProcessor):
                 )
             raise ProcessorExecuteError(str(e))
         except Exception as e:
-            logger.error(f'Simulazione fallita: {e}')
+            logger.error(f'Simulation failed: {e}')
             raise
         finally:
             try:
@@ -349,7 +325,7 @@ class OpenDriftProcessor(BaseProcessor):
                 pass
 
         logger.info(
-            f'Simulazione completata: model={model_name}, '
+            f'Simulation complete: model={model_name}, '
             f'steps={len(result["times"])}, particles={len(result["steps"][0])}'
         )
         result['model'] = model_name
@@ -380,7 +356,7 @@ def _build_model(model_name, model_meta):
             Configured OpenDrift model instance ready for reader attachment and seeding.
     """
     import importlib
-    logger.debug(f'Inizializzazione modello: {model_name}')
+    logger.debug(f'Initialising model: {model_name}')
     module = importlib.import_module(model_meta['module'])
     cls    = getattr(module, model_meta['class'])
     o      = cls(loglevel=50)
@@ -434,7 +410,7 @@ def _cmems_auth(creds):
     return {}
 
 
-# ── Cache helpers — correnti ─────────────────────────────────────────────────
+# ── Cache helpers — currents ─────────────────────────────────────────────────
 
 def _cache_key(lon_min, lon_max, lat_min, lat_max, start_time, end_time, suffix='cur', max_depth=0.5, margin=5.0):
     """Compute a stable file-system cache key for a CMEMS NetCDF download.
@@ -501,11 +477,11 @@ def _get_forcing_file(lon_min, lon_max, lat_min, lat_max, start_time, end_time, 
         lon_min, lon_max, lat_min, lat_max, start_time, end_time, suffix=suffix, max_depth=max_depth, margin=margin
     )
     if os.path.exists(cache_path):
-        logger.debug(f'Cache correnti: HIT — {os.path.basename(cache_path)}')
+        logger.debug(f'Currents cache: HIT — {os.path.basename(cache_path)}')
     else:
         logger.info(
-            f'Cache correnti: MISS — avvio download ({n_days} giorni, '
-            f'{"giornaliero" if time_step_hours >= 24 else "orario"}, '
+            f'Currents cache: MISS — starting download ({n_days} days, '
+            f'{"daily" if time_step_hours >= 24 else "hourly"}, '
             f'max_depth={max_depth:.0f}m, margin={margin}°, '
             f'bbox=[{lon_min:.1f},{lat_min:.1f}→{lon_max:.1f},{lat_max:.1f}])'
         )
@@ -532,14 +508,14 @@ def _get_wind_file(lon_min, lon_max, lat_min, lat_max, start_time, end_time, mar
         lon_min, lon_max, lat_min, lat_max, start_time, end_time, suffix='wind', margin=margin
     )
     if os.path.exists(cache_path):
-        logger.debug(f'Cache vento: HIT — {os.path.basename(cache_path)}')
+        logger.debug(f'Wind cache: HIT — {os.path.basename(cache_path)}')
         return cache_path
-    logger.info(f'Cache vento: MISS — avvio download ({n_days} giorni, margin={margin}°)')
+    logger.info(f'Wind cache: MISS — starting download ({n_days} days, margin={margin}°)')
     try:
         _download_wind(slon_min, slon_max, slat_min, slat_max, snap_start, n_days, cache_path, margin, cmems_creds)
         return cache_path
     except Exception as e:
-        logger.warning(f'Download vento fallito (non bloccante): {e}')
+        logger.warning(f'Wind download failed (non-blocking): {e}')
         return None
 
 
@@ -593,8 +569,8 @@ def _download_currents(slon_min, slon_max, slat_min, slat_max, snap_start, n_day
     """
     import copernicusmarine
     datasets = CMEMS_CURRENT_DATASETS_DAILY if time_step_hours >= 24 else CMEMS_CURRENT_DATASETS_HOURLY
-    freq_label = 'giornaliero' if time_step_hours >= 24 else 'orario'
-    logger.info(f'Download correnti CMEMS ({freq_label}, 0–{max_depth:.0f}m, margin={margin}°) — {snap_start.date()} +{n_days}d → {os.path.basename(cache_path)}')
+    freq_label = 'daily' if time_step_hours >= 24 else 'hourly'
+    logger.info(f'Downloading CMEMS currents ({freq_label}, 0–{max_depth:.0f}m, margin={margin}°) — {snap_start.date()} +{n_days}d → {os.path.basename(cache_path)}')
     bbox     = _build_bbox(slon_min, slon_max, slat_min, slat_max, snap_start, n_days, max_depth, margin)
     last_err = None
     for ds in datasets:
@@ -608,12 +584,12 @@ def _download_currents(slon_min, slon_max, slat_min, slat_max, snap_start, n_day
                 **bbox,
                 **_cmems_auth(cmems_creds),
             )
-            logger.info(f"Dataset correnti scaricato: {ds['dataset_id']}")
+            logger.info(f"Currents dataset downloaded: {ds['dataset_id']}")
             return
         except Exception as e:
-            logger.warning(f"Dataset correnti fallito: {ds['dataset_id']} — {e}")
+            logger.warning(f"Currents dataset failed: {ds['dataset_id']} — {e}")
             last_err = e
-    logger.error(f'Tutti i dataset correnti hanno fallito. Ultimo errore: {last_err}')
+    logger.error(f'All currents datasets failed. Last error: {last_err}')
     raise ProcessorExecuteError(f'CMEMS currents download failed: {last_err}')
 
 
@@ -621,7 +597,7 @@ def _download_wind(slon_min, slon_max, slat_min, slat_max, snap_start, n_days, c
     """Download 10-m wind components (eastward, northward) from CMEMS.
 
     Depth parameters are omitted from the request as wind data is surface-only.
-    Tries datasets in a local ``WIND_DATASETS`` list in order.
+    Tries datasets in ``CMEMS_WIND_DATASETS`` order.
 
     Args:
         slon_min / slon_max / slat_min / slat_max (int): Integer-degree snapped bbox.
@@ -635,20 +611,12 @@ def _download_wind(slon_min, slon_max, slat_min, slat_max, snap_start, n_days, c
         RuntimeError: If every available wind dataset fails to download.
     """
     import copernicusmarine
-    logger.info(f'Download vento CMEMS (margin={margin}°) — {snap_start.date()} +{n_days}d → {os.path.basename(cache_path)}')
+    logger.info(f'Downloading CMEMS wind (margin={margin}°) — {snap_start.date()} +{n_days}d → {os.path.basename(cache_path)}')
     bbox = _build_bbox(slon_min, slon_max, slat_min, slat_max, snap_start, n_days, margin=margin)
     bbox.pop('minimum_depth', None)
     bbox.pop('maximum_depth', None)
 
-    WIND_DATASETS = [
-        {'dataset_id': 'cmems_obs-wind_med_phy_nrt_l4_0.125deg_PT1H',
-         'variables': ['eastward_wind', 'northward_wind']},
-        {'dataset_id': 'cmems_obs-wind_glo_phy_nrt_l4_0.125deg_PT1H',
-         'variables': ['eastward_wind', 'northward_wind']},
-        {'dataset_id': 'cmems_obs-wind_glo_phy_my_l4_0.125deg_PT1H',
-         'variables': ['eastward_wind', 'northward_wind']},
-    ]
-    for ds in WIND_DATASETS:
+    for ds in CMEMS_WIND_DATASETS:
         try:
             copernicusmarine.subset(
                 dataset_id       = ds['dataset_id'],
@@ -659,14 +627,14 @@ def _download_wind(slon_min, slon_max, slat_min, slat_max, snap_start, n_days, c
                 **bbox,
                 **_cmems_auth(cmems_creds),
             )
-            logger.info(f"Dataset vento scaricato: {ds['dataset_id']}")
+            logger.info(f"Wind dataset downloaded: {ds['dataset_id']}")
             return
         except Exception as e:
-            logger.warning(f"Dataset vento fallito: {ds['dataset_id']} — {e}")
+            logger.warning(f"Wind dataset failed: {ds['dataset_id']} — {e}")
     raise RuntimeError('Wind dataset not available')
 
 
-# ── Cache helpers — onde (Stokes drift) ─────────────────────────────────────
+# ── Cache helpers — waves (Stokes drift) ─────────────────────────────────────
 
 def _get_waves_file(lon_min, lon_max, lat_min, lat_max, start_time, end_time, margin=5.0, cmems_creds=None):
     """Return the path to a cached CMEMS Stokes-drift wave NetCDF, downloading if absent.
@@ -687,14 +655,14 @@ def _get_waves_file(lon_min, lon_max, lat_min, lat_max, start_time, end_time, ma
         lon_min, lon_max, lat_min, lat_max, start_time, end_time, suffix='wav', margin=margin
     )
     if os.path.exists(cache_path):
-        logger.debug(f'Cache onde: HIT — {os.path.basename(cache_path)}')
+        logger.debug(f'Waves cache: HIT — {os.path.basename(cache_path)}')
         return cache_path
-    logger.info(f'Cache onde: MISS — avvio download ({n_days} giorni, margin={margin}°)')
+    logger.info(f'Waves cache: MISS — starting download ({n_days} days, margin={margin}°)')
     try:
         _download_waves(slon_min, slon_max, slat_min, slat_max, snap_start, n_days, cache_path, margin, cmems_creds)
         return cache_path
     except Exception as e:
-        logger.warning(f'Download onde fallito (non bloccante): {e}')
+        logger.warning(f'Waves download failed (non-blocking): {e}')
         return None
 
 
@@ -716,7 +684,7 @@ def _download_waves(slon_min, slon_max, slat_min, slat_max, snap_start, n_days, 
         RuntimeError: If every available wave dataset fails to download.
     """
     import copernicusmarine
-    logger.info(f'Download onde CMEMS (vsdx/vsdy, margin={margin}°) — {snap_start.date()} +{n_days}d → {os.path.basename(cache_path)}')
+    logger.info(f'Downloading CMEMS waves (VSDX/VSDY, margin={margin}°) — {snap_start.date()} +{n_days}d → {os.path.basename(cache_path)}')
     bbox = _build_bbox(slon_min, slon_max, slat_min, slat_max, snap_start, n_days, max_depth=0.5, margin=margin)
     bbox.pop('minimum_depth', None)
     bbox.pop('maximum_depth', None)
@@ -732,15 +700,15 @@ def _download_waves(slon_min, slon_max, slat_min, slat_max, snap_start, n_days, 
                 **bbox,
                 **_cmems_auth(cmems_creds),
             )
-            logger.info(f"Dataset onde scaricato: {ds['dataset_id']}")
+            logger.info(f"Waves dataset downloaded: {ds['dataset_id']}")
             return
         except Exception as e:
-            logger.warning(f"Dataset onde fallito: {ds['dataset_id']} — {e}")
+            logger.warning(f"Waves dataset failed: {ds['dataset_id']} — {e}")
             last_err = e
-    raise RuntimeError(f'Nessun dataset onde disponibile: {last_err}')
+    raise RuntimeError(f'No wave dataset available: {last_err}')
 
 
-# ── Cache helpers — temperatura e salinità (OpenOil weathering) ─────────────
+# ── Cache helpers — temperature and salinity (OpenOil weathering) ────────────
 
 def _get_thermo_file(lon_min, lon_max, lat_min, lat_max, start_time, end_time, margin=5.0, cmems_creds=None):
     """Return the path to a cached CMEMS temperature/salinity NetCDF, downloading if absent.
@@ -761,25 +729,25 @@ def _get_thermo_file(lon_min, lon_max, lat_min, lat_max, start_time, end_time, m
         lon_min, lon_max, lat_min, lat_max, start_time, end_time, suffix='tem', margin=margin
     )
     if os.path.exists(cache_path):
-        logger.debug(f'Cache T/S: HIT — {os.path.basename(cache_path)}')
+        logger.debug(f'T/S cache: HIT — {os.path.basename(cache_path)}')
         return cache_path
-    logger.info(f'Cache T/S: MISS — avvio download ({n_days} giorni, margin={margin}°)')
+    logger.info(f'T/S cache: MISS — starting download ({n_days} days, margin={margin}°)')
     try:
         _download_thermo(slon_min, slon_max, slat_min, slat_max, snap_start, n_days, cache_path, margin, cmems_creds)
         return cache_path
     except Exception as e:
-        logger.warning(f'Download T/S fallito (non bloccante): {e}')
+        logger.warning(f'T/S download failed (non-blocking): {e}')
         return None
 
 
 def _download_thermo(slon_min, slon_max, slat_min, slat_max, snap_start, n_days, cache_path, margin=5.0, cmems_creds=None):
-    """Scarica temperatura (thetao) e salinità (so) superficiali per il weathering di OpenOil.
+    """Download surface temperature (thetao) and salinity (so) for OpenOil weathering.
 
-    Prova prima dataset con entrambe le variabili; se fallisce, tenta temperature-only.
-    La salinità è usata per l'emulsificazione, la temperatura per l'evaporazione.
+    Tries datasets with both variables first; falls back to temperature-only.
+    Salinity is used for emulsification, temperature for evaporation.
     """
     import copernicusmarine
-    logger.info(f'Download T/S CMEMS (0–0.5 m, margin={margin}°) — {snap_start.date()} +{n_days}d → {os.path.basename(cache_path)}')
+    logger.info(f'Downloading CMEMS T/S (0–0.5 m, margin={margin}°) — {snap_start.date()} +{n_days}d → {os.path.basename(cache_path)}')
     bbox = _build_bbox(slon_min, slon_max, slat_min, slat_max, snap_start, n_days, max_depth=0.5, margin=margin)
     last_err = None
     for ds in CMEMS_THERMO_DATASETS:
@@ -793,21 +761,21 @@ def _download_thermo(slon_min, slon_max, slat_min, slat_max, snap_start, n_days,
                 **bbox,
                 **_cmems_auth(cmems_creds),
             )
-            logger.info(f"Dataset T/S scaricato: {ds['dataset_id']} — variabili: {ds['variables']}")
+            logger.info(f"T/S dataset downloaded: {ds['dataset_id']} — variables: {ds['variables']}")
             return
         except Exception as e:
-            logger.warning(f"Dataset T/S fallito: {ds['dataset_id']} — {e}")
+            logger.warning(f"T/S dataset failed: {ds['dataset_id']} — {e}")
             last_err = e
-    raise RuntimeError(f'Nessun dataset T/S disponibile: {last_err}')
+    raise RuntimeError(f'No T/S dataset available: {last_err}')
 
 
-# ── Cache helpers — batimetria statica (profondità massima area) ─────────────
+# ── Cache helpers — static bathymetry (maximum area depth) ───────────────────
 
 def _get_max_depth_for_area(lon_min, lon_max, lat_min, lat_max, margin=5.0, cmems_creds=None):
-    """Ritorna la profondità massima del fondale (m) + 10 m buffer per l'area indicata.
+    """Return the maximum seafloor depth (m) + 10 m buffer for the given area.
 
-    Usa un file NC statico in cache (chiave solo geografica, nessun campo temporale).
-    Ritorna None in caso di fallimento — non bloccante.
+    Uses a static cached NetCDF (geographic key only, no temporal fields).
+    Returns None on failure — non-blocking.
     """
     slon_min = math.floor(lon_min)
     slon_max = math.ceil(lon_max)
@@ -821,13 +789,13 @@ def _get_max_depth_for_area(lon_min, lon_max, lat_min, lat_max, margin=5.0, cmem
     cache_path = os.path.join(CACHE_DIR, f'cmems_{clon:+03d}_{clat:+03d}_bathy_m{margin:.1f}_{digest}.nc')
 
     if os.path.exists(cache_path):
-        logger.debug(f'Cache batimetria: HIT — {os.path.basename(cache_path)}')
+        logger.debug(f'Bathymetry cache: HIT — {os.path.basename(cache_path)}')
     else:
-        logger.info(f'Cache batimetria: MISS — avvio download (margin={margin}°, bbox=[{slon_min},{slat_min}→{slon_max},{slat_max}])')
+        logger.info(f'Bathymetry cache: MISS — starting download (margin={margin}°, bbox=[{slon_min},{slat_min}→{slon_max},{slat_max}])')
         try:
             _download_bathymetry(slon_min, slon_max, slat_min, slat_max, cache_path, margin, cmems_creds)
         except Exception as e:
-            logger.warning(f'Download batimetria fallito (non bloccante): {e}')
+            logger.warning(f'Bathymetry download failed (non-blocking): {e}')
             return None
 
     try:
@@ -836,10 +804,10 @@ def _get_max_depth_for_area(lon_min, lon_max, lat_min, lat_max, margin=5.0, cmem
         dep = ds.variables['deptho'][:]
         ds.close()
         max_d = float(np.nanmax(dep)) + 10.0
-        logger.info(f'Profondità massima area: {max_d - 10:.0f} m + 10 m buffer = {max_d:.0f} m')
+        logger.info(f'Maximum area depth: {max_d - 10:.0f} m + 10 m buffer = {max_d:.0f} m')
         return max_d
     except Exception as e:
-        logger.warning(f'Lettura batimetria fallita: {e}')
+        logger.warning(f'Bathymetry read failed: {e}')
         return None
 
 
@@ -859,7 +827,7 @@ def _download_bathymetry(slon_min, slon_max, slat_min, slat_max, cache_path, mar
         RuntimeError: If every available bathymetry dataset fails to download.
     """
     import copernicusmarine
-    logger.info(f'Download batimetria CMEMS (deptho, margin={margin}°) → {os.path.basename(cache_path)}')
+    logger.info(f'Downloading CMEMS bathymetry (deptho, margin={margin}°) → {os.path.basename(cache_path)}')
     geo_bbox = dict(
         minimum_longitude = slon_min - margin,
         maximum_longitude = slon_max + margin,
@@ -878,12 +846,12 @@ def _download_bathymetry(slon_min, slon_max, slat_min, slat_max, cache_path, mar
                 **geo_bbox,
                 **_cmems_auth(cmems_creds),
             )
-            logger.info(f"Dataset batimetria scaricato: {ds['dataset_id']}")
+            logger.info(f"Bathymetry dataset downloaded: {ds['dataset_id']}")
             return
         except Exception as e:
-            logger.warning(f"Dataset batimetria fallito: {ds['dataset_id']} — {e}")
+            logger.warning(f"Bathymetry dataset failed: {ds['dataset_id']} — {e}")
             last_err = e
-    raise RuntimeError(f'Nessun dataset batimetria disponibile: {last_err}')
+    raise RuntimeError(f'No bathymetry dataset available: {last_err}')
 
 
 # ── Trajectory reader ────────────────────────────────────────────────────────
@@ -929,15 +897,15 @@ def _read_trajectories(path):
     n_particles, n_time = lons.shape
     lon_masked = np.ma.getmaskarray(lons)
 
-    # Per ogni particella: trova il momento e la posizione in cui si spiaggia/esce dal dominio
-    strand_t   = [-1]    * n_particles  # -1 = mai spiaggiata
+    # For each particle: find when and where it strands or exits the domain
+    strand_t   = [-1]    * n_particles  # -1 = never stranded
     strand_lon = [None]  * n_particles
     strand_lat = [None]  * n_particles
 
     for p in range(n_particles):
         for t in range(n_time):
             if lon_masked[p, t]:
-                # La posizione è diventata masked: cerca l'ultima valida
+                # Position became masked: find the last valid one
                 for t2 in range(t - 1, -1, -1):
                     if not lon_masked[p, t2]:
                         strand_t[p]   = t
@@ -948,7 +916,7 @@ def _read_trajectories(path):
             elif statuses is not None:
                 s = statuses[p, t]
                 if not np.ma.is_masked(s) and int(s) != 0:
-                    # Status non-zero: spiaggiata su questa posizione
+                    # Non-zero status: stranded at this position
                     strand_t[p]   = t
                     strand_lon[p] = round(float(lons[p, t]), 6)
                     strand_lat[p] = round(float(lats[p, t]), 6)
@@ -960,12 +928,12 @@ def _read_trajectories(path):
         for p in range(n_particles):
             if not lon_masked[p, t]:
                 pos = [round(float(lons[p, t]), 6), round(float(lats[p, t]), 6)]
-                # Segna come spiaggiata se il flag è scattato a questo step o prima
+                # Mark as stranded if the flag was set at this step or earlier
                 if strand_t[p] != -1 and t >= strand_t[p]:
                     pos.append(True)
                 positions.append(pos)
             else:
-                # Posizione masked: tieni la particella visibile alla posizione di spiaggiamento
+                # Masked position: keep the particle visible at the stranding location
                 if strand_lon[p] is not None:
                     positions.append([strand_lon[p], strand_lat[p], True])
                 else:
