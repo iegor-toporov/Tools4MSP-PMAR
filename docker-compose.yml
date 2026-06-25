@@ -82,7 +82,7 @@ services:
       - "traefik.enable=true"
       - "traefik.http.routers.ogcapi.rule=Host(`ogcapi.tools4msp.eu`)"
       - "traefik.http.routers.ogcapi.entrypoints=websecure"
-      - "traefik.http.routers.ogcapi.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.ogcapi.tls.certresolver=le"
       - "traefik.http.services.ogcapi.loadbalancer.server.port=80"
 
 volumes:
@@ -97,4 +97,4 @@ networks:
 
 secrets:
   git_token:
-    environment: GIT_TOKEN
+    file: ./.git_token
