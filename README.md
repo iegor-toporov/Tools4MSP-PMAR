@@ -25,7 +25,11 @@ DTO-PMAR/
 │   ├── WindfarmsProcess.py              # OGC API process: EMODnet wind farm preview (bbox query)
 │   ├── OffshoreInstallationsProcess.py  # OGC API process: EMODnet offshore installations preview
 │   ├── Natura2000Process.py             # OGC API process: Natura 2000 protected areas (EmodNet)
+│   ├── MSPZonesProcess.py               # OGC API process: EMODnet MSP aquaculture zones (bbox query)
 │   └── logging_utils.py                 # Shared log handler with line-count rotation
+├── data/
+│   ├── cmems_datasets.py                # CMEMS dataset constants (dataset IDs, variables)
+│   └── emodnet_fetch.py                 # Shared EMODnet WFS fetch functions with 7-day pickle cache
 ├── worker/
 │   ├── app.py                           # Celery application instance
 │   ├── manager.py                       # Job lifecycle helpers
@@ -53,15 +57,18 @@ DTO-PMAR/
 │       ├── custom_<id>.shp              # Seeding area shapefiles for custom scenarios
 │       └── t4msp_<area_id>.shp          # Cached Tools4MSP area geometries
 ├── out/                                 # Temporary simulation outputs (cleaned on startup)
-├── Dockerfile                           # Backend image (pygeoapi + processes)
+├── Dockerfile                           # Backend image (pygeoapi + processes + data/)
 ├── docker-compose.yml                   # Orchestrates backend, celery-worker, redis, frontend
-├── pygeoapi-config.yml
-└── .env                                 # Runtime secrets (not committed)
+├── pygeoapi-config.yml                  # OGC API config: process registrations, server metadata
+├── .env.example                         # Template for required environment variables
+└── .env                                 # Runtime secrets: GIT_TOKEN, CMEMS credentials (not committed)
 ```
 
-**Backend:** [pygeoapi](https://pygeoapi.io) (port 5001) exposes all processes via the OGC API - Processes standard. Long-running precomputations are offloaded to a **Celery** worker backed by **Redis**.
+**Backend:** [pygeoapi](https://pygeoapi.io) (port 5001) exposes all processes via the OGC API - Processes standard. Long-running precomputations are offloaded to a **Celery** worker backed by **Redis**. Shared data utilities (CMEMS dataset definitions, EMODnet WFS fetch functions) live in `data/` and are imported by the process modules.
 
 **Frontend:** React 19 + Vite SPA with Mantine v9 and react-leaflet. In production it is built into a static bundle and served by **nginx**, which also proxies `/processes/*` to the backend. Communicates with the backend via `POST /processes/<process>/execution`.
+
+**CMEMS authentication:** credentials (`COPERNICUSMARINE_SERVICE_USERNAME` / `COPERNICUSMARINE_SERVICE_PASSWORD`) are configured exclusively via environment variables in `.env`. The `copernicusmarine` client reads them automatically — no credentials are sent from the browser.
 
 ## Requirements
 
@@ -418,7 +425,7 @@ Wind and waves downloads are non-blocking: if the dataset is unavailable the sim
 
 ### Map
 
-- **Top-right toolbar**: contains three buttons — light/dark theme toggle (switches CartoDB basemap and all panel colours), IT/EN language switch, and **Login to Copernicus** (opens a modal to enter Copernicus Marine credentials; a red dot indicates no credentials are set). Credentials are kept in `sessionStorage` for the duration of the browser tab and are sent to the backend with each simulation request.
+- **Top-right toolbar**: contains two buttons — light/dark theme toggle (switches CartoDB basemap and all panel colours) and IT/EN language switch. Copernicus Marine credentials are configured server-side via environment variables (see `.env`).
 - **Natura 2000 layer**: protected marine areas fetched from the EmodNet WFS and displayed as a semi-transparent overlay. Toggled from the PMAR controls bar.
 - **Analysis tools panel** (right side, vertically centred): six labelled buttons — Histogram, Statistics, Profile, Threshold, CSV, Compare — active only when a PMAR raster is loaded. A "Close all" button appears when analysis windows are open.
 
