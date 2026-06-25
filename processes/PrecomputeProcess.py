@@ -266,7 +266,7 @@ def _build_custom_scenario(data, shp_path=None, area_label=None):
     return sc, custom_id, shp_path
 
 
-def _run_scenario(scenario_id, sc, shp_path, cmems_creds=None):
+def _run_scenario(scenario_id, sc, shp_path):
     """Execute a single OpenDrift simulation run and save the trajectory NetCDF.
 
     Skips execution if the expected output NetCDF already exists.  Downloads the
@@ -279,7 +279,6 @@ def _run_scenario(scenario_id, sc, shp_path, cmems_creds=None):
         scenario_id (str): Unique identifier used in log messages.
         sc (dict): Scenario metadata dict produced by :func:`_build_custom_scenario`.
         shp_path (str): Path to the seeding-area shapefile.
-        cmems_creds (dict | None): Explicit CMEMS credentials, or ``None`` for env vars.
 
     Raises:
         Exception: Propagates any OpenDrift or CMEMS error after cleaning up the
@@ -310,7 +309,7 @@ def _run_scenario(scenario_id, sc, shp_path, cmems_creds=None):
     max_depth = pm_cfg.get('max_depth', 0.5)
     if pm_cfg.get('needs_vertical'):
         dynamic = _get_max_depth_for_area(
-            bounds[0], bounds[2], bounds[1], bounds[3], cmems_margin, cmems_creds=cmems_creds
+            bounds[0], bounds[2], bounds[1], bounds[3], cmems_margin
         )
         if dynamic is not None:
             max_depth = dynamic
@@ -320,22 +319,21 @@ def _run_scenario(scenario_id, sc, shp_path, cmems_creds=None):
     forcing_paths = [_get_forcing_file(
         bounds[0], bounds[2], bounds[1], bounds[3],
         start_time, end_time, time_step_hours, max_depth, cmems_margin,
-        cmems_creds=cmems_creds,
     )]
     if pm_cfg['needs_wind']:
-        wind_path = _get_wind_file(bounds[0], bounds[2], bounds[1], bounds[3], start_time, end_time, cmems_margin, cmems_creds=cmems_creds)
+        wind_path = _get_wind_file(bounds[0], bounds[2], bounds[1], bounds[3], start_time, end_time, cmems_margin)
         if wind_path:
             forcing_paths.append(wind_path)
         else:
             logger.warning(f'[{scenario_id}] Wind not available, currents only')
     if pm_cfg.get('needs_waves'):
-        waves_path = _get_waves_file(bounds[0], bounds[2], bounds[1], bounds[3], start_time, end_time, cmems_margin, cmems_creds=cmems_creds)
+        waves_path = _get_waves_file(bounds[0], bounds[2], bounds[1], bounds[3], start_time, end_time, cmems_margin)
         if waves_path:
             forcing_paths.append(waves_path)
         else:
             logger.warning(f'[{scenario_id}] Waves not available: Stokes drift parametrised from wind')
     if pm_cfg.get('needs_thermo'):
-        thermo_path = _get_thermo_file(bounds[0], bounds[2], bounds[1], bounds[3], start_time, end_time, cmems_margin, cmems_creds=cmems_creds)
+        thermo_path = _get_thermo_file(bounds[0], bounds[2], bounds[1], bounds[3], start_time, end_time, cmems_margin)
         if thermo_path:
             forcing_paths.append(thermo_path)
         else:
@@ -408,7 +406,7 @@ def _run_scenario(scenario_id, sc, shp_path, cmems_creds=None):
         raise
 
 
-def _run_multi_scenario(scenario_id, sc, shp_path, cmems_creds=None):
+def _run_multi_scenario(scenario_id, sc, shp_path):
     """Execute multiple time-shifted OpenDrift runs for a multi-seeding scenario.
 
     Iterates over the ``seedings`` count in *sc*, offsetting each run's ``start_time``
@@ -420,7 +418,6 @@ def _run_multi_scenario(scenario_id, sc, shp_path, cmems_creds=None):
         sc (dict): Scenario metadata dict with ``seedings``, ``tshift``, ``start_time``,
             and ``nc_filenames`` entries.
         shp_path (str): Path to the seeding-area shapefile.
-        cmems_creds (dict | None): Explicit CMEMS credentials, or ``None`` for env vars.
     """
     seedings = sc.get('seedings', 1)
     tshift   = sc.get('tshift', 30)
@@ -434,7 +431,7 @@ def _run_multi_scenario(scenario_id, sc, shp_path, cmems_creds=None):
         start_n = datetime.fromisoformat(sc['start_time']) + timedelta(days=tshift * n)
         sc_n = {**sc, 'start_time': start_n.isoformat(), 'nc_filename': nc_filenames[n]}
         logger.info(f'[{scenario_id}] Seeding {n+1}/{seedings}: start={start_n.date()}')
-        _run_scenario(scenario_id, sc_n, shp_path, cmems_creds=cmems_creds)
+        _run_scenario(scenario_id, sc_n, shp_path)
 
     logger.info(f'[{scenario_id}] Multi-seeding complete ({seedings} runs).')
 
@@ -480,12 +477,6 @@ class PrecomputeProcessor(BaseProcessor):
         shapefile_b64  = data.get('shapefile_b64')
         t4msp_area_id  = data.get('t4msp_area_id')
 
-        cmems_creds = None
-        u = (data.get('cmems_username') or '').strip()
-        p = (data.get('cmems_password') or '').strip()
-        if u and p:
-            cmems_creds = {'username': u, 'password': p}
-
         if not geojson_input and not shapefile_b64 and not t4msp_area_id:
             raise ProcessorExecuteError('Provide geojson, shapefile_b64, or t4msp_area_id.')
 
@@ -507,7 +498,7 @@ class PrecomputeProcessor(BaseProcessor):
             raise ProcessorExecuteError('A pre-computation is already running. Please wait for it to finish.')
 
         try:
-            _run_multi_scenario(scenario_id, sc, shp_path, cmems_creds=cmems_creds)
+            _run_multi_scenario(scenario_id, sc, shp_path)
         except Exception as e:
             logger.error(f'[PrecomputeProcess] Error during pre-computation of {scenario_id}: {e}', exc_info=True)
             raise ProcessorExecuteError(str(e))

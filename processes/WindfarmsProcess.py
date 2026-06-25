@@ -4,7 +4,7 @@ import os
 
 import geopandas as gpd
 from pygeoapi.process.base import BaseProcessor, ProcessorExecuteError
-from processes.emodnet_fetch import _fetch_windfarms, EMODNET_CACHE_DIR
+from data.emodnet_fetch import _fetch_windfarms, EMODNET_CACHE_DIR
 from processes.logging_utils import setup_logger
 
 logger = setup_logger('windfarms_process', 'windfarms', 'windfarms.log')
@@ -44,7 +44,7 @@ class WindfarmsProcessor(BaseProcessor):
         """Execute the wind farms spatial query.
 
         Validates the input bounding box, delegates the WFS fetch (with 7-day
-        file-level caching) to :func:`~processes.emodnet_fetch._fetch_windfarms`,
+        file-level caching) to :func:`~data.emodnet_fetch._fetch_windfarms`,
         simplifies polygon geometries to a 0.005° tolerance to reduce payload size,
         and serialises the result as a GeoJSON FeatureCollection.
 

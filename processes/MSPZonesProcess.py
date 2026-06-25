@@ -4,7 +4,7 @@ import os
 
 import geopandas as gpd
 from pygeoapi.process.base import BaseProcessor, ProcessorExecuteError
-from processes.emodnet_fetch import _fetch_msp_zones, EMODNET_CACHE_DIR
+from data.emodnet_fetch import _fetch_msp_zones, EMODNET_CACHE_DIR
 from processes.logging_utils import setup_logger
 
 logger = setup_logger('msp_zones_process', 'msp_zones', 'msp_zones.log')
@@ -44,7 +44,7 @@ class MSPZonesProcessor(BaseProcessor):
         """Execute the MSP zones spatial query.
 
         Validates the input bounding box, delegates the WFS fetch (with 7-day
-        file-level caching) to :func:`~processes.emodnet_fetch._fetch_msp_zones`,
+        file-level caching) to :func:`~data.emodnet_fetch._fetch_msp_zones`,
         and serialises the result as a GeoJSON FeatureCollection containing only
         the geometries of matching features.
 

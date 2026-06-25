@@ -4,7 +4,7 @@ import os
 
 import geopandas as gpd
 from pygeoapi.process.base import BaseProcessor, ProcessorExecuteError
-from processes.emodnet_fetch import _fetch_offshore_installations, EMODNET_CACHE_DIR
+from data.emodnet_fetch import _fetch_offshore_installations, EMODNET_CACHE_DIR
 from processes.logging_utils import setup_logger
 
 logger = setup_logger('offshore_installations_process', 'offshore_installations', 'offshore_installations.log')
@@ -44,7 +44,7 @@ class OffshoreInstallationsProcessor(BaseProcessor):
         """Execute the offshore installations spatial query.
 
         Validates the input bounding box, delegates the WFS fetch (with 7-day
-        file-level caching) to :func:`~processes.emodnet_fetch._fetch_offshore_installations`,
+        file-level caching) to :func:`~data.emodnet_fetch._fetch_offshore_installations`,
         and serialises the result as a GeoJSON FeatureCollection containing only
         the geometries of matching features.
 

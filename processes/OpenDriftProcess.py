@@ -142,16 +142,6 @@ PROCESS_METADATA = {
             'schema': {'type': 'number', 'default': 24},
             'minOccurs': 0, 'maxOccurs': 1,
         },
-        'cmems_username': {
-            'title': 'Copernicus Marine username',
-            'schema': {'type': 'string'},
-            'minOccurs': 0, 'maxOccurs': 1,
-        },
-        'cmems_password': {
-            'title': 'Copernicus Marine password',
-            'schema': {'type': 'string'},
-            'minOccurs': 0, 'maxOccurs': 1,
-        },
     },
     'outputs': {
         'trajectory': {
@@ -189,9 +179,6 @@ class OpenDriftProcessor(BaseProcessor):
                 - ``start_time`` (str): ISO 8601 start datetime.
                 - ``duration_hours`` (float): Simulation duration in hours.
                 - ``number`` (int): Number of particles (capped at 10 000).
-                - ``cmems_username`` / ``cmems_password`` (str): Optional explicit CMEMS
-                  credentials; fall back on environment variables if omitted.
-
         Returns:
             tuple[str, dict]: ``('application/json', result)`` where *result* contains
             ``times`` (list of ISO datetime strings), ``steps`` (per-timestep particle
@@ -205,12 +192,6 @@ class OpenDriftProcessor(BaseProcessor):
         model_name     = data.get('model', 'OceanDrift')
         number         = min(int(data.get('number', 100)), 10000)
         duration_hours = float(data.get('duration_hours', 24))
-
-        cmems_creds = None
-        u = (data.get('cmems_username') or '').strip()
-        p = (data.get('cmems_password') or '').strip()
-        if u and p:
-            cmems_creds = {'username': u, 'password': p}
 
         if model_name not in AVAILABLE_MODELS:
             raise ProcessorExecuteError(
@@ -267,25 +248,25 @@ class OpenDriftProcessor(BaseProcessor):
 
         max_depth = model_meta.get('max_depth', 0.5)
         if model_meta.get('needs_vertical'):
-            dynamic = _get_max_depth_for_area(lon_min, lon_max, lat_min, lat_max, cmems_creds=cmems_creds)
+            dynamic = _get_max_depth_for_area(lon_min, lon_max, lat_min, lat_max)
             if dynamic is not None:
                 max_depth = dynamic
                 logger.info(f'Dynamic depth for {model_name}: {max_depth:.0f} m')
             else:
                 logger.warning(f'Bathymetry not available for {model_name}, using default {max_depth:.0f} m')
-        forcing_paths = [_get_forcing_file(lon_min, lon_max, lat_min, lat_max, start_time, end_time, max_depth=max_depth, cmems_creds=cmems_creds)]
+        forcing_paths = [_get_forcing_file(lon_min, lon_max, lat_min, lat_max, start_time, end_time, max_depth=max_depth)]
         if model_meta['needs_wind']:
-            wind_path = _get_wind_file(lon_min, lon_max, lat_min, lat_max, start_time, end_time, cmems_creds=cmems_creds)
+            wind_path = _get_wind_file(lon_min, lon_max, lat_min, lat_max, start_time, end_time)
             if wind_path:
                 forcing_paths.append(wind_path)
         if model_meta.get('needs_waves'):
-            waves_path = _get_waves_file(lon_min, lon_max, lat_min, lat_max, start_time, end_time, cmems_creds=cmems_creds)
+            waves_path = _get_waves_file(lon_min, lon_max, lat_min, lat_max, start_time, end_time)
             if waves_path:
                 forcing_paths.append(waves_path)
             else:
                 logger.warning(f'Waves not available for {model_name}: Stokes drift parametrised from wind')
         if model_meta.get('needs_thermo'):
-            thermo_path = _get_thermo_file(lon_min, lon_max, lat_min, lat_max, start_time, end_time, cmems_creds=cmems_creds)
+            thermo_path = _get_thermo_file(lon_min, lon_max, lat_min, lat_max, start_time, end_time)
             if thermo_path:
                 forcing_paths.append(thermo_path)
             else:
@@ -387,29 +368,6 @@ def _build_model(model_name, model_meta):
     return o
 
 
-# ── CMEMS auth helper ────────────────────────────────────────────────────────
-
-def _cmems_auth(creds):
-    """Extract CMEMS credentials as a kwargs dict for ``copernicusmarine.subset()``.
-
-    Args:
-        creds (dict | None): Dict with ``'username'`` and ``'password'`` keys, or ``None``
-            to fall back on environment variables
-            (``COPERNICUSMARINE_SERVICE_USERNAME`` / ``COPERNICUSMARINE_SERVICE_PASSWORD``).
-
-    Returns:
-        dict: ``{'username': ..., 'password': ...}`` when explicit credentials are provided,
-        or an empty dict ``{}`` to let the CMEMS client read environment variables.
-    """
-    if not creds:
-        return {}
-    u = creds.get('username', '')
-    p = creds.get('password', '')
-    if u and p:
-        return {'username': u, 'password': p}
-    return {}
-
-
 # ── Cache helpers — currents ─────────────────────────────────────────────────
 
 def _cache_key(lon_min, lon_max, lat_min, lat_max, start_time, end_time, suffix='cur', max_depth=0.5, margin=5.0):
@@ -454,7 +412,7 @@ def _cache_key(lon_min, lon_max, lat_min, lat_max, start_time, end_time, suffix=
     )
 
 
-def _get_forcing_file(lon_min, lon_max, lat_min, lat_max, start_time, end_time, time_step_hours=1, max_depth=0.5, margin=5.0, cmems_creds=None):
+def _get_forcing_file(lon_min, lon_max, lat_min, lat_max, start_time, end_time, time_step_hours=1, max_depth=0.5, margin=5.0):
     """Return the path to a cached CMEMS current-velocity NetCDF, downloading if absent.
 
     Selects hourly or daily datasets depending on *time_step_hours*, then delegates to
@@ -467,7 +425,6 @@ def _get_forcing_file(lon_min, lon_max, lat_min, lat_max, start_time, end_time, 
         time_step_hours (int): Requested time resolution (≥ 24 selects daily datasets).
         max_depth (float): Maximum depth in metres for vertical models.
         margin (float): Spatial buffer in degrees added around the bbox.
-        cmems_creds (dict | None): Explicit CMEMS credentials, or ``None`` for env vars.
 
     Returns:
         str: Absolute path to the cached NetCDF file.
@@ -485,11 +442,11 @@ def _get_forcing_file(lon_min, lon_max, lat_min, lat_max, start_time, end_time, 
             f'max_depth={max_depth:.0f}m, margin={margin}°, '
             f'bbox=[{lon_min:.1f},{lat_min:.1f}→{lon_max:.1f},{lat_max:.1f}])'
         )
-        _download_currents(slon_min, slon_max, slat_min, slat_max, snap_start, n_days, cache_path, time_step_hours, max_depth, margin, cmems_creds)
+        _download_currents(slon_min, slon_max, slat_min, slat_max, snap_start, n_days, cache_path, time_step_hours, max_depth, margin)
     return cache_path
 
 
-def _get_wind_file(lon_min, lon_max, lat_min, lat_max, start_time, end_time, margin=5.0, cmems_creds=None):
+def _get_wind_file(lon_min, lon_max, lat_min, lat_max, start_time, end_time, margin=5.0):
     """Return the path to a cached CMEMS wind NetCDF, downloading if absent.
 
     Non-blocking: logs a warning and returns ``None`` on download failure, allowing the
@@ -499,7 +456,6 @@ def _get_wind_file(lon_min, lon_max, lat_min, lat_max, start_time, end_time, mar
         lon_min / lon_max / lat_min / lat_max (float): Seeding bbox in decimal degrees.
         start_time / end_time (datetime): Simulation time window.
         margin (float): Spatial buffer in degrees added around the bbox.
-        cmems_creds (dict | None): Explicit CMEMS credentials, or ``None`` for env vars.
 
     Returns:
         str | None: Absolute path to the cached NetCDF, or ``None`` on download failure.
@@ -512,7 +468,7 @@ def _get_wind_file(lon_min, lon_max, lat_min, lat_max, start_time, end_time, mar
         return cache_path
     logger.info(f'Wind cache: MISS — starting download ({n_days} days, margin={margin}°)')
     try:
-        _download_wind(slon_min, slon_max, slat_min, slat_max, snap_start, n_days, cache_path, margin, cmems_creds)
+        _download_wind(slon_min, slon_max, slat_min, slat_max, snap_start, n_days, cache_path, margin)
         return cache_path
     except Exception as e:
         logger.warning(f'Wind download failed (non-blocking): {e}')
@@ -548,7 +504,7 @@ def _build_bbox(slon_min, slon_max, slat_min, slat_max, snap_start, n_days, max_
         end_datetime      = snap_end.strftime('%Y-%m-%dT%H:%M:%S'),
     )
 
-def _download_currents(slon_min, slon_max, slat_min, slat_max, snap_start, n_days, cache_path, time_step_hours=1, max_depth=0.5, margin=5.0, cmems_creds=None):
+def _download_currents(slon_min, slon_max, slat_min, slat_max, snap_start, n_days, cache_path, time_step_hours=1, max_depth=0.5, margin=5.0):
     """Download ocean current velocity (uo, vo) from CMEMS and save to *cache_path*.
 
     Tries each dataset in ``CMEMS_CURRENT_DATASETS_HOURLY`` (or ``_DAILY``) in order,
@@ -562,7 +518,6 @@ def _download_currents(slon_min, slon_max, slat_min, slat_max, snap_start, n_day
         time_step_hours (int): ≥ 24 selects daily-resolution datasets.
         max_depth (float): Maximum depth in metres.
         margin (float): Spatial buffer in degrees.
-        cmems_creds (dict | None): Explicit CMEMS credentials, or ``None`` for env vars.
 
     Raises:
         ProcessorExecuteError: If every available dataset fails to download.
@@ -582,7 +537,6 @@ def _download_currents(slon_min, slon_max, slat_min, slat_max, snap_start, n_day
                 output_directory = CACHE_DIR,
                 overwrite        = True,
                 **bbox,
-                **_cmems_auth(cmems_creds),
             )
             logger.info(f"Currents dataset downloaded: {ds['dataset_id']}")
             return
@@ -593,7 +547,7 @@ def _download_currents(slon_min, slon_max, slat_min, slat_max, snap_start, n_day
     raise ProcessorExecuteError(f'CMEMS currents download failed: {last_err}')
 
 
-def _download_wind(slon_min, slon_max, slat_min, slat_max, snap_start, n_days, cache_path, margin=5.0, cmems_creds=None):
+def _download_wind(slon_min, slon_max, slat_min, slat_max, snap_start, n_days, cache_path, margin=5.0):
     """Download 10-m wind components (eastward, northward) from CMEMS.
 
     Depth parameters are omitted from the request as wind data is surface-only.
@@ -605,7 +559,6 @@ def _download_wind(slon_min, slon_max, slat_min, slat_max, snap_start, n_days, c
         n_days (int): Number of days to download.
         cache_path (str): Destination file path for the output NetCDF.
         margin (float): Spatial buffer in degrees.
-        cmems_creds (dict | None): Explicit CMEMS credentials, or ``None`` for env vars.
 
     Raises:
         RuntimeError: If every available wind dataset fails to download.
@@ -625,7 +578,6 @@ def _download_wind(slon_min, slon_max, slat_min, slat_max, snap_start, n_days, c
                 output_directory = CACHE_DIR,
                 overwrite        = True,
                 **bbox,
-                **_cmems_auth(cmems_creds),
             )
             logger.info(f"Wind dataset downloaded: {ds['dataset_id']}")
             return
@@ -636,7 +588,7 @@ def _download_wind(slon_min, slon_max, slat_min, slat_max, snap_start, n_days, c
 
 # ── Cache helpers — waves (Stokes drift) ─────────────────────────────────────
 
-def _get_waves_file(lon_min, lon_max, lat_min, lat_max, start_time, end_time, margin=5.0, cmems_creds=None):
+def _get_waves_file(lon_min, lon_max, lat_min, lat_max, start_time, end_time, margin=5.0):
     """Return the path to a cached CMEMS Stokes-drift wave NetCDF, downloading if absent.
 
     Non-blocking: returns ``None`` on download failure so callers can fall back to
@@ -646,7 +598,6 @@ def _get_waves_file(lon_min, lon_max, lat_min, lat_max, start_time, end_time, ma
         lon_min / lon_max / lat_min / lat_max (float): Seeding bbox in decimal degrees.
         start_time / end_time (datetime): Simulation time window.
         margin (float): Spatial buffer in degrees.
-        cmems_creds (dict | None): Explicit CMEMS credentials, or ``None`` for env vars.
 
     Returns:
         str | None: Absolute path to the cached NetCDF, or ``None`` on failure.
@@ -659,14 +610,14 @@ def _get_waves_file(lon_min, lon_max, lat_min, lat_max, start_time, end_time, ma
         return cache_path
     logger.info(f'Waves cache: MISS — starting download ({n_days} days, margin={margin}°)')
     try:
-        _download_waves(slon_min, slon_max, slat_min, slat_max, snap_start, n_days, cache_path, margin, cmems_creds)
+        _download_waves(slon_min, slon_max, slat_min, slat_max, snap_start, n_days, cache_path, margin)
         return cache_path
     except Exception as e:
         logger.warning(f'Waves download failed (non-blocking): {e}')
         return None
 
 
-def _download_waves(slon_min, slon_max, slat_min, slat_max, snap_start, n_days, cache_path, margin=5.0, cmems_creds=None):
+def _download_waves(slon_min, slon_max, slat_min, slat_max, snap_start, n_days, cache_path, margin=5.0):
     """Download surface Stokes-drift components (VSDX, VSDY) from CMEMS wave models.
 
     Depth parameters are omitted as Stokes drift is inherently a surface-layer quantity.
@@ -678,7 +629,6 @@ def _download_waves(slon_min, slon_max, slat_min, slat_max, snap_start, n_days, 
         n_days (int): Number of days to download.
         cache_path (str): Destination file path for the output NetCDF.
         margin (float): Spatial buffer in degrees.
-        cmems_creds (dict | None): Explicit CMEMS credentials, or ``None`` for env vars.
 
     Raises:
         RuntimeError: If every available wave dataset fails to download.
@@ -698,7 +648,6 @@ def _download_waves(slon_min, slon_max, slat_min, slat_max, snap_start, n_days, 
                 output_directory = CACHE_DIR,
                 overwrite        = True,
                 **bbox,
-                **_cmems_auth(cmems_creds),
             )
             logger.info(f"Waves dataset downloaded: {ds['dataset_id']}")
             return
@@ -710,7 +659,7 @@ def _download_waves(slon_min, slon_max, slat_min, slat_max, snap_start, n_days, 
 
 # ── Cache helpers — temperature and salinity (OpenOil weathering) ────────────
 
-def _get_thermo_file(lon_min, lon_max, lat_min, lat_max, start_time, end_time, margin=5.0, cmems_creds=None):
+def _get_thermo_file(lon_min, lon_max, lat_min, lat_max, start_time, end_time, margin=5.0):
     """Return the path to a cached CMEMS temperature/salinity NetCDF, downloading if absent.
 
     Non-blocking: returns ``None`` on failure so OpenOil degrades to constant T/S values
@@ -720,7 +669,6 @@ def _get_thermo_file(lon_min, lon_max, lat_min, lat_max, start_time, end_time, m
         lon_min / lon_max / lat_min / lat_max (float): Seeding bbox in decimal degrees.
         start_time / end_time (datetime): Simulation time window.
         margin (float): Spatial buffer in degrees.
-        cmems_creds (dict | None): Explicit CMEMS credentials, or ``None`` for env vars.
 
     Returns:
         str | None: Absolute path to the cached NetCDF, or ``None`` on failure.
@@ -733,14 +681,14 @@ def _get_thermo_file(lon_min, lon_max, lat_min, lat_max, start_time, end_time, m
         return cache_path
     logger.info(f'T/S cache: MISS — starting download ({n_days} days, margin={margin}°)')
     try:
-        _download_thermo(slon_min, slon_max, slat_min, slat_max, snap_start, n_days, cache_path, margin, cmems_creds)
+        _download_thermo(slon_min, slon_max, slat_min, slat_max, snap_start, n_days, cache_path, margin)
         return cache_path
     except Exception as e:
         logger.warning(f'T/S download failed (non-blocking): {e}')
         return None
 
 
-def _download_thermo(slon_min, slon_max, slat_min, slat_max, snap_start, n_days, cache_path, margin=5.0, cmems_creds=None):
+def _download_thermo(slon_min, slon_max, slat_min, slat_max, snap_start, n_days, cache_path, margin=5.0):
     """Download surface temperature (thetao) and salinity (so) for OpenOil weathering.
 
     Tries datasets with both variables first; falls back to temperature-only.
@@ -759,7 +707,6 @@ def _download_thermo(slon_min, slon_max, slat_min, slat_max, snap_start, n_days,
                 output_directory = CACHE_DIR,
                 overwrite        = True,
                 **bbox,
-                **_cmems_auth(cmems_creds),
             )
             logger.info(f"T/S dataset downloaded: {ds['dataset_id']} — variables: {ds['variables']}")
             return
@@ -771,7 +718,7 @@ def _download_thermo(slon_min, slon_max, slat_min, slat_max, snap_start, n_days,
 
 # ── Cache helpers — static bathymetry (maximum area depth) ───────────────────
 
-def _get_max_depth_for_area(lon_min, lon_max, lat_min, lat_max, margin=5.0, cmems_creds=None):
+def _get_max_depth_for_area(lon_min, lon_max, lat_min, lat_max, margin=5.0):
     """Return the maximum seafloor depth (m) + 10 m buffer for the given area.
 
     Uses a static cached NetCDF (geographic key only, no temporal fields).
@@ -793,7 +740,7 @@ def _get_max_depth_for_area(lon_min, lon_max, lat_min, lat_max, margin=5.0, cmem
     else:
         logger.info(f'Bathymetry cache: MISS — starting download (margin={margin}°, bbox=[{slon_min},{slat_min}→{slon_max},{slat_max}])')
         try:
-            _download_bathymetry(slon_min, slon_max, slat_min, slat_max, cache_path, margin, cmems_creds)
+            _download_bathymetry(slon_min, slon_max, slat_min, slat_max, cache_path, margin)
         except Exception as e:
             logger.warning(f'Bathymetry download failed (non-blocking): {e}')
             return None
@@ -811,7 +758,7 @@ def _get_max_depth_for_area(lon_min, lon_max, lat_min, lat_max, margin=5.0, cmem
         return None
 
 
-def _download_bathymetry(slon_min, slon_max, slat_min, slat_max, cache_path, margin=5.0, cmems_creds=None):
+def _download_bathymetry(slon_min, slon_max, slat_min, slat_max, cache_path, margin=5.0):
     """Download static seafloor depth (deptho) from a CMEMS bathymetry dataset.
 
     Requests the ``deptho`` variable without time or depth dimensions.  Tries datasets
@@ -821,7 +768,6 @@ def _download_bathymetry(slon_min, slon_max, slat_min, slat_max, cache_path, mar
         slon_min / slon_max / slat_min / slat_max (int): Integer-degree snapped bbox.
         cache_path (str): Destination file path for the output NetCDF.
         margin (float): Spatial buffer in degrees.
-        cmems_creds (dict | None): Explicit CMEMS credentials, or ``None`` for env vars.
 
     Raises:
         RuntimeError: If every available bathymetry dataset fails to download.
@@ -844,7 +790,6 @@ def _download_bathymetry(slon_min, slon_max, slat_min, slat_max, cache_path, mar
                 output_directory = CACHE_DIR,
                 overwrite        = True,
                 **geo_bbox,
-                **_cmems_auth(cmems_creds),
             )
             logger.info(f"Bathymetry dataset downloaded: {ds['dataset_id']}")
             return

@@ -196,19 +196,6 @@ export const translations = {
       histogramCells:      'celle',
     },
 
-    cmems: {
-      btnTooltip:   'Credenziali Copernicus Marine',
-      btnLabel:     'Login a Copernicus',
-      modalTitle:   'Accedi a Copernicus Marine',
-      modalDesc:    'Le credenziali vengono usate solo per scaricare i dati oceanografici e non vengono mai salvate sul server.',
-      labelUser:    'Username (email)',
-      labelPass:    'Password',
-      btnSave:      'Salva',
-      btnSkip:      'Salta',
-      errorEmpty:   'Inserisci username e password.',
-      warningNone:  'Nessuna credenziale inserita. Le simulazioni useranno le credenziali di sistema (se configurate).',
-    },
-
     status: {
       noShape:    "Disegna prima un'area di seeding sulla mappa.",
       running:    label => `Simulazione ${label}… (1-2 min)`,
@@ -428,19 +415,6 @@ export const translations = {
       histogramNoData:     'No data in the selected area',
       histogramDownload:   'Download PNG',
       histogramCells:      'cells',
-    },
-
-    cmems: {
-      btnTooltip:   'Copernicus Marine credentials',
-      btnLabel:     'Login to Copernicus',
-      modalTitle:   'Sign in to Copernicus Marine',
-      modalDesc:    'Credentials are used only to download oceanographic data and are never stored on the server.',
-      labelUser:    'Username (email)',
-      labelPass:    'Password',
-      btnSave:      'Save',
-      btnSkip:      'Skip',
-      errorEmpty:   'Please enter your username and password.',
-      warningNone:  'No credentials provided. Simulations will use system credentials (if configured).',
     },
 
     status: {

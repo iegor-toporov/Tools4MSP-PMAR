@@ -24,7 +24,7 @@ from processes.OpenDriftProcess import (
     _get_max_depth_for_area,
     _build_model, _ROOT, _LOG_DIR, OUT_DIR, CACHE_DIR,
 )
-from processes.emodnet_fetch import (
+from data.emodnet_fetch import (
     EMODNET_CACHE_DIR,
     _fetch_windfarms,
     _fetch_offshore_installations,
@@ -321,11 +321,6 @@ class PMARProcessor(BaseProcessor):
         geotiff_url  = data.get('geotiff_url')
         margin       = float(data.get('margin', 1.0))
 
-        cmems_creds = None
-        u = (data.get('cmems_username') or '').strip()
-        p = (data.get('cmems_password') or '').strip()
-        if u and p:
-            cmems_creds = {'username': u, 'password': p}
         margin       = max(0.0, min(margin, 20.0))
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -405,7 +400,7 @@ class PMARProcessor(BaseProcessor):
                 pm_cfg    = PRESSURE_MODELS[pressure]
                 max_depth = pm_cfg.get('max_depth', 0.5)
                 if pm_cfg.get('needs_vertical'):
-                    dynamic = _get_max_depth_for_area(bounds[0], bounds[2], bounds[1], bounds[3], cmems_creds=cmems_creds)
+                    dynamic = _get_max_depth_for_area(bounds[0], bounds[2], bounds[1], bounds[3])
                     if dynamic is not None:
                         max_depth = dynamic
                         logger.info(f'Profondità dinamica per {pressure}: {max_depth:.0f} m')
@@ -414,22 +409,21 @@ class PMARProcessor(BaseProcessor):
                 forcing_paths = [_get_forcing_file(
                     bounds[0], bounds[2], bounds[1], bounds[3],
                     start_time, end_time, time_step_hours, max_depth,
-                    cmems_creds=cmems_creds,
                 )]
                 if pm_cfg['needs_wind']:
-                    wind_path = _get_wind_file(bounds[0], bounds[2], bounds[1], bounds[3], start_time, end_time, cmems_creds=cmems_creds)
+                    wind_path = _get_wind_file(bounds[0], bounds[2], bounds[1], bounds[3], start_time, end_time)
                     if wind_path:
                         forcing_paths.append(wind_path)
                     else:
                         logger.warning(f'Vento non disponibile per {pressure}: simulazione solo a correnti')
                 if pm_cfg.get('needs_waves'):
-                    waves_path = _get_waves_file(bounds[0], bounds[2], bounds[1], bounds[3], start_time, end_time, cmems_creds=cmems_creds)
+                    waves_path = _get_waves_file(bounds[0], bounds[2], bounds[1], bounds[3], start_time, end_time)
                     if waves_path:
                         forcing_paths.append(waves_path)
                     else:
                         logger.warning(f'Onde non disponibili per {pressure}: deriva di Stokes parametrizzata dal vento')
                 if pm_cfg.get('needs_thermo'):
-                    thermo_path = _get_thermo_file(bounds[0], bounds[2], bounds[1], bounds[3], start_time, end_time, cmems_creds=cmems_creds)
+                    thermo_path = _get_thermo_file(bounds[0], bounds[2], bounds[1], bounds[3], start_time, end_time)
                     if thermo_path:
                         forcing_paths.append(thermo_path)
                     else:
