@@ -17,7 +17,7 @@ services:
     volumes:
       - ./cache:/app/cache
       - ./out:/app/out
-      - ./scenarios:/app/scenarios
+      - ./simulations:/app/simulations
     expose:
       - "5001"
     networks:
@@ -47,7 +47,7 @@ services:
     volumes:
       - ./cache:/app/cache
       - ./out:/app/out
-      - ./scenarios:/app/scenarios
+      - ./simulations:/app/simulations
     networks:
       - internal
     depends_on:

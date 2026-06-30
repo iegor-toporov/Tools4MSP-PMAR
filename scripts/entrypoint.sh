@@ -2,7 +2,7 @@
 set -e
 
 # Create required directories
-mkdir -p cache/emodnet out scenarios
+mkdir -p cache/emodnet out simulations
 
 # Fix hardcoded absolute paths in pygeoapi config (dev machine paths → /app)
 CONFIG_SRC="${PYGEOAPI_CONFIG_SRC:-/app/pygeoapi-config.yml}"

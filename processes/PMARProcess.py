@@ -32,7 +32,7 @@ from data.emodnet_fetch import (
     _fetch_natura2000,
 )
 
-SCENARIOS_DIR     = os.path.join(_ROOT, 'scenarios')
+SCENARIOS_DIR     = os.path.join(_ROOT, 'simulations')
 SCENARIOS_SHP_DIR = os.path.join(SCENARIOS_DIR, 'shapefiles')
 os.makedirs(SCENARIOS_DIR,     exist_ok=True)
 os.makedirs(SCENARIOS_SHP_DIR, exist_ok=True)
