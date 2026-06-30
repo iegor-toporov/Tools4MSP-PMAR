@@ -2,7 +2,7 @@ server:
     bind:
         host: 0.0.0.0  # listening address for incoming connections
         port: 5001  # listening port for incoming connections
-    url: http://localhost:5001/  # url of server
+    url: https://ogcapi.tools4msp.eu/  # url of server
     mimetype: application/json; charset=UTF-8  # default MIME type
     encoding: utf-8  # default server encoding
     language: en-US  # default server language
