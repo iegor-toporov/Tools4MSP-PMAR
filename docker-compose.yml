@@ -43,7 +43,7 @@ services:
     environment:
       PYTHONPATH: /app
       REDIS_URL: redis://redis:6379/0
-    command: ["celery", "-A", "worker.app", "worker", "--loglevel=info", "--concurrency=1"]
+    command: ["celery", "-A", "worker.app", "worker", "--loglevel=info", "--concurrency=4"]
     volumes:
       - ./cache:/app/cache
       - ./out:/app/out
