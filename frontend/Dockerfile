@@ -15,9 +15,11 @@ RUN npm run build
 FROM nginx:alpine
 
 COPY --from=builder /app/dist /usr/share/nginx/html
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY nginx.conf /etc/nginx/nginx.conf.template
 
 EXPOSE 80
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
     CMD curl -fs http://localhost/ || exit 1
+
+CMD ["/bin/sh", "-c", "envsubst '${BACKEND_URL}' < /etc/nginx/nginx.conf.template > /etc/nginx/conf.d/default.conf && nginx -g 'daemon off;'"]
