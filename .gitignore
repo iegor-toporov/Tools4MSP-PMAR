@@ -14,8 +14,8 @@ out/*
 !out/.gitkeep
 cache/*
 !cache/.gitkeep
-simulations/*
-!simulations/.gitkeep
+scenarios/*
+!scenarios/.gitkeep
 
 # pygeoapi generated
 pygeoapi-openapi.yml
