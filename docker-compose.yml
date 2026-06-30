@@ -82,6 +82,7 @@ services:
         condition: service_healthy
     labels:
       - "traefik.enable=true"
+      - "traefik.docker.network=traefik_geonode_webgateway"
       - "traefik.http.routers.ogcapi.rule=Host(`ogcapi.tools4msp.eu`)"
       - "traefik.http.routers.ogcapi.entrypoints=websecure"
       - "traefik.http.routers.ogcapi.tls.certresolver=le"
