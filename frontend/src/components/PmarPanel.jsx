@@ -238,7 +238,7 @@ export default function PmarPanel({
           setRefetchFlag(f => f + 1)
         } else if (job.status === 'failed') {
           setCustomJob(null)
-          setCustomPrecomputeError(p.computeBusy)
+          setCustomPrecomputeError(job.message || p.computeError)
           setRefetchFlag(f => f + 1)
         }
       } catch {}
