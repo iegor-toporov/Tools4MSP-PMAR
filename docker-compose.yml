@@ -96,7 +96,6 @@ networks:
     external: true
     name: traefik_geonode_webgateway
   internal:
-    internal: true
 
 secrets:
   git_token:
