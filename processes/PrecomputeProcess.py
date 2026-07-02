@@ -29,6 +29,39 @@ logger = setup_logger('precompute_process', 'pmar', 'precompute_process.log')
 
 _precompute_lock = threading.Semaphore(1)
 
+
+def _cleanup_scenario(scenario_id, sc):
+    """Remove JSON metadata, partial NC files, and custom shapefile for an incomplete scenario."""
+    json_path = os.path.join(SCENARIOS_DIR, f'{scenario_id}.json')
+    if os.path.exists(json_path):
+        try:
+            os.remove(json_path)
+            logger.info(f'[{scenario_id}] Removed incomplete scenario metadata')
+        except OSError as e:
+            logger.warning(f'[{scenario_id}] Could not remove JSON: {e}')
+
+    for nc_filename in sc.get('nc_filenames', [sc.get('nc_filename', '')]):
+        if not nc_filename:
+            continue
+        nc_path = os.path.join(SCENARIOS_DIR, nc_filename)
+        if os.path.exists(nc_path):
+            try:
+                os.remove(nc_path)
+                logger.info(f'[{scenario_id}] Removed partial NC: {nc_filename}')
+            except OSError as e:
+                logger.warning(f'[{scenario_id}] Could not remove NC {nc_filename}: {e}')
+
+    shp = sc.get('shapefile', '')
+    if shp and os.path.basename(shp).startswith('custom_'):
+        base = os.path.splitext(shp)[0]
+        for ext in ('.shp', '.shx', '.dbf', '.prj', '.cpg'):
+            p = base + ext
+            if os.path.exists(p):
+                try:
+                    os.remove(p)
+                except OSError as e:
+                    logger.warning(f'[{scenario_id}] Could not remove shapefile {p}: {e}')
+
 PROCESS_METADATA = {
     'version': '0.1.0',
     'id': 'precompute',
@@ -497,13 +530,17 @@ class PrecomputeProcessor(BaseProcessor):
         if not _precompute_lock.acquire(blocking=False):
             raise ProcessorExecuteError('A pre-computation is already running. Please wait for it to finish.')
 
+        completed = False
         try:
             _run_multi_scenario(scenario_id, sc, shp_path)
+            completed = True
         except Exception as e:
             logger.error(f'[PrecomputeProcess] Error during pre-computation of {scenario_id}: {e}', exc_info=True)
             raise ProcessorExecuteError(str(e))
         finally:
             _precompute_lock.release()
+            if not completed:
+                _cleanup_scenario(scenario_id, sc)
 
         logger.info(f'[PrecomputeProcess] Pre-computation complete: {sc["nc_filenames"]}')
 
