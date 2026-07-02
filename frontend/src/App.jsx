@@ -691,12 +691,16 @@ export default function App() {
   const [currentStep, setCurrentStep] = useState(0)
   const [isPlaying,   setIsPlaying]   = useState(false)
   const [speed,       setSpeed]       = useState(5)
-  const [loading,     setLoading]     = useState(false)
-  const [status,      setStatus]      = useState('')
-  const [statusType,  setStatusType]  = useState('')
+  const [loading,            setLoading]            = useState(false)
+  const [openDriftJobId,     setOpenDriftJobId]     = useState(null)
+  const [openDriftStopping,  setOpenDriftStopping]  = useState(false)
+  const [status,             setStatus]             = useState('')
+  const [statusType,         setStatusType]         = useState('')
 
   const [pmarData,        setPmarData]        = useState(null)
   const [pmarLoading,     setPmarLoading]     = useState(false)
+  const [pmarJobId,       setPmarJobId]       = useState(null)
+  const [pmarStopping,    setPmarStopping]    = useState(false)
   const [pmarStatus,      setPmarStatus]      = useState('')
   const [pmarStatusType,  setPmarStatusType]  = useState('')
   const [pmarErrorMsg,    setPmarErrorMsg]    = useState(null)
@@ -912,6 +916,7 @@ export default function App() {
       }
 
       const { jobID } = await resp.json()
+      setOpenDriftJobId(jobID)
 
       const jsonHeaders = { 'Accept': 'application/json' }
 
@@ -926,6 +931,9 @@ export default function App() {
             } else if (job.status === 'failed') {
               clearInterval(iv)
               reject(new Error(job.message || t.status.badResponse))
+            } else if (job.status === 'dismissed') {
+              clearInterval(iv)
+              reject(new Error('__dismissed__'))
             }
           } catch (e) { clearInterval(iv); reject(e) }
         }, 3000)
@@ -944,10 +952,14 @@ export default function App() {
       setIsPlaying(true)
 
     } catch (err) {
-      setStatus(t.status.error(err.message))
-      setStatusType('error')
+      if (err.message !== '__dismissed__') {
+        setStatus(t.status.error(err.message))
+        setStatusType('error')
+      }
     } finally {
       setLoading(false)
+      setOpenDriftJobId(null)
+      setOpenDriftStopping(false)
     }
   }
 
@@ -1005,6 +1017,7 @@ export default function App() {
       }
 
       const { jobID } = await resp.json()
+      setPmarJobId(jobID)
       const jsonHeaders = { 'Accept': 'application/json' }
 
       await new Promise((resolve, reject) => {
@@ -1018,6 +1031,9 @@ export default function App() {
             } else if (job.status === 'failed') {
               clearInterval(iv)
               reject(new Error(job.message || t.status.badResponse))
+            } else if (job.status === 'dismissed') {
+              clearInterval(iv)
+              reject(new Error('__dismissed__'))
             }
           } catch (e) { clearInterval(iv); reject(e) }
         }, 3000)
@@ -1044,16 +1060,20 @@ export default function App() {
       setPmarStatusType('ok')
 
     } catch (err) {
-      const clean = err.message
-        .replace(/^Error executing process:\s*/i, '')
-        .replace(/^Errore:\s*/i, '')
-        .replace(/^Error:\s*/i, '')
-        .trim()
-      setPmarErrorMsg(clean)
-      setPmarStatus('')
-      setPmarStatusType('error')
+      if (err.message !== '__dismissed__') {
+        const clean = err.message
+          .replace(/^Error executing process:\s*/i, '')
+          .replace(/^Errore:\s*/i, '')
+          .replace(/^Error:\s*/i, '')
+          .trim()
+        setPmarErrorMsg(clean)
+        setPmarStatus('')
+        setPmarStatusType('error')
+      }
     } finally {
       setPmarLoading(false)
+      setPmarJobId(null)
+      setPmarStopping(false)
     }
   }
 
@@ -1272,9 +1292,13 @@ export default function App() {
         onRun={handleRun}
         onRunPmar={handleRunPmar}
         loading={loading}
+        onStopOpenDrift={async () => { if (openDriftJobId) { setOpenDriftStopping(true); await fetch(`/jobs/${openDriftJobId}`, { method: 'DELETE' }) } }}
+        openDriftStopping={openDriftStopping}
         status={status}
         statusType={statusType}
         pmarLoading={pmarLoading}
+        onStopPmar={async () => { if (pmarJobId) { setPmarStopping(true); await fetch(`/jobs/${pmarJobId}`, { method: 'DELETE' }) } }}
+        pmarStopping={pmarStopping}
         pmarStatus={pmarStatus}
         pmarStatusType={pmarStatusType}
         drawMode={drawMode}

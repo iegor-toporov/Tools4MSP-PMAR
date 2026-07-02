@@ -43,8 +43,8 @@ function formatSeedShape(s) {
 
 export default function Panel({
   onRun, onRunPmar,
-  loading, status, statusType,
-  pmarLoading, pmarStatus, pmarStatusType,
+  loading, onStopOpenDrift, openDriftStopping, status, statusType,
+  pmarLoading, onStopPmar, pmarStopping, pmarStatus, pmarStatusType,
   drawMode, onStartDraw, onClearSeedShape, seedShape,
   activeTool, onToolChange,
   useSource, onUseSourceChange,
@@ -106,6 +106,7 @@ export default function Panel({
             type="hover"
             styles={SCROLLBAR_STYLES}
           >
+            <div style={{ pointerEvents: openDriftStopping ? 'none' : 'auto', opacity: openDriftStopping ? 0.5 : 1, transition: 'opacity 0.2s' }}>
             <Stack gap="sm" p="md">
               <Text size="xs" fw={600} c="dimmed" tt="uppercase" style={{ letterSpacing: '0.05em' }}>
                 {p.sectionModel}
@@ -205,15 +206,24 @@ export default function Panel({
                     onChange={e => setDuration(e.target.value)}
                     styles={INPUT_LABEL}
                   />
-                  <Button
-                    fullWidth
-                    size="sm"
-                    type="submit"
-                    color="blue"
-                    disabled={loading || !seedShape}
-                  >
-                    {loading ? p.btnRunning : p.btnRun}
-                  </Button>
+                  {loading ? (
+                    <Group grow gap="xs">
+                      <Button size="sm" color="blue" disabled>
+                        {openDriftStopping ? p.btnStopping : p.btnRunning}
+                      </Button>
+                      <Button size="sm" color="red" variant="outline" type="button"
+                        loading={openDriftStopping}
+                        disabled={openDriftStopping}
+                        onClick={onStopOpenDrift}
+                      >
+                        {openDriftStopping ? p.btnStopping : p.btnStop}
+                      </Button>
+                    </Group>
+                  ) : (
+                    <Button fullWidth size="sm" type="submit" color="blue" disabled={!seedShape}>
+                      {p.btnRun}
+                    </Button>
+                  )}
                 </Stack>
               </form>
 
@@ -228,6 +238,7 @@ export default function Panel({
                 </Text>
               )}
             </Stack>
+            </div>
           </ScrollArea>
         </Tabs.Panel>
 
@@ -242,6 +253,8 @@ export default function Panel({
             <PmarPanel
               onRun={onRunPmar}
               loading={pmarLoading}
+              onStop={onStopPmar}
+              stopping={pmarStopping}
               status={pmarStatus}
               statusType={pmarStatusType}
               drawMode={drawMode}

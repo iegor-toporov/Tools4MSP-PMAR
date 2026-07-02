@@ -19,6 +19,8 @@ export const translations = {
       labelDuration: 'Durata (ore)',
       btnRun:        'Avvia simulazione',
       btnRunning:    'Simulazione in corso…',
+      btnStop:       'Interrompi',
+      btnStopping:   'Interruzione in corso…',
     },
 
     pmar: {
@@ -83,6 +85,8 @@ export const translations = {
       labelCmemsMarginShort:'Margine CMEMS',
       btnPrecompute:        'Pre-calcola simulazione',
       btnPrecomputing:      'Pre-calcolo in corso…',
+      btnStop:              'Interrompi',
+      btnStopping:          'Interruzione in corso…',
       hintNoScenario:       'Nessuna simulazione selezionata. Scegli una simulazione dalla tab Simulazione.',
       seedAreaLabel:        'Area di seeding',
       seedAreaDraw:         'Disegna',
@@ -241,6 +245,8 @@ export const translations = {
       labelDuration: 'Duration (hours)',
       btnRun:        'Run simulation',
       btnRunning:    'Simulation running…',
+      btnStop:       'Stop',
+      btnStopping:   'Stopping…',
     },
 
     pmar: {
@@ -305,6 +311,8 @@ export const translations = {
       labelCmemsMarginShort:'CMEMS margin',
       btnPrecompute:        'Pre-compute simulation',
       btnPrecomputing:      'Pre-computing…',
+      btnStop:              'Stop',
+      btnStopping:          'Stopping…',
       hintNoScenario:       'No simulation selected. Choose a simulation from the Simulation tab.',
       seedAreaLabel:        'Seeding area',
       seedAreaDraw:         'Draw',

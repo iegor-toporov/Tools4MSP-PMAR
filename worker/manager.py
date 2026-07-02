@@ -158,20 +158,30 @@ class CeleryManager(BaseManager):
         return {'jobs': jobs, 'numberMatched': total}
 
     def delete_job(self, job_id: str) -> bool:
-        """Delete a job record from Redis.
+        """Terminate a running job and mark it as dismissed in Redis.
+
+        If a Celery task_id was recorded for this job, revokes the task with
+        SIGTERM so the worker process is stopped and respawned.  The Redis
+        record is kept (with status ``dismissed``) so that in-flight polling
+        clients can detect the cancellation.
 
         Args:
             job_id (str): Job identifier.
 
         Returns:
-            bool: Always ``True`` on successful deletion.
+            bool: Always ``True`` on successful dismissal.
 
         Raises:
             JobNotFoundError: If no Redis hash exists for *job_id*.
         """
         if not self._redis.exists(self._key(job_id)):
             raise JobNotFoundError()
-        self._redis.delete(self._key(job_id))
+        celery_task_id = self._redis.hget(self._key(job_id), 'celery_task_id')
+        if celery_task_id:
+            from worker.app import app as celery_app
+            celery_app.control.revoke(celery_task_id, terminate=True, signal='SIGTERM')
+        self._redis.hset(self._key(job_id), mapping={'status': 'dismissed'})
+        self._redis.expire(self._key(job_id), _TTL)
         return True
 
     def get_job_result(self, job_id: str) -> Tuple[str, Any]:
@@ -229,7 +239,8 @@ class CeleryManager(BaseManager):
         """
         from worker.tasks import run_processor
         process_class_path = f"{p.__class__.__module__}.{p.__class__.__name__}"
-        run_processor.delay(job_id, process_class_path, data_dict)
+        result = run_processor.delay(job_id, process_class_path, data_dict)
+        self._redis.hset(self._key(job_id), 'celery_task_id', result.id)
         return 'application/json', None, JobStatus.accepted
 
     def __repr__(self):

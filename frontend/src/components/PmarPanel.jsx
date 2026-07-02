@@ -149,7 +149,7 @@ function seedShapeToGeoJSON(shape) {
 }
 
 export default function PmarPanel({
-  onRun, loading, status, statusType,
+  onRun, loading, onStop, stopping, status, statusType,
   drawMode, onStartDraw, onClearSeedShape, seedShape,
   useSource, onUseSourceChange,
   windfarmsLoading, windfarmsEmpty,
@@ -199,6 +199,7 @@ export default function PmarPanel({
 
   const [customJob,             setCustomJob]             = useState(null)
   const [customPrecomputeError, setCustomPrecomputeError] = useState(null)
+  const [precomputeStopping,    setPrecomputeStopping]    = useState(false)
   const [refetchFlag,           setRefetchFlag]           = useState(0)
 
   useEffect(() => {
@@ -239,6 +240,10 @@ export default function PmarPanel({
         } else if (job.status === 'failed') {
           setCustomJob(null)
           setCustomPrecomputeError(job.message || p.computeError)
+          setRefetchFlag(f => f + 1)
+        } else if (job.status === 'dismissed') {
+          setCustomJob(null)
+          setPrecomputeStopping(false)
           setRefetchFlag(f => f + 1)
         }
       } catch {}
@@ -348,8 +353,11 @@ export default function PmarPanel({
     ? t4mspAreas.filter(a => a.label.toLowerCase().includes(searchLow))
     : t4mspAreas
 
+  const isBlocked = stopping || precomputeStopping
+
   return (
     <form onSubmit={handleSubmit}>
+      <div style={{ pointerEvents: isBlocked ? 'none' : 'auto', opacity: isBlocked ? 0.5 : 1, transition: 'opacity 0.2s' }}>
       <Stack gap="sm" p="md">
 
         <Tabs value={runMode} onChange={setRunMode}>
@@ -726,16 +734,33 @@ export default function PmarPanel({
                 {p.ncSizeHint.replace('{size}', formatNcSize(ncEstimateBytes))}
               </Text>
 
-              <Button
-                size="sm"
-                color="blue"
-                fullWidth
-                disabled={!canPrecompute}
-                onClick={handleCustomCompute}
-                type="button"
-              >
-                {customJob ? p.btnPrecomputing : p.btnPrecompute}
-              </Button>
+              <Group grow gap="xs">
+                <Button
+                  size="sm"
+                  color="blue"
+                  disabled={!canPrecompute}
+                  onClick={handleCustomCompute}
+                  type="button"
+                >
+                  {customJob ? p.btnPrecomputing : p.btnPrecompute}
+                </Button>
+                {customJob && (
+                  <Button
+                    size="sm"
+                    color="red"
+                    variant="outline"
+                    type="button"
+                    loading={precomputeStopping}
+                    disabled={precomputeStopping}
+                    onClick={async () => {
+                      setPrecomputeStopping(true)
+                      await fetch(`/jobs/${customJob.jobId}`, { method: 'DELETE' })
+                    }}
+                  >
+                    {precomputeStopping ? p.btnStopping : p.btnStop}
+                  </Button>
+                )}
+              </Group>
 
               {customPrecomputeError && (
                 <Text size="xs" c="red.4" ta="center">{customPrecomputeError}</Text>
@@ -895,9 +920,24 @@ export default function PmarPanel({
                 styles={LABEL_STYLES}
               />
 
-              <Button size="sm" color="blue" fullWidth type="submit" disabled={!canSubmit}>
-                {loading ? p.btnRunning : p.btnRun}
-              </Button>
+              {loading ? (
+                <Group grow gap="xs">
+                  <Button size="sm" color="blue" disabled>
+                    {stopping ? p.btnStopping : p.btnRunning}
+                  </Button>
+                  <Button size="sm" color="red" variant="outline" type="button"
+                    loading={stopping}
+                    disabled={stopping}
+                    onClick={onStop}
+                  >
+                    {stopping ? p.btnStopping : p.btnStop}
+                  </Button>
+                </Group>
+              ) : (
+                <Button size="sm" color="blue" fullWidth type="submit" disabled={!canSubmit}>
+                  {p.btnRun}
+                </Button>
+              )}
 
               {status && (
                 <Text size="xs" ta="center" c={statusType === 'error' ? 'red.4' : statusType === 'ok' ? 'green.4' : 'dimmed'}>
@@ -951,6 +991,7 @@ export default function PmarPanel({
           </Tabs.Panel>
         </Tabs>
       </Stack>
+      </div>
     </form>
   )
 }
