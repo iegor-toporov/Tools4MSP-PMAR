@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import {
-  Paper, Tabs, Button, Group, Stack, Text, TextInput,
+  Paper, Tabs, Box, Button, Group, Stack, Text, TextInput,
   SimpleGrid, ScrollArea, ActionIcon,
 } from '@mantine/core'
 import { IconX } from '@tabler/icons-react'
@@ -92,11 +92,7 @@ export default function Panel({
         border: '1px solid var(--panel-border)',
       }}
     >
-      <Tabs value={activeTool} onChange={onToolChange}>
-        <Tabs.List grow style={{ borderBottom: '1px solid var(--modal-divider)', flexShrink: 0 }}>
-          <Tabs.Tab value="opendrift">{t.tools.opendrift}</Tabs.Tab>
-          <Tabs.Tab value="pmar">{t.tools.pmar}</Tabs.Tab>
-        </Tabs.List>
+      <Tabs value="pmar">
 
         {/* ── OpenDrift tab ─────────────────────────────────────────── */}
         <Tabs.Panel value="opendrift">
@@ -244,8 +240,16 @@ export default function Panel({
 
         {/* ── PMAR tab ──────────────────────────────────────────────── */}
         <Tabs.Panel value="pmar">
+          <Box
+            px="md"
+            py="sm"
+            style={{ borderBottom: '1px solid var(--modal-divider)', flexShrink: 0 }}
+          >
+            <Text fw={700} size="md">PMAR</Text>
+            <Text size="xs" c="dimmed">Marine pressure assessment tool</Text>
+          </Box>
           <ScrollArea
-            h="calc(100vh - 80px)"
+            h="calc(100vh - 130px)"
             scrollbarSize={5}
             type="hover"
             styles={SCROLLBAR_STYLES}
