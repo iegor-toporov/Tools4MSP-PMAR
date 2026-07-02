@@ -177,7 +177,7 @@ export default function PmarPanel({
   const [customLabel,   setCustomLabel]   = useState('')
   const [customDesc,    setCustomDesc]    = useState('')
   const [seedAreaName,  setSeedAreaName]  = useState('')
-  const [cmemsMargin,   setCmemsMargin]   = useState('5')
+  const [cmemsMargin,   setCmemsMargin]   = useState('1')
   const [multiSeeding,  setMultiSeeding]  = useState(false)
   const [seedings,      setSeedings]      = useState('3')
   const [tshift,        setTshift]        = useState('30')
