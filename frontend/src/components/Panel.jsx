@@ -53,6 +53,7 @@ export default function Panel({
   natura2000Loading, natura2000Empty, natura2000Geojson,
   showNatura2000, onFetchNatura2000, onToggleNatura2000,
   hasSeedShape,
+  onT4mspPreview,
 }) {
   const { t } = useLang()
   const [selectedModel, setSelectedModel] = useState('OceanDrift')
@@ -278,6 +279,7 @@ export default function Panel({
               onFetchNatura2000={onFetchNatura2000}
               onToggleNatura2000={onToggleNatura2000}
               hasSeedShape={hasSeedShape}
+              onT4mspPreview={onT4mspPreview}
             />
           </ScrollArea>
         </Tabs.Panel>

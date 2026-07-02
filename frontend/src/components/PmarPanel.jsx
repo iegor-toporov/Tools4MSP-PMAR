@@ -157,7 +157,7 @@ export default function PmarPanel({
   mspZonesLoading, mspZonesEmpty,
   natura2000Loading, natura2000Empty, natura2000Geojson,
   showNatura2000, onFetchNatura2000, onToggleNatura2000,
-  hasSeedShape,
+  hasSeedShape, onT4mspPreview,
 }) {
   const { t, lang } = useLang()
   const p = t.pmar
@@ -169,6 +169,7 @@ export default function PmarPanel({
   const [shapefileB64,      setShapefileB64]      = useState(null)
   const [shapefileName,     setShapefileName]     = useState('')
   const fileRef = useRef(null)
+  const geoCache = useRef({})
 
   const [t4mspAreas,        setT4mspAreas]        = useState([])
   const [selectedT4mspArea, setSelectedT4mspArea] = useState(null)
@@ -250,6 +251,8 @@ export default function PmarPanel({
     }, 5000)
     return () => clearInterval(iv)
   }, [customJob, p.computeBusy])
+
+  useEffect(() => { onT4mspPreview?.(null) }, [runMode])
 
   async function handleCustomCompute() {
     setCustomPrecomputeError(null)
@@ -600,7 +603,7 @@ export default function PmarPanel({
                     size="xs"
                     placeholder={p.t4mspSearchHint}
                     value={t4mspSearch}
-                    onChange={e => { setT4mspSearch(e.target.value); setSelectedT4mspArea(null) }}
+                    onChange={e => { setT4mspSearch(e.target.value); setSelectedT4mspArea(null); onT4mspPreview?.(null) }}
                   />
                   <ScrollArea h={140} style={{ border: '1px solid var(--modal-border)', borderRadius: 6 }}>
                     <Stack gap={0}>
@@ -608,7 +611,24 @@ export default function PmarPanel({
                         <button
                           key={area.id}
                           type="button"
-                          onClick={() => setSelectedT4mspArea(selectedT4mspArea === area.id ? null : area.id)}
+                          onClick={async () => {
+                            const next = selectedT4mspArea === area.id ? null : area.id
+                            setSelectedT4mspArea(next)
+                            if (!next) { onT4mspPreview?.(null); return }
+                            if (geoCache.current[area.id]) {
+                              onT4mspPreview?.({ type: 'FeatureCollection', features: [{ type: 'Feature', geometry: geoCache.current[area.id], properties: {} }] })
+                              return
+                            }
+                            try {
+                              const r    = await fetch('/processes/scenario_status/execution', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ inputs: { area_id: area.id } }) })
+                              const raw  = await r.json()
+                              const geo  = (raw.result ?? raw).geo
+                              if (geo) {
+                                geoCache.current[area.id] = geo
+                                onT4mspPreview?.({ type: 'FeatureCollection', features: [{ type: 'Feature', geometry: geo, properties: {} }] })
+                              }
+                            } catch {}
+                          }}
                           style={{
                             display: 'flex',
                             justifyContent: 'space-between',

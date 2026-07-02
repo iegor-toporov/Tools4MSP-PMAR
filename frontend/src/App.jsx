@@ -683,9 +683,10 @@ export default function App() {
   const [activeTool, setActiveTool] = useState('opendrift')
   const [mapTheme,   setMapTheme]   = useState('light')
 
-  const [drawMode,      setDrawMode]      = useState(null)
-  const [seedShape,     setSeedShape]     = useState(null)
-  const [showSeedShape, setShowSeedShape] = useState(true)
+  const [drawMode,            setDrawMode]            = useState(null)
+  const [seedShape,           setSeedShape]           = useState(null)
+  const [showSeedShape,       setShowSeedShape]       = useState(true)
+  const [t4mspPreviewGeoJSON, setT4mspPreviewGeoJSON] = useState(null)
 
   const [simData,     setSimData]     = useState(null)
   const [currentStep, setCurrentStep] = useState(0)
@@ -1216,6 +1217,7 @@ export default function App() {
         <SimLayer simData={simData} currentStep={currentStep} />
         <PmarLayer pmarData={activePmarData} visible={showPmarRaster} passagesLabel={t.pmarControls.tooltipPassages} />
         <SeedingAreaLayer geojson={pmarData?.seeding_geojson ?? null} visible={showSeedShape} />
+        <SeedingAreaLayer geojson={t4mspPreviewGeoJSON} visible={!!t4mspPreviewGeoJSON} />
         <WindFarmsLayer geojson={windfarmsGeoJSON} visible={showWindFarms} />
         <OffshoreInstallationsLayer geojson={offshoreGeoJSON} visible={showOffshoreInstallations} />
         <MspZonesLayer geojson={mspZonesGeoJSON} visible={showMspZones} />
@@ -1322,6 +1324,7 @@ export default function App() {
         onFetchNatura2000={handleFetchNatura2000}
         onToggleNatura2000={() => setShowNatura2000(v => !v)}
         hasSeedShape={!!seedShape || !!pmarData}
+        onT4mspPreview={setT4mspPreviewGeoJSON}
       />
 
       {pmarData && showPmarRaster && (() => {

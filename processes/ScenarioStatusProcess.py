@@ -1,13 +1,16 @@
 import glob
 import json
 import os
+import urllib.request as _u
 
 from pygeoapi.process.base import BaseProcessor
 
-from processes.PMARProcess import SCENARIOS_DIR, _fetch_t4msp_areas
+from processes.PMARProcess import SCENARIOS_DIR, T4MSP_AREA_URL, _fetch_t4msp_areas
 from processes.logging_utils import setup_logger
 
 logger = setup_logger('scenario_status_process', 'pmar', 'scenario_status.log')
+
+_geo_cache: dict = {}
 
 PROCESS_METADATA = {
     'version': '0.1.0',
@@ -38,24 +41,29 @@ class ScenarioStatusProcessor(BaseProcessor):
     def execute(self, data):
         """Scan the scenarios directory and return a status map for every custom scenario.
 
-        For each ``custom_*.json`` metadata file found in ``SCENARIOS_DIR``, determines
-        whether all expected NetCDF trajectory files are present on disk and assembles
-        a summary dict.  Files are sorted by modification time, newest first.  Also
-        fetches the list of Tools4MSP domain areas (with 1-hour in-memory cache) for
-        the frontend area selector.
+        If ``area_id`` is provided in *data*, returns only the GeoJSON geometry for that
+        T4MSP area (fetched from the Tools4MSP API, cached in-memory).
 
         Args:
-            data (dict): OGC API input payload (no inputs required for this process).
+            data (dict): OGC API input payload. Optional key: ``area_id`` (int).
 
         Returns:
-            tuple[str, dict]: ``('application/json', result)`` where *result* contains:
-
-            - ``scenarios`` (dict): Mapping ``scenario_id → status_dict`` for every
-              custom scenario found in ``SCENARIOS_DIR``.  Each status dict includes
-              ``computed``, ``nc_size_mb``, labels, simulation parameters, and seeding info.
-            - ``t4msp_areas`` (list[dict]): List of ``{id, label}`` entries from the
-              Tools4MSP domain-areas API.
+            tuple[str, dict]: ``('application/json', result)``.
         """
+        area_id = data.get('area_id')
+        if area_id is not None:
+            area_id = int(area_id)
+            if area_id not in _geo_cache:
+                try:
+                    url = T4MSP_AREA_URL.format(area_id=area_id)
+                    with _u.urlopen(url, timeout=15) as resp:
+                        _geo_cache[area_id] = json.loads(resp.read()).get('geo')
+                    logger.info(f'[ScenarioStatus] Fetched geometry for T4MSP area {area_id}')
+                except Exception as e:
+                    logger.warning(f'[ScenarioStatus] Could not fetch geometry for area {area_id}: {e}')
+                    _geo_cache[area_id] = None
+            return 'application/json', {'geo': _geo_cache.get(area_id)}
+
         scenarios = {}
 
         for meta_file in sorted(glob.glob(os.path.join(SCENARIOS_DIR, 'custom_*.json')), key=os.path.getmtime, reverse=True):
