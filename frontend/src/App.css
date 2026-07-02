@@ -5,7 +5,6 @@ html[data-mantine-color-scheme="dark"] body {
   color: #ffffff;
 }
 
-html[data-mantine-color-scheme="light"],
 html[data-mantine-color-scheme="light"] body {
   background: #f2f2f7;
   color: #1c1c1e;

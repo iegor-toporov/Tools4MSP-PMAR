@@ -5,7 +5,8 @@ import {
   SimpleGrid, SegmentedControl, NativeSelect, Paper, ScrollArea,
   Switch, Badge, Collapse, ActionIcon, Divider,
 } from '@mantine/core'
-import { IconInfoCircle, IconX, IconChevronDown, IconChevronUp } from '@tabler/icons-react'
+import { IconInfoCircle, IconX, IconChevronDown, IconChevronUp, IconCircleCheck } from '@tabler/icons-react'
+import { notifications } from '@mantine/notifications'
 import { useLang } from '../LanguageContext'
 
 function InfoTooltip({ text }) {
@@ -236,6 +237,13 @@ export default function PmarPanel({
             const newSid  = results.scenario_id
             if (newSid) setScenarioId(newSid)
           } catch {}
+          notifications.show({
+            title:     p.simReadyTitle,
+            message:   p.simReadyBody.replace('{label}', customJob.label ?? ''),
+            color:     'teal',
+            icon:      <IconCircleCheck size={18} />,
+            autoClose: 20000,
+          })
           setCustomJob(null)
           setRefetchFlag(f => f + 1)
         } else if (job.status === 'failed') {
@@ -283,7 +291,7 @@ export default function PmarPanel({
         body: JSON.stringify({ inputs }),
       })
       const data = await r.json()
-      setCustomJob({ jobId: data.jobID })
+      setCustomJob({ jobId: data.jobID, label })
     } catch {
       setCustomPrecomputeError('Errore avvio pre-calcolo.')
     }
@@ -418,7 +426,7 @@ export default function PmarPanel({
                             ].map(([label, val]) => (
                               <Group key={label} justify="space-between" gap="xs">
                                 <Text size="10px" c="dimmed">{label}</Text>
-                                <Text size="10px" c="gray.3" fw={500}>{val}</Text>
+                                <Text size="xs" c="blue.5" fw={500}>{val}</Text>
                               </Group>
                             ))}
                             {sc.seedings > 1 && (
@@ -428,7 +436,7 @@ export default function PmarPanel({
                               </Group>
                             )}
                             {sc.description && (
-                              <Text size="10px" c="dimmed" mt={4} style={{ borderTop: '1px solid var(--modal-divider)', paddingTop: 4, lineHeight: 1.5 }}>
+                              <Text size="xs" c="dimmed" mt={4} style={{ borderTop: '1px solid var(--modal-divider)', paddingTop: 4, lineHeight: 1.5 }}>
                                 {sc.description}
                               </Text>
                             )}
@@ -782,9 +790,6 @@ export default function PmarPanel({
                 )}
               </Group>
 
-              {customPrecomputeError && (
-                <Text size="xs" c="red.4" ta="center">{customPrecomputeError}</Text>
-              )}
             </Stack>
           </Tabs.Panel>
 
@@ -818,7 +823,7 @@ export default function PmarPanel({
                       ].map(([label, val]) => (
                         <Group key={label} justify="space-between" gap="xs">
                           <Text size="10px" c="dimmed">{label}</Text>
-                          <Text size="10px" c="gray.3" fw={500}>{val}</Text>
+                          <Text size="xs" c="blue.5" fw={500}>{val}</Text>
                         </Group>
                       ))}
                       {sc.seedings > 1 && (
@@ -828,7 +833,7 @@ export default function PmarPanel({
                         </Group>
                       )}
                       {sc.description && (
-                        <Text size="10px" c="dimmed" mt={4} style={{ borderTop: '1px solid var(--modal-divider)', paddingTop: 4, lineHeight: 1.5 }}>
+                        <Text size="xs" c="dimmed" mt={4} style={{ borderTop: '1px solid var(--modal-divider)', paddingTop: 4, lineHeight: 1.5 }}>
                           {sc.description}
                         </Text>
                       )}
@@ -959,11 +964,6 @@ export default function PmarPanel({
                 </Button>
               )}
 
-              {status && (
-                <Text size="xs" ta="center" c={statusType === 'error' ? 'red.4' : statusType === 'ok' ? 'green.4' : 'dimmed'}>
-                  {status}
-                </Text>
-              )}
               {/* ── Layer aggiuntivi ──────────────────────────── */}
               <Divider my={4} />
               <Stack gap="xs">

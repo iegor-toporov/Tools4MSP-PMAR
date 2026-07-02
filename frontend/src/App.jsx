@@ -2,7 +2,8 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { MapContainer, TileLayer, useMap } from 'react-leaflet'
 import L from 'leaflet'
 import { Modal, ActionIcon, Text, Button, Group, useMantineColorScheme } from '@mantine/core'
-import { IconSun, IconMoon } from '@tabler/icons-react'
+import { IconSun, IconMoon, IconCircleCheck } from '@tabler/icons-react'
+import { notifications } from '@mantine/notifications'
 import { MODEL_STYLES } from './constants'
 import { useLang } from './LanguageContext'
 import Panel from './components/Panel'
@@ -1057,8 +1058,15 @@ export default function App() {
       setProfileEntries(prev    => { prev.forEach(h => h.layer?.remove()); return [] })
       setThresholdEntries(prev  => { prev.forEach(h => h.layer?.remove()); return [] })
       setComparisonAreas(prev => { prev.forEach(a => a.layer?.remove()); return [] })
-      setPmarStatus(`✓ PMAR — ${label}`)
-      setPmarStatusType('ok')
+      setPmarStatus('')
+      setPmarStatusType('')
+      notifications.show({
+        title:     t.pmar.analysisReadyTitle,
+        message:   t.pmar.analysisReadyBody,
+        color:     'green',
+        icon:      <IconCircleCheck size={18} />,
+        autoClose: 20000,
+      })
 
     } catch (err) {
       if (err.message !== '__dismissed__') {
