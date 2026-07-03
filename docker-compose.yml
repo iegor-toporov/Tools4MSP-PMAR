@@ -76,8 +76,6 @@ services:
     restart: unless-stopped
     environment:
       - BACKEND_URL=http://backend:5001
-    ports:
-      - "80:80"
     networks:
       - traefik
       - internal
