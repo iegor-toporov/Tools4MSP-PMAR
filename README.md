@@ -37,8 +37,8 @@ DTO-PMAR/
 ├── frontend/
 │   ├── src/                             # React 19 + Vite SPA (Mantine v9, react-leaflet)
 │   ├── Dockerfile                       # Multi-stage build → nginx
-│   ├── nginx.conf                       # Static serving + API proxy
-│   └── nginx.conf.template              # Template for environment-variable substitution
+│   ├── nginx.conf                       # Static serving + API proxy; copied into the image as nginx.conf.template and env-substituted at container start
+│   └── nginx.conf.template              # Unused HTTPS/Let's Encrypt variant, not referenced by any Dockerfile
 ├── scripts/
 │   ├── start.sh                         # Dev: regenerate OpenAPI spec and start pygeoapi
 │   ├── entrypoint.sh                    # Docker entrypoint for backend container
@@ -164,7 +164,7 @@ Once a simulation is selected from the Simulation tab, the Analysis tab allows r
 
 | Parameter | Options | Default |
 |---|---|---|
-| Source layer | `Uniform`, `Wind farms`, `Offshore installations`, `Custom GeoTIFF` | `Uniform` |
+| Source layer | `Uniform`, `Wind farms`, `Offshore installations`, `MSP aquaculture zones`, `Custom GeoTIFF` | `Uniform` |
 | Grid resolution | 0.001°, 0.01°, 0.05°, 0.1°, 0.2°, 0.5°, 1.0° | 0.1° |
 | Study area margin | 0–20° | 1° |
 
@@ -251,7 +251,7 @@ Runs PMAR density analysis on a precomputed scenario trajectory.
 | `scenario_id` | ID of a precomputed scenario (`custom_<id>`) | — |
 | `res` | Grid resolution in degrees | 0.1 |
 | `margin` | Degrees added beyond the seeding bbox to define the study area | 1.0 |
-| `use_source` | Weighting layer: `none`, `windfarms`, `offshore_installations`, `geotiff` | `none` |
+| `use_source` | Weighting layer: `none`, `windfarms`, `offshore_installations`, `msp_zones`, `geotiff` | `none` |
 | `geotiff_b64` | Base64-encoded GeoTIFF for custom weighting (when `use_source=geotiff`) | — |
 | `geotiff_url` | URL of a GeoTIFF to download (when `use_source=geotiff`, ignored if `geotiff_b64` given) | — |
 
@@ -333,23 +333,28 @@ pmar_<pressure>_<YYYYMMDD>-<YYYYMMDD>_p<pnum>[_<use_source>].tif
 
 ## Anthropogenic layers
 
-Both layers query [EMODnet Human Activities WFS](https://ows.emodnet-humanactivities.eu/wfs) and cache results as pickle files (7-day TTL) in `cache/emodnet/`.
+All layers query the [EMODnet Human Activities WFS](https://ows.emodnet-humanactivities.eu/wfs) and cache results as pickle files (7-day TTL) in `cache/emodnet/`. Each layer tries a primary WFS type name first and falls back to alternates if it is unavailable.
 
-| `use_source` | Data source | Coverage note |
+| `use_source` | Data source (primary → fallbacks) | Coverage note |
 |---|---|---|
-| `windfarms` | `emodnet:windfarmspoly` (polygons) | North Sea, Atlantic, Baltic |
-| `offshore_installations` | `emodnet:platforms` (points) | European waters |
+| `windfarms` | `emodnet:windfarmspoly` → `emodnet:windfarms` (polygons) | North Sea, Atlantic, Baltic |
+| `offshore_installations` | `emodnet:offshorefacilities` → `emodnet:offshore_installations` → `emodnet:platforms` (points) | European waters |
+| `msp_zones` | `emodnet:mspzoningpoly`, filtered to Italy + aquaculture via `CQL_FILTER` (polygons) | Italian waters only |
 
-When a layer is active, its features are rasterized onto the simulation grid and used as PMAR weights. Features are returned in the response as GeoJSON for display on the map.
+When a layer is active as `use_source`, its features are rasterized onto the simulation grid and used as PMAR weights. Features are returned in the response as GeoJSON for display on the map.
+
+A fourth EMODnet layer, **Natura 2000** protected areas (`emodnet:natura2000areas` → `emodnet:marineprotectedareas`), is available as a map overlay only — it is not a selectable `use_source` weighting option.
 
 ### Preview processes
 
-Two lightweight processes allow the frontend to preview layer coverage before running an analysis:
+Lightweight processes allow the frontend to preview layer coverage before running an analysis:
 
 - `POST /processes/windfarms/execution`
 - `POST /processes/offshore_installations/execution`
+- `POST /processes/msp_zones/execution`
+- `POST /processes/natura2000/execution`
 
-Both accept `lon_min`, `lat_min`, `lon_max`, `lat_max` as inputs.
+All four accept `lon_min`, `lat_min`, `lon_max`, `lat_max` as inputs.
 
 ## CMEMS data
 
