@@ -1217,9 +1217,8 @@ export default function App() {
       >
         <TileLayer
           key={mapTheme}
-          url={`https://{s}.basemaps.cartocdn.com/${mapTheme}_all/{z}/{x}/{y}{r}.png?api_key=cb1_4afp_1_b906152c4dcc975006348ae1`}
+          url={`https://basemaps.cartocdn.com/rastertiles/${mapTheme}_all/{z}/{x}/{y}{r}.png?key=cb1_4afp_1_b906152c4dcc975006348ae1`}
           attribution='© OpenStreetMap · © CARTO'
-          subdomains="abcd"
           maxZoom={19}
         />
         <SimLayer simData={simData} currentStep={currentStep} />
