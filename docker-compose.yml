@@ -101,4 +101,4 @@ networks:
 
 secrets:
   git_token:
-    file: ./.git_token
+    environment: GIT_TOKEN
