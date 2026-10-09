@@ -26,12 +26,27 @@ WORKDIR /app
 # Install Python dependencies before copying full source (layer cache)
 COPY requirements.txt ./
 
-# roaring-landmask (OpenDrift dep) downloads ~40MB from GitHub at build time via reqwest.
-# Pre-download with curl (better retry control) so the Rust build script finds it locally.
-RUN curl -L --retry 5 --retry-delay 10 --max-time 300 \
-    "https://github.com/gauteh/roaring-landmask/raw/main/assets/gshhg.wkb.xz" \
-    -o /tmp/gshhg.wkb.xz
-RUN GSHHG=/tmp/gshhg.wkb.xz pip install --no-cache-dir --timeout 300 roaring-landmask
+# roaring-landmask (OpenDrift dep) downloads ~97MB of geo data (4 files) from GitHub at build
+# time via its Rust build.rs, with no env-var override and no retry logic of its own.
+# Pre-download all 4 assets with curl (retries survive flaky GitHub raw CDN), then build the
+# package from a local source checkout so build.rs finds them already in place and skips
+# the network entirely.
+RUN mkdir -p /tmp/rl_assets && \
+    for f in gshhg.wkb.xz gshhg_mask.tbmap.xz osm.wkb.xz osm_mask.tbmap.xz; do \
+        curl -L --retry 8 --retry-delay 10 --retry-all-errors --max-time 300 \
+            "https://github.com/gauteh/roaring-landmask/raw/main/assets/$f" \
+            -o "/tmp/rl_assets/$f"; \
+    done
+RUN pip download --no-binary roaring-landmask --no-deps --no-cache-dir \
+        -d /tmp/rl_src roaring-landmask && \
+    cd /tmp/rl_src && \
+    tar xzf *.tar.gz && \
+    rm -f *.tar.gz && \
+    RL_DIR=$(ls -d */) && \
+    mkdir -p "${RL_DIR}assets" && \
+    cp /tmp/rl_assets/*.xz "${RL_DIR}assets/" && \
+    pip install --no-cache-dir --timeout 300 "/tmp/rl_src/${RL_DIR}" && \
+    rm -rf /tmp/rl_assets /tmp/rl_src
 
 RUN pip install --no-cache-dir --timeout 300 -r requirements.txt \
     && pip install --no-cache-dir --timeout 300 gevent gunicorn

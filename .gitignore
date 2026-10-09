@@ -37,3 +37,9 @@ scripts/start.sh
 .git_token
 !.env.example
 
+# Local-only Docker Compose overrides (e.g. exposing frontend port 80 for local testing)
+docker-compose.override.yml
+
+# Master's thesis — written locally, not part of the application
+thesis/
+
