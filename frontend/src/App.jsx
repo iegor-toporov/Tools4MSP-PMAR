@@ -6,6 +6,10 @@ import { IconSun, IconMoon, IconCircleCheck } from '@tabler/icons-react'
 import { notifications } from '@mantine/notifications'
 import { MODEL_STYLES } from './constants'
 import { useLang } from './LanguageContext'
+import { Process, ErrorCode, JobOutcome, OgcError,
+         executeAsync, waitForJob, fetchJobResults, dismissJob,
+         fetchFeatureLayer } from './api/ogcProcesses'
+import { usePreviewLayer } from './hooks/usePreviewLayer'
 import Panel from './components/Panel'
 import SeedDrawer from './components/SeedDrawer'
 import AnimationControls from './components/AnimationControls'
@@ -571,6 +575,20 @@ function seedShapeBounds(shape) {
 }
 
 // ── Histogram instance (one per drawn selection) ─────────────────────────────
+/**
+ * Turns a structured API error into the localized text shown to the user.
+ *
+ * The API module reports *what* went wrong (a code, plus whatever the backend
+ * explained); choosing the wording, and the language, belongs here.
+ */
+function describeError(err, t) {
+  if (err instanceof OgcError) {
+    if (err.code === ErrorCode.HTTP)       return err.detail ?? t.status.httpError(err.httpStatus)
+    if (err.code === ErrorCode.JOB_FAILED) return err.detail ?? t.status.badResponse
+  }
+  return err.message
+}
+
 function HistogramEntry({ histogram, mapRef, mapTheme, onClose, stackIndex }) {
   const modalRef = useRef(null)
   return (
@@ -708,9 +726,6 @@ export default function App() {
   const [pmarErrorMsg,    setPmarErrorMsg]    = useState(null)
   const [showPmarRaster,   setShowPmarRaster]   = useState(true)
   const [showWindFarms,    setShowWindFarms]    = useState(true)
-  const [mspZonesPreview, setMspZonesPreview] = useState(null)
-  const [mspZonesLoading, setMspZonesLoading] = useState(false)
-  const [mspZonesEmpty,   setMspZonesEmpty]   = useState(false)
   const [showMspZones,    setShowMspZones]    = useState(true)
   const [activeIndicator,  setActiveIndicator]  = useState('ppi')
   const [activeMapTool,     setActiveMapTool]     = useState(null)
@@ -725,12 +740,6 @@ export default function App() {
     setActiveMapTool(prev => prev === tool ? null : tool)
 
   const [useSource,        setUseSource]        = useState('none')
-  const [windfarmsPreview, setWindfarmsPreview] = useState(null)
-  const [windfarmsLoading, setWindfarmsLoading] = useState(false)
-  const [windfarmsEmpty,   setWindfarmsEmpty]   = useState(false)
-  const [offshorePreview,  setOffshorePreview]  = useState(null)
-  const [offshoreLoading,  setOffshoreLoading]  = useState(false)
-  const [offshoreEmpty,    setOffshoreEmpty]    = useState(false)
   const [showOffshoreInstallations, setShowOffshoreInstallations] = useState(true)
 
   const [natura2000Geojson, setNatura2000Geojson] = useState(null)
@@ -738,101 +747,24 @@ export default function App() {
   const [natura2000Loading, setNatura2000Loading] = useState(false)
   const [natura2000Empty,   setNatura2000Empty]   = useState(false)
 
-  const windfarmsGeoJSON = pmarData?.windfarms_geojson ?? windfarmsPreview
-  const offshoreGeoJSON  = pmarData?.offshore_geojson  ?? offshorePreview
-  const mspZonesGeoJSON  = pmarData?.msp_zones_geojson ?? mspZonesPreview
+  // Memoized so the preview effects key on the seeding area, not on every render.
+  const seedBounds = useMemo(() => seedShapeBounds(seedShape), [seedShape])
+
+  const windfarms = usePreviewLayer(Process.WINDFARMS, {
+    enabled: useSource === 'windfarms', bounds: seedBounds,
+  })
+  const offshore = usePreviewLayer(Process.OFFSHORE_INSTALLATIONS, {
+    enabled: useSource === 'offshore_installations', bounds: seedBounds,
+  })
+  const mspZones = usePreviewLayer(Process.MSP_ZONES, {
+    enabled: useSource === 'msp_zones', bounds: seedBounds,
+  })
+
+  const windfarmsGeoJSON = pmarData?.windfarms_geojson ?? windfarms.data
+  const offshoreGeoJSON  = pmarData?.offshore_geojson  ?? offshore.data
+  const mspZonesGeoJSON  = pmarData?.msp_zones_geojson ?? mspZones.data
 
   const timerRef = useRef(null)
-
-  // ── Wind farms preview fetch ───────────────────────────────────────────────
-  useEffect(() => {
-    if (useSource !== 'windfarms' || !seedShape) {
-      setWindfarmsPreview(null)
-      return
-    }
-    const bounds = seedShapeBounds(seedShape)
-    if (!bounds) return
-
-    setWindfarmsPreview(null)
-    setWindfarmsEmpty(false)
-    setWindfarmsLoading(true)
-    fetch('/processes/windfarms/execution', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ inputs: bounds }),
-    })
-      .then(r => r.json())
-      .then(raw => {
-        const data = raw.result ?? raw
-        if (data?.features?.length > 0) {
-          setWindfarmsPreview(data)
-        } else {
-          setWindfarmsEmpty(true)
-        }
-      })
-      .catch(() => { setWindfarmsEmpty(true) })
-      .finally(() => setWindfarmsLoading(false))
-  }, [useSource, seedShape])
-
-  // ── Offshore installations preview fetch ───────────────────────────────────
-  useEffect(() => {
-    if (useSource !== 'offshore_installations' || !seedShape) {
-      setOffshorePreview(null)
-      return
-    }
-    const bounds = seedShapeBounds(seedShape)
-    if (!bounds) return
-
-    setOffshorePreview(null)
-    setOffshoreEmpty(false)
-    setOffshoreLoading(true)
-    fetch('/processes/offshore_installations/execution', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ inputs: bounds }),
-    })
-      .then(r => r.json())
-      .then(raw => {
-        const data = raw.result ?? raw
-        if (data?.features?.length > 0) {
-          setOffshorePreview(data)
-        } else {
-          setOffshoreEmpty(true)
-        }
-      })
-      .catch(() => { setOffshoreEmpty(true) })
-      .finally(() => setOffshoreLoading(false))
-  }, [useSource, seedShape])
-
-  // ── MSP zones preview fetch ────────────────────────────────────────────────
-  useEffect(() => {
-    if (useSource !== 'msp_zones' || !seedShape) {
-      setMspZonesPreview(null)
-      return
-    }
-    const bounds = seedShapeBounds(seedShape)
-    if (!bounds) return
-
-    setMspZonesPreview(null)
-    setMspZonesEmpty(false)
-    setMspZonesLoading(true)
-    fetch('/processes/msp_zones/execution', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ inputs: bounds }),
-    })
-      .then(r => r.json())
-      .then(raw => {
-        const data = raw.result ?? raw
-        if (data?.features?.length > 0) {
-          setMspZonesPreview(data)
-        } else {
-          setMspZonesEmpty(true)
-        }
-      })
-      .catch(() => { setMspZonesEmpty(true) })
-      .finally(() => setMspZonesLoading(false))
-  }, [useSource, seedShape])
 
   function handleToolChange(tool) {
     setActiveTool(tool)
@@ -901,49 +833,16 @@ export default function App() {
     setCurrentStep(0)
 
     try {
-      const resp = await fetch('/processes/opendrift/execution', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json', 'Prefer': 'respond-async' },
-        body:    JSON.stringify({ inputs: { model, start_time, number, duration_hours, ...seedParams } }),
+      const jobId = await executeAsync(Process.OPENDRIFT, {
+        model, start_time, number, duration_hours, ...seedParams,
       })
+      setOpenDriftJobId(jobId)
 
-      if (!resp.ok) {
-        const text = await resp.text()
-        let message = t.status.httpError(resp.status)
-        try {
-          const json = JSON.parse(text)
-          if (json.description) message = json.description
-        } catch { message = text.slice(0, 300) }
-        throw new Error(message)
-      }
+      const { outcome } = await waitForJob(jobId)
+      if (outcome === JobOutcome.DISMISSED) return
 
-      const { jobID } = await resp.json()
-      setOpenDriftJobId(jobID)
-
-      const jsonHeaders = { 'Accept': 'application/json' }
-
-      await new Promise((resolve, reject) => {
-        const iv = setInterval(async () => {
-          try {
-            const jobResp = await fetch(`/jobs/${jobID}`, { headers: jsonHeaders })
-            const job     = await jobResp.json()
-            if (job.status === 'successful') {
-              clearInterval(iv)
-              resolve()
-            } else if (job.status === 'failed') {
-              clearInterval(iv)
-              reject(new Error(job.message || t.status.badResponse))
-            } else if (job.status === 'dismissed') {
-              clearInterval(iv)
-              reject(new Error('__dismissed__'))
-            }
-          } catch (e) { clearInterval(iv); reject(e) }
-        }, 3000)
-      })
-
-      const resResp = await fetch(`/jobs/${jobID}/results`, { headers: jsonHeaders })
-      const raw     = await resResp.json()
-      const data    = (raw.steps && raw.times) ? raw : (raw.trajectory ?? raw)
+      const raw  = await fetchJobResults(jobId)
+      const data = (raw.steps && raw.times) ? raw : (raw.trajectory ?? raw)
       if (!data.steps || !data.times) throw new Error(t.status.badResponse)
 
       const nParticles = data.steps[0].filter(Boolean).length
@@ -954,10 +853,8 @@ export default function App() {
       setIsPlaying(true)
 
     } catch (err) {
-      if (err.message !== '__dismissed__') {
-        setStatus(t.status.error(err.message))
-        setStatusType('error')
-      }
+      setStatus(t.status.error(describeError(err, t)))
+      setStatusType('error')
     } finally {
       setLoading(false)
       setOpenDriftJobId(null)
@@ -1002,48 +899,14 @@ export default function App() {
 
     try {
 
-      const resp = await fetch('/processes/pmar/execution', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json', 'Prefer': 'respond-async' },
-        body:    JSON.stringify({ inputs }),
-      })
+      const jobId = await executeAsync(Process.PMAR, inputs)
+      setPmarJobId(jobId)
 
-      if (!resp.ok) {
-        const text = await resp.text()
-        let message = t.status.httpError(resp.status)
-        try {
-          const json = JSON.parse(text)
-          if (json.description) message = json.description
-        } catch { message = text.slice(0, 300) }
-        throw new Error(message)
-      }
+      const { outcome } = await waitForJob(jobId)
+      if (outcome === JobOutcome.DISMISSED) return
 
-      const { jobID } = await resp.json()
-      setPmarJobId(jobID)
-      const jsonHeaders = { 'Accept': 'application/json' }
-
-      await new Promise((resolve, reject) => {
-        const iv = setInterval(async () => {
-          try {
-            const jobResp = await fetch(`/jobs/${jobID}`, { headers: jsonHeaders })
-            const job     = await jobResp.json()
-            if (job.status === 'successful') {
-              clearInterval(iv)
-              resolve()
-            } else if (job.status === 'failed') {
-              clearInterval(iv)
-              reject(new Error(job.message || t.status.badResponse))
-            } else if (job.status === 'dismissed') {
-              clearInterval(iv)
-              reject(new Error('__dismissed__'))
-            }
-          } catch (e) { clearInterval(iv); reject(e) }
-        }, 3000)
-      })
-
-      const resResp = await fetch(`/jobs/${jobID}/results`, { headers: jsonHeaders })
-      const raw     = await resResp.json()
-      const data    = raw.result ?? raw
+      const raw  = await fetchJobResults(jobId)
+      const data = raw.result ?? raw
 
       if (!data.raster_values || !data.bounds) throw new Error(t.status.badResponse)
 
@@ -1069,16 +932,14 @@ export default function App() {
       })
 
     } catch (err) {
-      if (err.message !== '__dismissed__') {
-        const clean = err.message
-          .replace(/^Error executing process:\s*/i, '')
-          .replace(/^Errore:\s*/i, '')
-          .replace(/^Error:\s*/i, '')
-          .trim()
-        setPmarErrorMsg(clean)
-        setPmarStatus('')
-        setPmarStatusType('error')
-      }
+      const clean = describeError(err, t)
+        .replace(/^Error executing process:\s*/i, '')
+        .replace(/^Errore:\s*/i, '')
+        .replace(/^Error:\s*/i, '')
+        .trim()
+      setPmarErrorMsg(clean)
+      setPmarStatus('')
+      setPmarStatusType('error')
     } finally {
       setPmarLoading(false)
       setPmarJobId(null)
@@ -1171,18 +1032,9 @@ export default function App() {
     setNatura2000Loading(true)
     setNatura2000Empty(false)
     try {
-      const resp = await fetch('/processes/natura2000/execution', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ inputs: bounds }),
-      })
-      const raw  = await resp.json()
-      const data = raw.result ?? raw
-      if (data?.features?.length > 0) {
-        setNatura2000Geojson(data)
-      } else {
-        setNatura2000Empty(true)
-      }
+      const layer = await fetchFeatureLayer(Process.NATURA2000, bounds)
+      if (layer) setNatura2000Geojson(layer)
+      else       setNatura2000Empty(true)
     } catch {
       setNatura2000Empty(true)
     } finally {
@@ -1301,12 +1153,12 @@ export default function App() {
         onRun={handleRun}
         onRunPmar={handleRunPmar}
         loading={loading}
-        onStopOpenDrift={async () => { if (openDriftJobId) { setOpenDriftStopping(true); await fetch(`/jobs/${openDriftJobId}`, { method: 'DELETE' }) } }}
+        onStopOpenDrift={async () => { if (openDriftJobId) { setOpenDriftStopping(true); await dismissJob(openDriftJobId) } }}
         openDriftStopping={openDriftStopping}
         status={status}
         statusType={statusType}
         pmarLoading={pmarLoading}
-        onStopPmar={async () => { if (pmarJobId) { setPmarStopping(true); await fetch(`/jobs/${pmarJobId}`, { method: 'DELETE' }) } }}
+        onStopPmar={async () => { if (pmarJobId) { setPmarStopping(true); await dismissJob(pmarJobId) } }}
         pmarStopping={pmarStopping}
         pmarStatus={pmarStatus}
         pmarStatusType={pmarStatusType}
@@ -1317,13 +1169,13 @@ export default function App() {
         activeTool={activeTool}
         onToolChange={handleToolChange}
         useSource={useSource}
-        onUseSourceChange={src => { setUseSource(src); setWindfarmsEmpty(false); setOffshoreEmpty(false); setMspZonesEmpty(false) }}
-        windfarmsLoading={windfarmsLoading}
-        windfarmsEmpty={windfarmsEmpty}
-        offshoreLoading={offshoreLoading}
-        offshoreEmpty={offshoreEmpty}
-        mspZonesLoading={mspZonesLoading}
-        mspZonesEmpty={mspZonesEmpty}
+        onUseSourceChange={setUseSource}
+        windfarmsLoading={windfarms.loading}
+        windfarmsEmpty={windfarms.isEmpty}
+        offshoreLoading={offshore.loading}
+        offshoreEmpty={offshore.isEmpty}
+        mspZonesLoading={mspZones.loading}
+        mspZonesEmpty={mspZones.isEmpty}
         natura2000Loading={natura2000Loading}
         natura2000Empty={natura2000Empty}
         natura2000Geojson={natura2000Geojson}

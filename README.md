@@ -35,7 +35,15 @@ DTO-PMAR/
 │   ├── manager.py                       # Job lifecycle helpers
 │   └── tasks.py                         # Celery tasks (async precompute)
 ├── frontend/
-│   ├── src/                             # React 19 + Vite SPA (Mantine v9, react-leaflet)
+│   ├── src/
+│   │   ├── api/
+│   │   │   ├── ogcProcesses.js          # OGC API - Processes client: no React, no UI library, no i18n
+│   │   │   └── ogcProcesses.test.js     # Unit tests for the client (node:test, no browser needed)
+│   │   ├── hooks/
+│   │   │   └── usePreviewLayer.js       # React adapter: keeps one EMODnet overlay in sync with the seeding area
+│   │   ├── components/                  # Panels, map overlays, analysis windows (Mantine v9, react-leaflet)
+│   │   ├── App.jsx                      # Root: map, panels, application state
+│   │   └── i18n.js                      # IT/EN strings
 │   ├── Dockerfile                       # Multi-stage build → nginx
 │   ├── nginx.conf                       # Static serving + API proxy; copied into the image as nginx.conf.template and env-substituted at container start
 │   └── nginx.conf.template              # Unused HTTPS/Let's Encrypt variant, not referenced by any Dockerfile
@@ -66,7 +74,17 @@ DTO-PMAR/
 
 **Backend:** [pygeoapi](https://pygeoapi.io) (port 5001) exposes all processes via the OGC API - Processes standard. Long-running precomputations are offloaded to a **Celery** worker backed by **Redis**. Shared data utilities (CMEMS dataset definitions, EMODnet WFS fetch functions) live in `data/` and are imported by the process modules.
 
-**Frontend:** React 19 + Vite SPA with Mantine v9 and react-leaflet. In production it is built into a static bundle and served by **nginx**, which also proxies `/processes/*` to the backend. Communicates with the backend via `POST /processes/<process>/execution`.
+**Frontend:** React 19 + Vite SPA with Mantine v9 and react-leaflet. In production it is built into a static bundle and served by **nginx**, which also proxies `/processes/*` to the backend.
+
+The frontend is organised in three layers, so that the code which talks to the backend is independent of the code which draws the interface:
+
+| Layer | Path | Depends on |
+|---|---|---|
+| API client | `src/api/ogcProcesses.js` | the Fetch API only — no React, no UI library, no i18n |
+| React adapters | `src/hooks/` | the API client + React |
+| Presentation | `src/App.jsx`, `src/components/` | everything above |
+
+No component issues a `fetch` of its own: every call to the backend goes through the API client. See [Frontend API client](#frontend-api-client).
 
 **CMEMS authentication:** credentials (`COPERNICUSMARINE_SERVICE_USERNAME` / `COPERNICUSMARINE_SERVICE_PASSWORD`) are configured exclusively via environment variables in `.env`. The `copernicusmarine` client reads them automatically — no credentials are sent from the browser.
 
@@ -82,11 +100,36 @@ DTO-PMAR/
 ```bash
 git clone <repo>
 cd DTO-PMAR
+
 # Copy .env.example to .env and fill in your credentials (including GIT_TOKEN)
+cp .env.example .env
+
+# The compose file joins an external network managed by the reverse proxy in production.
+# Create it once locally, otherwise the stack will not start.
+docker network create traefik_geonode_webgateway
+
 docker compose up --build -d
 ```
 
-The frontend is served at `http://localhost:80`. The backend runs on port 5001 (internal only). The Celery worker and Redis are started automatically.
+The backend runs on port 5001 and the frontend on port 80, both **inside the Docker network only**: in production the Traefik reverse proxy routes traffic to the frontend container, so no port is published to the host. The Celery worker and Redis are started automatically.
+
+To reach the frontend from your browser while developing, publish port 80 with a local override file — `docker compose` picks it up automatically and it leaves the production configuration untouched:
+
+```yaml
+# docker-compose.override.yml (git-ignored)
+services:
+  frontend:
+    ports:
+      - "80:80"
+```
+
+The frontend is then served at `http://localhost`.
+
+Alternatively, run the frontend dev server with hot reload, which proxies `/processes` and `/jobs` to `localhost:5001` (see `vite.config.js`):
+
+```bash
+cd frontend && npm install && npm run dev   # http://localhost:3000
+```
 
 `cache/`, `out/`, and `scenarios/` are tracked in git as empty directories (via `.gitkeep`) so Docker can mount them with correct permissions from the first run.
 
@@ -397,6 +440,48 @@ Ocean currents, wind, waves, temperature/salinity, and bathymetry are downloaded
 The `deptho` (seafloor depth) field is downloaded once per geographic area from a static CMEMS dataset (`cmems_mod_med_phy_anfc_4.2km_static` or global equivalent) and permanently cached. `maximum_depth` for the currents download is set to `max(deptho) + 10 m` instead of a fixed value, ensuring full water-column coverage in deep areas and avoiding over-downloading in shallow ones. If the bathymetry download fails the fixed default is used as fallback.
 
 Wind and waves downloads are non-blocking: if the dataset is unavailable the simulation continues with currents only (OpenDrift falls back to parametric Stokes drift from wind).
+
+## Frontend API client
+
+Every request to the backend goes through `src/api/ogcProcesses.js`. The module depends on nothing
+but the Fetch API, which keeps the backend contract in one place and makes it reusable outside this
+SPA — from a test, a script, or another framework.
+
+| Function | Purpose |
+|---|---|
+| `executeSync(processId, inputs)` | Runs a fast, read-only process and returns its unwrapped output |
+| `executeAsync(processId, inputs)` | Submits a process to the Celery worker, returns the job id |
+| `fetchJobStatus(jobId)` | Reads a job document once, for callers driving their own polling |
+| `waitForJob(jobId)` | Polls until the job reaches a terminal state |
+| `fetchJobResults(jobId)` | Fetches the results of a finished job |
+| `dismissJob(jobId)` | Asks the backend to revoke a running job (STOP button) |
+| `fetchFeatureLayer(processId, bounds)` | Runs an overlay process, returns the FeatureCollection or `null` if the bbox is empty |
+
+Exported alongside them: the `Process`, `ErrorCode` and `JobOutcome` constants, and the `OgcError`
+class.
+
+Three conventions are worth knowing before extending it:
+
+- **Errors carry a code, not a sentence.** `OgcError` exposes `code`, `httpStatus` and `detail`
+  (whatever the backend explained, or `null` when it said nothing useful). The wording — and the
+  language — is chosen by the caller, so the same failure can read differently in different parts
+  of the UI.
+- **A stopped job is an outcome, not a failure.** `waitForJob` resolves with
+  `{ outcome: 'dismissed' }` when the user presses STOP; only a job that genuinely failed throws.
+- **Synchronous output is unwrapped, job results are not.** pygeoapi wraps synchronous output in a
+  `result` key, uniformly; job results instead have a different shape per process (OpenDrift returns
+  `steps`/`times`, PMAR a raster payload, precompute a scenario id), so that shape is left to the
+  caller.
+
+### Tests
+
+```bash
+cd frontend
+npm test        # node:test — no browser, no backend, no extra dependencies
+```
+
+The suite covers response unwrapping, the three HTTP error shapes, job success / dismissal /
+failure, cancellation, and empty overlays.
 
 ## Frontend features
 

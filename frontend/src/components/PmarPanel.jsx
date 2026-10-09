@@ -8,6 +8,8 @@ import {
 import { IconInfoCircle, IconX, IconChevronDown, IconChevronUp, IconCircleCheck } from '@tabler/icons-react'
 import { notifications } from '@mantine/notifications'
 import { useLang } from '../LanguageContext'
+import { Process, JobOutcome, executeSync, executeAsync,
+         fetchJobStatus, fetchJobResults, dismissJob } from '../api/ogcProcesses'
 
 function InfoTooltip({ text }) {
   const [anchor, setAnchor] = useState(null)
@@ -205,14 +207,8 @@ export default function PmarPanel({
   const [refetchFlag,           setRefetchFlag]           = useState(0)
 
   useEffect(() => {
-    fetch('/processes/scenario_status/execution', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ inputs: {} }),
-    })
-      .then(r => r.json())
-      .then(raw => {
-        const data    = raw.result ?? raw
+    executeSync(Process.SCENARIO_STATUS, {})
+      .then(data => {
         const resp    = (data.scenarios !== undefined) ? data : { scenarios: data, t4msp_areas: [] }
         const s = {}
         for (const [id, info] of Object.entries(resp.scenarios)) {
@@ -224,18 +220,18 @@ export default function PmarPanel({
       .catch(() => {})
   }, [runMode, refetchFlag])
 
+  // Polled here instead of with waitForJob: a precompute runs for minutes, so this
+  // loop deliberately shrugs off transient network errors and keeps tracking the job
+  // in the background while the user works elsewhere in the panel.
   useEffect(() => {
     if (!customJob) return
     const iv = setInterval(async () => {
       try {
-        const r   = await fetch(`/jobs/${customJob.jobId}`)
-        const job = await r.json()
-        if (job.status === 'successful') {
+        const job = await fetchJobStatus(customJob.jobId)
+        if (job.status === JobOutcome.SUCCESS) {
           try {
-            const resR    = await fetch(`/jobs/${customJob.jobId}/results`)
-            const results = await resR.json()
-            const newSid  = results.scenario_id
-            if (newSid) setScenarioId(newSid)
+            const results = await fetchJobResults(customJob.jobId)
+            if (results.scenario_id) setScenarioId(results.scenario_id)
           } catch {}
           notifications.show({
             title:     p.simReadyTitle,
@@ -250,7 +246,7 @@ export default function PmarPanel({
           setCustomJob(null)
           setCustomPrecomputeError(job.message || p.computeError)
           setRefetchFlag(f => f + 1)
-        } else if (job.status === 'dismissed') {
+        } else if (job.status === JobOutcome.DISMISSED) {
           setCustomJob(null)
           setPrecomputeStopping(false)
           setRefetchFlag(f => f + 1)
@@ -285,15 +281,10 @@ export default function PmarPanel({
       ...(multiSeeding ? { seedings: parseInt(seedings) || 3, tshift: parseInt(tshift) || 30 } : {}),
     }
     try {
-      const r    = await fetch('/processes/precompute/execution', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Prefer': 'respond-async' },
-        body: JSON.stringify({ inputs }),
-      })
-      const data = await r.json()
-      setCustomJob({ jobId: data.jobID, label })
+      const jobId = await executeAsync(Process.PRECOMPUTE, inputs)
+      setCustomJob({ jobId, label })
     } catch {
-      setCustomPrecomputeError('Errore avvio pre-calcolo.')
+      setCustomPrecomputeError(p.computeStartError)
     }
   }
 
@@ -628,9 +619,7 @@ export default function PmarPanel({
                               return
                             }
                             try {
-                              const r    = await fetch('/processes/scenario_status/execution', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ inputs: { area_id: area.id } }) })
-                              const raw  = await r.json()
-                              const geo  = (raw.result ?? raw).geo
+                              const { geo } = await executeSync(Process.SCENARIO_STATUS, { area_id: area.id })
                               if (geo) {
                                 geoCache.current[area.id] = geo
                                 onT4mspPreview?.({ type: 'FeatureCollection', features: [{ type: 'Feature', geometry: geo, properties: {} }] })
@@ -782,7 +771,7 @@ export default function PmarPanel({
                     disabled={precomputeStopping}
                     onClick={async () => {
                       setPrecomputeStopping(true)
-                      await fetch(`/jobs/${customJob.jobId}`, { method: 'DELETE' })
+                      await dismissJob(customJob.jobId)
                     }}
                   >
                     {precomputeStopping ? p.btnStopping : p.btnStop}
