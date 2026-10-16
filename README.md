@@ -72,8 +72,7 @@ DTO-PMAR/
 ├── docker-compose.yml                   # Orchestrates backend, celery-worker, redis, frontend
 ├── pygeoapi-config.yml                  # OGC API config: process registrations, server metadata
 ├── .env.example                         # Template for required environment variables
-├── .env                                 # Runtime secrets: CMEMS credentials (not committed)
-└── .git_token                           # GitHub token for the private PMAR repo, build-time only (not committed)
+└── .env                                 # Runtime secrets: CMEMS credentials (not committed)
 ```
 
 **Backend:** [pygeoapi](https://pygeoapi.io) (port 5001) exposes all processes via the OGC API - Processes standard. Long-running precomputations are offloaded to a **Celery** worker backed by **Redis**. Shared data utilities (CMEMS dataset definitions, EMODnet WFS fetch functions) live in `data/` and are imported by the process modules.
@@ -97,7 +96,6 @@ No component issues a `fetch` of its own: every call to the backend goes through
 
 - Docker and Docker Compose
 - A `.env` file with runtime secrets (see below)
-- A file named `.git_token` in the project root, containing a GitHub token with `repo` scope (read access to the private PMAR repo). Used only at image build time, and **required**: the build stops without it
 - A free [Copernicus Marine](https://marine.copernicus.eu/) account
 
 ## Getting started
@@ -109,10 +107,6 @@ cd DTO-PMAR
 # Copy .env.example to .env and fill in your Copernicus Marine credentials
 cp .env.example .env
 
-# The PMAR library lives in a private repository: the build reads a GitHub token
-# with repo scope from this file, and stops with an explicit error without it.
-printf '%s' 'ghp_your_token_here' > .git_token
-
 # The compose file joins an external network managed by the reverse proxy in production.
 # Create it once locally, otherwise the stack will not start.
 docker network create traefik_geonode_webgateway
@@ -120,10 +114,9 @@ docker network create traefik_geonode_webgateway
 docker compose up --build -d
 ```
 
-`.git_token` is mounted as a Docker **build secret**, so the token is never stored in a layer of
-the image. It is per-machine and git-ignored, which means it has to be created separately on each
-server — copying `.env` over is not enough. An image built without it would look healthy and then
-fail every analysis at runtime with an obscure `ImportError`, so the build refuses to proceed.
+The PMAR library is installed from the public [CNR-ISMAR/pmar](https://github.com/CNR-ISMAR/pmar)
+repository, pinned to a commit in the `Dockerfile`: no token is needed, and the build stays
+reproducible. To move to a newer PMAR, change the SHA there and rebuild.
 
 The backend runs on port 5001 and the frontend on port 80, both **inside the Docker network only**: in production the Traefik reverse proxy routes traffic to the frontend container, so no port is published to the host. The Celery worker and Redis are started automatically.
 
@@ -478,7 +471,7 @@ pmar_<pressure>_<YYYYMMDD>-<YYYYMMDD>_p<pnum>[_<use_source>].tif
 
 Builds a connectivity matrix between areas from the Lagrangian trajectories of a precomputed
 scenario, and derives the graph metrics described in Bosi et al. (2026). The metrics are **not**
-reimplemented here: they come from the PMAR library (`get_cm`, `get_cm_within_range`,
+reimplemented here: they come from the PMAR library (`get_cm`, `get_particles_by_cell`,
 `connectivity_analysis`, `get_network`, `export_network`), which this process drives and whose
 output it packages for the map.
 
@@ -543,8 +536,13 @@ at all despite a matrix full of values.
 
 ### Notes
 
-- `get_cm_within_range` does **not** assign `self.cm`, unlike `get_cm`, while
+- The *transit* matrix is built by `_transit_matrix()` in this process: it reproduces
+  `get_cm_within_range`, which the public PMAR removed as unused, on top of
+  `get_particles_by_cell`. Unlike `get_cm` it does not set `self.cm`, while
   `connectivity_analysis()` requires it — the process assigns it explicitly.
+- `get_network()` is called **without** `node_names`: with them, `export_network` writes the
+  labels into the edges' `source`/`target`, while the frontend filters edges by comparing those
+  with the integer `node_id`. Labels travel separately in `node_labels`.
 - With multi-seeding scenarios the matrices of the individual runs are averaged here;
   `PMARmulti.get_cm` only averages *transition* matrices.
 - The grid is built once with `make_grid` + `make_vector_grid` and then passed as `cm_grid`, so

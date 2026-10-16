@@ -51,18 +51,10 @@ RUN pip download --no-binary roaring-landmask --no-deps --no-cache-dir \
 RUN pip install --no-cache-dir --timeout 300 -r requirements.txt \
     && pip install --no-cache-dir --timeout 300 gevent gunicorn
 
-# Install private PMAR package (token injected at build time, never stored in image)
-# Senza PMAR il backend compila ma ogni analisi fallisce a runtime con un
-# ImportError oscuro: meglio fermarsi qui, dicendo cosa manca.
-RUN --mount=type=secret,id=git_token \
-    if [ ! -f /run/secrets/git_token ]; then \
-        echo "ERRORE: manca il file .git_token (token GitHub con scope repo)." >&2; \
-        echo "        Serve a installare la libreria privata PMAR." >&2; \
-        exit 1; \
-    fi && \
-    TOKEN=$(tr -d '[:space:]' < /run/secrets/git_token) && \
-    GIT_TERMINAL_PROMPT=0 pip install --no-cache-dir \
-        "git+https://iegor-toporov:${TOKEN}@github.com/iegor-toporov/pmar.git@55245b070af377459419d9bc0b643b1683fc62e5"
+# Install PMAR from the public CNR-ISMAR repo, pinned to a commit: invalidates the
+# layer cache on every change and stays reproducible, unlike @main.
+RUN GIT_TERMINAL_PROMPT=0 pip install --no-cache-dir \
+        "git+https://github.com/CNR-ISMAR/pmar.git@5fecaa2b235540527a6b74f008b7648d184b7b1d"
 
 # Copy application source
 COPY data/ ./data/

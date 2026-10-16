@@ -310,6 +310,49 @@ def _read_polygons(data, tmpdir, label_field):
     return out, labels
 
 
+def _indicator(ll, n_cells, n_traj):
+    """Matrice sparsa 0/1 (celle × traiettorie) da un dict ``{cella: id traiettorie}``."""
+    from scipy.sparse import csr_array
+
+    rows = [np.full(len(ids), i) for i, ids in ll.items()]
+    cols = [np.asarray(ids, dtype=int) for ids in ll.values()]
+    rows = np.concatenate(rows) if rows else np.array([], dtype=int)
+    cols = np.concatenate(cols) if cols else np.array([], dtype=int)
+    return csr_array((np.ones(len(rows)), (rows, cols)), shape=(n_cells, n_traj))
+
+
+def _transit_matrix(pm, t_max, cm_grid):
+    """Probabilità di passare dal poligono i al poligono j almeno una volta entro *t_max* timestep.
+
+    È la connettività strutturale della tesi di Bosi. Riproduce
+    ``PMAR.get_cm_within_range`` del fork, rimosso dalla libreria pubblica
+    CNR-ISMAR/pmar come codice inutilizzato (commit c1f6922): qui usa solo
+    ``get_particles_by_cell``, che resta API pubblica. Come l'originale,
+    l'insieme dei passaggi parte da t=1 e la riga i si normalizza sulle
+    particelle presenti in i a t=0.
+    """
+    from scipy.sparse import coo_array, diags
+
+    n_cells = len(cm_grid)
+    n_traj = pm.ds.sizes['trajectory']
+    A0 = _indicator(pm.get_particles_by_cell(0, cm_grid=cm_grid), n_cells, n_traj)
+    At = None
+    for t in range(1, t_max):
+        A = _indicator(pm.get_particles_by_cell(t, cm_grid=cm_grid), n_cells, n_traj)
+        At = A if At is None else At + A
+    if At is None:
+        At = _indicator({}, n_cells, n_traj)
+    # Unione dei passaggi: conta se la particella è passata, non quante volte.
+    At.data[:] = 1.0
+
+    Nij = A0 @ At.T
+    Ni0 = np.asarray(A0.sum(axis=1)).ravel()
+    inv = np.zeros_like(Ni0, dtype=float)
+    mask = Ni0 != 0
+    inv[mask] = 1.0 / Ni0[mask]
+    return coo_array(diags(inv) @ Nij)
+
+
 def _time_window(ds, sc, t_days, mode):
     """Traduce l'orizzonte in giorni nel numero di timestep, con eventuale stride."""
     n_time = int(ds.sizes['time'])
@@ -423,8 +466,8 @@ class ConnectivityProcessor(BaseProcessor):
                     pm.study_area = study_area
 
                     if mode == 'transit':
-                        # get_cm_within_range, a differenza di get_cm, NON assegna self.cm
-                        cm = pm.get_cm_within_range(t_max=int(ds.sizes['time']), cm_grid=gdf)
+                        # a differenza di get_cm, il transito non assegna pm.cm
+                        cm = _transit_matrix(pm, t_max=int(ds.sizes['time']), cm_grid=gdf)
                         pm.cm = cm
                     else:
                         cm = pm.get_cm(t=-1, cm_grid=gdf)
@@ -447,7 +490,10 @@ class ConnectivityProcessor(BaseProcessor):
 
             metrics_gdf = pm.connectivity_analysis(node_name='node_label',
                                                    self_loops=self_loops)
-            pm.get_network(cm=cm_mean, node_names=dict(enumerate(labels)))
+            # Niente node_names: con quelli export_network mette le etichette in
+            # source/target, mentre il frontend filtra gli archi confrontandoli
+            # con node_id (intero). Le etichette viaggiano già in node_labels.
+            pm.get_network(cm=cm_mean)
             edges_geojson = pm.export_network(node_shapes=gdf, include_nodes=False)
             if not self_loops:
                 # Gli auto-anelli sono esclusi dalle metriche: disegnarli comunque

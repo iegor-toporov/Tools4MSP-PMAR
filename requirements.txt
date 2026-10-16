@@ -3,8 +3,8 @@
 #
 # Notes for containerization:
 # - pygeoapi must be installed from source (see venv/pygeoapi/)
-# - pmar must be installed from private repo (for now):
-#     pip install git+https://<token>@github.com/sofbo/pmar.git
+# - pmar is installed by the Dockerfile from the public repo, pinned to a commit:
+#     pip install git+https://github.com/CNR-ISMAR/pmar.git@<sha>
 # - copernicusmarine requires a Copernicus Marine account
 #     (credentials via env vars or ~/.copernicusmarine)
 # - cartopy may require system libraries (apt: libgeos-dev libproj-dev)
@@ -21,7 +21,7 @@ PyYAML==6.0.3
 # Ocean simulation
 opendrift==1.14.9
 copernicusmarine==2.4.0
-# pmar: pip install git+https://<token>@github.com/sofbo/pmar.git
+# pmar: pip install git+https://github.com/CNR-ISMAR/pmar.git@<sha> (vedi Dockerfile)
 
 # Geospatial
 geopandas==1.1.3

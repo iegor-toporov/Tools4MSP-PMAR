@@ -4,8 +4,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      secrets:
-        - git_token
     restart: unless-stopped
     env_file: .env
     environment:
@@ -36,8 +34,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      secrets:
-        - git_token
     restart: unless-stopped
     env_file: .env
     environment:
@@ -98,7 +94,3 @@ networks:
     external: true
     name: traefik_geonode_webgateway
   internal:
-
-secrets:
-  git_token:
-    file: ./.git_token
