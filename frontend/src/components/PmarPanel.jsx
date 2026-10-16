@@ -10,6 +10,8 @@ import { notifications } from '@mantine/notifications'
 import { useLang } from '../LanguageContext'
 import { Process, JobOutcome, executeSync, executeAsync,
          fetchJobStatus, fetchJobResults, dismissJob } from '../api/ogcProcesses'
+import { formatSeedShape, seedShapeToGeoJSON } from '../geometry/seedShape'
+import PolygonDrawControls from './PolygonDrawControls'
 
 function InfoTooltip({ text }) {
   const [anchor, setAnchor] = useState(null)
@@ -84,6 +86,14 @@ const RESOLUTIONS = [
   { value: '1.0',   label: '1.0°'  },
 ]
 
+// Deve restare allineato a GRID_RESOLUTIONS in processes/ConnectivityProcess.py
+const GRID_RESOLUTIONS = [
+  { value: '1.0',  label: '1.0°'  },
+  { value: '0.5',  label: '0.5°'  },
+  { value: '0.25', label: '0.25°' },
+  { value: '0.1',  label: '0.1°'  },
+]
+
 const TIME_STEPS = [
   { value: '1',  label: '1 h'  },
   { value: '3',  label: '3 h'  },
@@ -120,47 +130,17 @@ function defaultStartDate() {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
 }
 
-function formatSeedShape(s) {
-  if (!s) return null
-  if (s.type === 'circle') {
-    const km = (s.radius / 1000).toFixed(1)
-    return `${s.lon.toFixed(3)}°E  ${s.lat.toFixed(3)}°N · r=${km} km`
-  }
-  return `${s.lon_min.toFixed(2)}°–${s.lon_max.toFixed(2)}°E · ${s.lat_min.toFixed(2)}°–${s.lat_max.toFixed(2)}°N`
-}
-
-function seedShapeToGeoJSON(shape) {
-  if (!shape) return null
-  if (shape.type === 'circle') {
-    const { lon, lat, radius } = shape
-    const N = 64
-    const coords = []
-    for (let i = 0; i < N; i++) {
-      const angle = (i / N) * 2 * Math.PI
-      const dLat  = (radius / 111320) * Math.cos(angle)
-      const dLon  = (radius / (111320 * Math.cos(lat * Math.PI / 180))) * Math.sin(angle)
-      coords.push([lon + dLon, lat + dLat])
-    }
-    coords.push(coords[0])
-    return { type: 'FeatureCollection', features: [{ type: 'Feature', geometry: { type: 'Polygon', coordinates: [coords] }, properties: {} }] }
-  }
-  const { lon_min, lat_min, lon_max, lat_max } = shape
-  return {
-    type: 'FeatureCollection',
-    features: [{ type: 'Feature', geometry: { type: 'Polygon', coordinates: [[[lon_min,lat_min],[lon_max,lat_min],[lon_max,lat_max],[lon_min,lat_max],[lon_min,lat_min]]] }, properties: {} }],
-  }
-}
-
 export default function PmarPanel({
   onRun, loading, onStop, stopping, status, statusType,
-  drawMode, onStartDraw, onClearSeedShape, seedShape,
+  drawMode, onStartDraw, onFinishDraw, onUndoLastPolygon, onClearSeedShape, seedShape,
   useSource, onUseSourceChange,
   windfarmsLoading, windfarmsEmpty,
   offshoreLoading, offshoreEmpty,
   mspZonesLoading, mspZonesEmpty,
   natura2000Loading, natura2000Empty, natura2000Geojson,
   showNatura2000, onFetchNatura2000, onToggleNatura2000,
-  hasSeedShape, onT4mspPreview,
+  hasSeedShape, onT4mspPreview, onScenarioArea,
+  onRunConnectivity, connectivityLoading, connectivityStopping, onStopConnectivity,
 }) {
   const { t, lang } = useLang()
   const p = t.pmar
@@ -173,6 +153,7 @@ export default function PmarPanel({
   const [shapefileName,     setShapefileName]     = useState('')
   const fileRef = useRef(null)
   const geoCache = useRef({})
+  const scenarioGeoCache = useRef({})
 
   const [t4mspAreas,        setT4mspAreas]        = useState([])
   const [selectedT4mspArea, setSelectedT4mspArea] = useState(null)
@@ -183,6 +164,8 @@ export default function PmarPanel({
   const [seedAreaName,  setSeedAreaName]  = useState('')
   const [cmemsMargin,   setCmemsMargin]   = useState('1')
   const [multiSeeding,  setMultiSeeding]  = useState(false)
+  const [connSeeding,    setConnSeeding]    = useState(false)
+  const [pnumPerPolygon, setPnumPerPolygon] = useState('500')
   const [seedings,      setSeedings]      = useState('3')
   const [tshift,        setTshift]        = useState('30')
   const [pressure,      setPressure]      = useState('generic')
@@ -197,6 +180,21 @@ export default function PmarPanel({
   const [geotiffName, setGeotiffName] = useState('')
   const [geotiffUrl,  setGeotiffUrl]  = useState('')
   const geotiffRef = useRef(null)
+
+  // Sotto-tab dell'Analisi: 'sources' (PPI pesato) | 'connectivity'
+  const [analysisMode,   setAnalysisMode]   = useState('sources')
+  const [connShpB64,     setConnShpB64]     = useState(null)
+  const [connShpName,    setConnShpName]    = useState('')
+  const [connMode,       setConnMode]       = useState('transit')
+  const [connDays,       setConnDays]       = useState('')
+  const [connLabelField, setConnLabelField] = useState('')
+  const [connSelfLoops,  setConnSelfLoops]  = useState(false)
+  // Nodi della rete: i poligoni di uno shapefile, oppure una griglia regolare
+  // di celle di mare su un riquadro (la terraferma la esclude il backend).
+  const [connSource,     setConnSource]     = useState('shapefile')
+  const [connRes,        setConnRes]        = useState('0.5')
+  const [connBbox,       setConnBbox]       = useState(['', '', '', ''])
+  const connFileRef = useRef(null)
 
   const [scenarioStatuses, setScenarioStatuses] = useState({})
   const [scenarioId,       setScenarioId]       = useState('')
@@ -258,6 +256,44 @@ export default function PmarPanel({
 
   useEffect(() => { onT4mspPreview?.(null) }, [runMode])
 
+  // Area della simulazione scelta, evidenziata sulla mappa. La geometria si
+  // chiede solo alla selezione: la mappa di stato viene ripolled, e leggere
+  // tutti gli shapefile a ogni giro costerebbe troppo.
+  useEffect(() => {
+    let annullato = false
+    if (!scenarioId) { onScenarioArea?.(null); return }
+
+    const invia = geo => {
+      if (annullato || !geo) return
+      onScenarioArea?.({ type: 'FeatureCollection',
+                         features: [{ type: 'Feature', geometry: geo, properties: {} }] })
+    }
+
+    if (scenarioGeoCache.current[scenarioId]) {
+      invia(scenarioGeoCache.current[scenarioId])
+    } else {
+      executeSync(Process.SCENARIO_STATUS, { scenario_id: scenarioId })
+        .then(({ geo }) => { scenarioGeoCache.current[scenarioId] = geo; invia(geo) })
+        .catch(() => {})
+    }
+    return () => { annullato = true }
+  }, [scenarioId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Disegnare una nuova area e analizzarne una esistente sono due lavori
+  // diversi: iniziare un disegno lascia la simulazione selezionata, così sulla
+  // mappa resta evidenziata una sola area per volta.
+  useEffect(() => {
+    if (drawMode) setScenarioId('')
+  }, [drawMode])
+
+  // Pre-compila il riquadro con l'area di semina dello scenario scelto. Gli
+  // scenari creati prima che i bounds venissero registrati non ne hanno: il
+  // backend in quel caso ricade comunque sull'area dello scenario.
+  useEffect(() => {
+    const b = scenarioStatuses[scenarioId]?.bounds
+    setConnBbox(b?.length === 4 ? b.map(v => String(v)) : ['', '', '', ''])
+  }, [scenarioId, scenarioStatuses])
+
   async function handleCustomCompute() {
     setCustomPrecomputeError(null)
     const geojson = seedAreaMode === 'draw' ? seedShapeToGeoJSON(seedShape) : null
@@ -279,6 +315,7 @@ export default function PmarPanel({
       cmems_margin: parseFloat(cmemsMargin) || 5.0,
       ...(customDesc.trim() ? { description: customDesc.trim() } : {}),
       ...(multiSeeding ? { seedings: parseInt(seedings) || 3, tshift: parseInt(tshift) || 30 } : {}),
+      ...(usesPerPolygon ? { pnum_per_polygon: parseInt(pnumPerPolygon) || 500 } : {}),
     }
     try {
       const jobId = await executeAsync(Process.PRECOMPUTE, inputs)
@@ -310,6 +347,34 @@ export default function PmarPanel({
     reader.readAsDataURL(file)
   }
 
+  function handleConnFileChange(e) {
+    const file = e.target.files[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = ev => {
+      setConnShpB64(ev.target.result.split(',')[1])
+      setConnShpName(file.name)
+    }
+    reader.readAsDataURL(file)
+  }
+
+  function handleRunConnectivity() {
+    if (!canRunConnectivity) return
+    onRunConnectivity({
+      scenario_id:      scenarioId,
+      mode:             connMode,
+      self_loops:       connSelfLoops,
+      ...(connDays                ? { t_days: parseFloat(connDays) }             : {}),
+      ...(connSource === 'shapefile'
+            ? { shapefile_b64: connShpB64,
+                ...(connLabelField.trim() ? { node_label_field: connLabelField.trim() } : {}) }
+            : { grid_res: parseFloat(connRes),
+                // Senza riquadro il backend usa l'area dello scenario, che è
+                // esattamente il default che i campi mostrano.
+                ...(connBboxValid ? { bbox: connBbox.map(Number) } : {}) }),
+    })
+  }
+
   function handleSubmit(e) {
     e.preventDefault()
     if (runMode !== 'scenario') return
@@ -323,13 +388,37 @@ export default function PmarPanel({
     })
   }
 
-  const seedInfo = seedAreaMode === 'draw' ? formatSeedShape(seedShape) : null
+  const seedInfo = seedAreaMode === 'draw'
+    ? formatSeedShape(seedShape, { polygons: p.seedPolygons, polygonsOne: p.seedPolygonOne })
+    : null
+
+  // La semina per poligono ha senso solo su uno shapefile caricato e, quando è
+  // attiva, è lei a determinare il numero di particelle: pnum viene ignorato.
+  const usesPerPolygon = connSeeding && seedAreaMode === 'upload'
 
   const canPrecompute = !customJob && !loading && (
     (seedAreaMode === 'draw'   && !!seedShape) ||
     (seedAreaMode === 'upload' && !!shapefileB64) ||
     (seedAreaMode === 't4msp'  && !!selectedT4mspArea)
   )
+
+  // Il riquadro vale solo se i quattro campi sono numeri e non è degenere.
+  const connBboxNums  = connBbox.map(Number)
+  const connBboxValid =
+    connBbox.every(v => v !== '' && Number.isFinite(Number(v))) &&
+    connBboxNums[2] > connBboxNums[0] && connBboxNums[3] > connBboxNums[1]
+
+  // Stima grossolana: il backend scarta poi le celle sulla terraferma, quindi il
+  // numero reale è sempre minore. Serve solo a evitare richieste assurde.
+  const connCellsEstimate = connBboxValid
+    ? Math.ceil((connBboxNums[2] - connBboxNums[0]) / parseFloat(connRes)) *
+      Math.ceil((connBboxNums[3] - connBboxNums[1]) / parseFloat(connRes))
+    : null
+
+  const canRunConnectivity =
+    !connectivityLoading && runMode === 'scenario' &&
+    !!scenarioId && scenarioStatuses[scenarioId]?.status === 'ready' &&
+    (connSource === 'shapefile' ? !!connShpB64 : !!connRes)
 
   const canSubmit = !loading && runMode === 'scenario' &&
     !!scenarioId && scenarioStatuses[scenarioId]?.status === 'ready' &&
@@ -338,7 +427,8 @@ export default function PmarPanel({
   const ncBytesPerStep  = pressure === 'oil' ? 160 : pressure === 'larvae' ? 120 : pressure === 'plastic' ? 60 : 40
   const stepsPerDay     = 24 / parseInt(timeStepHours || 1)
   const ncSeedingsCount = multiSeeding ? (parseInt(seedings) || 1) : 1
-  const ncEstimateBytes = parseInt(pnum || 0) * parseInt(durationDays || 0) * stepsPerDay * ncBytesPerStep * ncSeedingsCount
+  const ncParticles     = usesPerPolygon ? parseInt(pnumPerPolygon || 0) : parseInt(pnum || 0)
+  const ncEstimateBytes = ncParticles * parseInt(durationDays || 0) * stepsPerDay * ncBytesPerStep * ncSeedingsCount
   function formatNcSize(bytes) {
     if (bytes >= 1e9) return (bytes / 1e9).toFixed(1) + ' GB'
     if (bytes >= 1e6) return (bytes / 1e6).toFixed(0) + ' MB'
@@ -504,6 +594,7 @@ export default function PmarPanel({
                 </Stack>
               )}
 
+
               {/* ── Area di seeding ───────────────────────────── */}
               <Text size="xs" fw={600} c="dimmed" tt="uppercase" style={{ letterSpacing: '0.05em' }}>
                 {p.seedAreaLabel}
@@ -531,6 +622,8 @@ export default function PmarPanel({
                       size="xs"
                       variant={drawMode === 'circle' ? 'filled' : 'light'}
                       color="blue"
+                      px={4}
+                      fz={11}
                       onClick={() => onStartDraw('circle')}
                     >
                       {p.btnCircle}
@@ -539,13 +632,33 @@ export default function PmarPanel({
                       size="xs"
                       variant={drawMode === 'rectangle' ? 'filled' : 'light'}
                       color="blue"
+                      px={4}
+                      fz={11}
                       onClick={() => onStartDraw('rectangle')}
                     >
                       {p.btnRect}
                     </Button>
+                    <Button
+                      size="xs"
+                      variant={drawMode === 'polygon' ? 'filled' : 'light'}
+                      color="blue"
+                      px={4}
+                      fz={11}
+                      onClick={() => onStartDraw('polygon')}
+                    >
+                      {p.btnPolygon}
+                    </Button>
                   </Group>
                   {drawMode === 'circle'    && <Text size="xs" c="dimmed" ta="center">{p.hintCircle}</Text>}
                   {drawMode === 'rectangle' && <Text size="xs" c="dimmed" ta="center">{p.hintRect}</Text>}
+                  {drawMode === 'polygon'   && (
+                    <PolygonDrawControls
+                      seedShape={seedShape}
+                      labels={p}
+                      onUndo={onUndoLastPolygon}
+                      onFinish={onFinishDraw}
+                    />
+                  )}
                   {!drawMode && seedInfo && (
                     <Group
                       gap={4}
@@ -594,6 +707,33 @@ export default function PmarPanel({
                     ? <Text size="xs">{shapefileName}</Text>
                     : <Text size="xs" c="dimmed">{p.uploadHint}</Text>}
                 </Button>
+              )}
+
+              {seedAreaMode === 'upload' && (
+                <>
+                  <Switch
+                    size="xs"
+                    label={lbl(p.connSeedingToggle, p.tooltips.connSeeding)}
+                    checked={connSeeding}
+                    onChange={e => setConnSeeding(e.currentTarget.checked)}
+                    styles={{ label: { ...LABEL_STYLES.label, cursor: 'pointer' } }}
+                  />
+                  {connSeeding && (
+                    <Stack gap={4}>
+                      <TextInput
+                        type="number"
+                        size="xs"
+                        label={lbl(p.connSeedingLabel, p.tooltips.connSeedingNum)}
+                        value={pnumPerPolygon}
+                        min="10"
+                        max="20000"
+                        onChange={e => setPnumPerPolygon(e.target.value)}
+                        styles={LABEL_STYLES}
+                      />
+                      <Text size="10px" c="dimmed">{p.connSeedingHint}</Text>
+                    </Stack>
+                  )}
+                </>
               )}
 
               {seedAreaMode === 't4msp' && (
@@ -698,7 +838,9 @@ export default function PmarPanel({
                   type="number"
                   size="xs"
                   label={lbl(p.labelParticles, p.tooltips.labelParticles)}
-                  value={pnum}
+                  value={usesPerPolygon ? '' : pnum}
+                  placeholder={usesPerPolygon ? p.connSeedingOverride : undefined}
+                  disabled={usesPerPolygon}
                   min="10"
                   max="100000"
                   onChange={e => setPnum(e.target.value)}
@@ -749,6 +891,7 @@ export default function PmarPanel({
                 style={{ background: ncBg, borderRadius: 6, borderLeft: `2px solid ${ncBorder}`, lineHeight: 1.4 }}
               >
                 {p.ncSizeHint.replace('{size}', formatNcSize(ncEstimateBytes))}
+                {usesPerPolygon && ` ${p.ncSizePerPolygon}`}
               </Text>
 
               <Group grow gap="xs">
@@ -807,6 +950,12 @@ export default function PmarPanel({
                         [p.labelStart,             sc.start_time],
                         [p.labelDuration,          `${sc.duration_days} d`],
                         [p.labelParticles,         sc.pnum?.toLocaleString()],
+                        // Solo per gli scenari seminati per poligono: è l'informazione
+                        // che dice se lo scenario è un buon input per la connettività.
+                        ...(sc.seeding_mode === 'per_polygon'
+                          ? [[p.labelSeedingPerPoly,
+                              `${sc.pnum_per_polygon?.toLocaleString()} × ${sc.n_polygons}`]]
+                          : []),
                         [p.labelTimeStep,          `${sc.time_step_hours} h`],
                         [p.labelCmemsMarginShort,  `${sc.cmems_margin ?? 5} °`],
                       ].map(([label, val]) => (
@@ -830,6 +979,16 @@ export default function PmarPanel({
                   </Paper>
                 )
               })()}
+
+              {/* ── Sotto-tab: Sorgenti | Connettività ─────────── */}
+              <Tabs value={analysisMode} onChange={setAnalysisMode} variant="pills" radius="sm">
+                <Tabs.List grow>
+                  <Tabs.Tab value="sources">{p.connectivity.subTabSources}</Tabs.Tab>
+                  <Tabs.Tab value="connectivity">{p.connectivity.subTabConnectivity}</Tabs.Tab>
+                </Tabs.List>
+
+                <Tabs.Panel value="sources">
+                  <Stack gap="sm" pt="sm">
 
               {/* ── Layer sorgente ────────────────────────────── */}
               <Group gap={4} align="center">
@@ -952,6 +1111,162 @@ export default function PmarPanel({
                   {p.btnRun}
                 </Button>
               )}
+
+                  </Stack>
+                </Tabs.Panel>
+
+                {/* ── Sotto-tab Connettività ───────────────────── */}
+                <Tabs.Panel value="connectivity">
+                  <Stack gap="sm" pt="sm">
+
+                    {/* Da dove vengono i nodi della rete */}
+                    <SegmentedControl
+                      size="xs"
+                      fullWidth
+                      value={connSource}
+                      onChange={setConnSource}
+                      data={[
+                        { value: 'shapefile', label: p.connectivity.sourceShapefile },
+                        { value: 'grid',      label: p.connectivity.sourceGrid },
+                      ]}
+                      color="teal"
+                    />
+
+                    {connSource === 'shapefile' ? (
+                      <>
+                        <Button
+                          size="xs"
+                          variant="light"
+                          color={connShpB64 ? 'teal' : 'blue'}
+                          type="button"
+                          onClick={() => connFileRef.current?.click()}
+                        >
+                          {connShpName || p.connectivity.uploadHint}
+                        </Button>
+                        <input
+                          ref={connFileRef}
+                          type="file"
+                          accept=".zip"
+                          style={{ display: 'none' }}
+                          onChange={handleConnFileChange}
+                        />
+                      </>
+                    ) : (
+                      <Stack gap="xs">
+                        <NativeSelect
+                          size="xs"
+                          label={lbl(p.connectivity.gridResLabel, p.tooltips.connGridRes)}
+                          value={connRes}
+                          onChange={e => setConnRes(e.target.value)}
+                          data={GRID_RESOLUTIONS}
+                          styles={LABEL_STYLES}
+                        />
+                        <Text size="11px" fw={600} c="dimmed" tt="uppercase" style={{ letterSpacing: '0.05em' }}>
+                          {lbl(p.connectivity.bboxLabel, p.tooltips.connBbox)}
+                        </Text>
+                        <SimpleGrid cols={2} spacing={6}>
+                          {[0, 1, 2, 3].map(i => (
+                            <TextInput
+                              key={i}
+                              type="number"
+                              size="xs"
+                              step="any"
+                              placeholder={p.connectivity.bboxFields[i]}
+                              value={connBbox[i]}
+                              onChange={e => setConnBbox(b => b.map((v, j) => (j === i ? e.target.value : v)))}
+                              styles={LABEL_STYLES}
+                            />
+                          ))}
+                        </SimpleGrid>
+                        <Text size="10px" c={connCellsEstimate > 300 ? 'orange.4' : 'dimmed'}>
+                          {connBboxValid
+                            ? p.connectivity.cellsEstimate.replace('{n}', connCellsEstimate)
+                            : p.connectivity.bboxEmptyHint}
+                        </Text>
+                      </Stack>
+                    )}
+
+                    <SegmentedControl
+                      size="xs"
+                      fullWidth
+                      value={connMode}
+                      onChange={setConnMode}
+                      data={[
+                        { value: 'transit',    label: p.connectivity.modeTransit },
+                        { value: 'transition', label: p.connectivity.modeTransition },
+                      ]}
+                    />
+
+                    <TextInput
+                      type="number"
+                      size="xs"
+                      label={lbl(p.connectivity.horizonLabel, p.tooltips.connHorizon)}
+                      value={connDays}
+                      min="1"
+                      step="any"
+                      placeholder={String(scenarioStatuses[scenarioId]?.duration_days ?? '')}
+                      onChange={e => setConnDays(e.target.value)}
+                      styles={LABEL_STYLES}
+                    />
+
+                    {/* Le celle della griglia hanno già un'etichetta r<riga>c<colonna> */}
+                    {connSource === 'shapefile' && (
+                      <TextInput
+                        size="xs"
+                        label={lbl(p.connectivity.labelFieldLabel, p.tooltips.connLabelField)}
+                        value={connLabelField}
+                        placeholder={p.connectivity.labelFieldPlaceholder}
+                        onChange={e => setConnLabelField(e.target.value)}
+                        styles={LABEL_STYLES}
+                      />
+                    )}
+
+                    <Group gap={6} align="center">
+                      <Switch
+                        size="xs"
+                        checked={connSelfLoops}
+                        onChange={e => setConnSelfLoops(e.currentTarget.checked)}
+                      />
+                      <Text size="xs" c="dimmed">{p.connectivity.selfLoopsLabel}</Text>
+                      <InfoTooltip text={p.tooltips.connSelfLoops} />
+                    </Group>
+
+                    {connectivityLoading ? (
+                      <Group grow gap="xs">
+                        <Button size="sm" color="blue" disabled type="button">
+                          {connectivityStopping ? p.btnStopping : p.connectivity.btnRunning}
+                        </Button>
+                        <Button
+                          size="sm"
+                          color="red"
+                          variant="outline"
+                          type="button"
+                          loading={connectivityStopping}
+                          disabled={connectivityStopping}
+                          onClick={onStopConnectivity}
+                        >
+                          {connectivityStopping ? p.btnStopping : p.btnStop}
+                        </Button>
+                      </Group>
+                    ) : (
+                      <Button
+                        size="sm"
+                        color="blue"
+                        fullWidth
+                        type="button"
+                        disabled={!canRunConnectivity}
+                        onClick={handleRunConnectivity}
+                      >
+                        {p.connectivity.btnRun}
+                      </Button>
+                    )}
+
+                    {connSource === 'shapefile' && !connShpB64 && (
+                      <Text size="xs" c="dimmed" ta="center">{p.connectivity.hintNoShapefile}</Text>
+                    )}
+                  </Stack>
+                </Tabs.Panel>
+              </Tabs>
 
               {/* ── Layer aggiuntivi ──────────────────────────── */}
               <Divider my={4} />

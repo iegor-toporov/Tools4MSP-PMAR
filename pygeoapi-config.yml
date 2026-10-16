@@ -106,3 +106,8 @@ resources:
       type: process
       processor:
             name: processes.ScenarioStatusProcess.ScenarioStatusProcessor
+
+    connectivity:
+      type: process
+      processor:
+            name: processes.ConnectivityProcess.ConnectivityProcessor

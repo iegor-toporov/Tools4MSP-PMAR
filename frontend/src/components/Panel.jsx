@@ -6,6 +6,8 @@ import {
 import { IconX } from '@tabler/icons-react'
 import { MODELS, defaultStartTime } from '../constants'
 import { useLang } from '../LanguageContext'
+import { formatSeedShape } from '../geometry/seedShape'
+import PolygonDrawControls from './PolygonDrawControls'
 import ModelCard from './ModelCard'
 import PmarPanel from './PmarPanel'
 
@@ -32,28 +34,22 @@ const INPUT_LABEL = {
   },
 }
 
-function formatSeedShape(s) {
-  if (!s) return null
-  if (s.type === 'circle') {
-    const km = (s.radius / 1000).toFixed(1)
-    return `${s.lon.toFixed(3)}°E  ${s.lat.toFixed(3)}°N · r = ${km} km`
-  }
-  return `${s.lon_min.toFixed(2)}°–${s.lon_max.toFixed(2)}°E · ${s.lat_min.toFixed(2)}°–${s.lat_max.toFixed(2)}°N`
-}
-
 export default function Panel({
   onRun, onRunPmar,
   loading, onStopOpenDrift, openDriftStopping, status, statusType,
   pmarLoading, onStopPmar, pmarStopping, pmarStatus, pmarStatusType,
-  drawMode, onStartDraw, onClearSeedShape, seedShape,
+  drawMode, onStartDraw, onFinishDraw, onUndoLastPolygon, onClearSeedShape, seedShape,
   activeTool, onToolChange,
   useSource, onUseSourceChange,
   windfarmsLoading, windfarmsEmpty,
   offshoreLoading, offshoreEmpty,
+  mspZonesLoading, mspZonesEmpty,
   natura2000Loading, natura2000Empty, natura2000Geojson,
   showNatura2000, onFetchNatura2000, onToggleNatura2000,
   hasSeedShape,
   onT4mspPreview,
+  onScenarioArea,
+  onRunConnectivity, connectivityLoading, connectivityStopping, onStopConnectivity,
 }) {
   const { t } = useLang()
   const [selectedModel, setSelectedModel] = useState('OceanDrift')
@@ -71,8 +67,8 @@ export default function Panel({
     })
   }
 
-  const seedInfo = formatSeedShape(seedShape)
   const p        = t.panel
+  const seedInfo = formatSeedShape(seedShape, { polygons: p.seedPolygons, polygonsOne: p.seedPolygonOne })
 
   return (
     <Paper
@@ -127,6 +123,8 @@ export default function Panel({
                   size="xs"
                   variant={drawMode === 'circle' ? 'filled' : 'light'}
                   color="blue"
+                  px={4}
+                  fz={11}
                   onClick={() => onStartDraw('circle')}
                 >
                   {p.btnCircle}
@@ -135,9 +133,21 @@ export default function Panel({
                   size="xs"
                   variant={drawMode === 'rectangle' ? 'filled' : 'light'}
                   color="blue"
+                  px={4}
+                  fz={11}
                   onClick={() => onStartDraw('rectangle')}
                 >
                   {p.btnRect}
+                </Button>
+                <Button
+                  size="xs"
+                  variant={drawMode === 'polygon' ? 'filled' : 'light'}
+                  color="blue"
+                  px={4}
+                  fz={11}
+                  onClick={() => onStartDraw('polygon')}
+                >
+                  {p.btnPolygon}
                 </Button>
               </Group>
 
@@ -146,6 +156,14 @@ export default function Panel({
               )}
               {drawMode === 'rectangle' && (
                 <Text size="xs" c="dimmed" ta="center">{p.hintRect}</Text>
+              )}
+              {drawMode === 'polygon' && (
+                <PolygonDrawControls
+                  seedShape={seedShape}
+                  labels={p}
+                  onUndo={onUndoLastPolygon}
+                  onFinish={onFinishDraw}
+                />
               )}
               {!drawMode && seedInfo && (
                 <Group
@@ -264,6 +282,8 @@ export default function Panel({
               statusType={pmarStatusType}
               drawMode={drawMode}
               onStartDraw={onStartDraw}
+              onFinishDraw={onFinishDraw}
+              onUndoLastPolygon={onUndoLastPolygon}
               onClearSeedShape={onClearSeedShape}
               seedShape={seedShape}
               useSource={useSource}
@@ -272,6 +292,8 @@ export default function Panel({
               windfarmsEmpty={windfarmsEmpty}
               offshoreLoading={offshoreLoading}
               offshoreEmpty={offshoreEmpty}
+              mspZonesLoading={mspZonesLoading}
+              mspZonesEmpty={mspZonesEmpty}
               natura2000Loading={natura2000Loading}
               natura2000Empty={natura2000Empty}
               natura2000Geojson={natura2000Geojson}
@@ -280,6 +302,11 @@ export default function Panel({
               onToggleNatura2000={onToggleNatura2000}
               hasSeedShape={hasSeedShape}
               onT4mspPreview={onT4mspPreview}
+              onScenarioArea={onScenarioArea}
+              onRunConnectivity={onRunConnectivity}
+              connectivityLoading={connectivityLoading}
+              connectivityStopping={connectivityStopping}
+              onStopConnectivity={onStopConnectivity}
             />
           </ScrollArea>
         </Tabs.Panel>

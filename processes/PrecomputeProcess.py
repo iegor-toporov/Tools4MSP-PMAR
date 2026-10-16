@@ -11,6 +11,7 @@ import zipfile
 from datetime import datetime, timedelta
 
 import geopandas as gpd
+import numpy as np
 
 from pygeoapi.process.base import BaseProcessor, ProcessorExecuteError
 
@@ -108,6 +109,13 @@ PROCESS_METADATA = {
         'pnum': {
             'title': 'Number of particles',
             'schema': {'type': 'integer', 'default': 1000},
+            'minOccurs': 0, 'maxOccurs': 1,
+        },
+        'pnum_per_polygon': {
+            'title': 'Particles per polygon (connectivity seeding)',
+            'description': 'When set, seeds this many particles in every polygon of the '
+                           'shapefile instead of splitting pnum by area. Overrides pnum.',
+            'schema': {'type': 'integer'},
             'minOccurs': 0, 'maxOccurs': 1,
         },
         'time_step_hours': {
@@ -263,6 +271,39 @@ def _build_custom_scenario(data, shp_path=None, area_label=None):
     if shp_path is None:
         shp_path = _save_custom_shapefile(geojson_input, shapefile_b64, SCENARIOS_SHP_DIR, custom_id)
 
+    # Seeding per la connettività.
+    #
+    # OpenDrift ripartisce `number` fra i poligoni *proporzionalmente all'area*
+    # (seed_from_geopandas), mentre una matrice di connettività confronta le righe
+    # fra loro: con uno sforzo di campionamento diverso per poligono le probabilità
+    # di transito dei poligoni piccoli sarebbero stimate su pochissime particelle e
+    # non confrontabili con le altre. La tesi rilascia perciò lo stesso numero di
+    # particelle in ogni poligono, e questa modalità riproduce quella scelta.
+    # I bounds dell'area di semina vengono registrati qui una volta sola: servono
+    # alla UI per pre-compilare il riquadro della griglia di connettività, e
+    # rileggere lo shapefile a ogni chiamata di stato costerebbe troppo.
+    seed_gdf = gpd.read_file(shp_path)
+    bounds   = [round(float(v), 4) for v in seed_gdf.to_crs('EPSG:4326').total_bounds]
+
+    seeding_mode     = 'total'
+    pnum_per_polygon = data.get('pnum_per_polygon')
+    n_polygons       = None
+    if pnum_per_polygon:
+        pnum_per_polygon = max(1, min(int(pnum_per_polygon), 20000))
+        # explode(): la stessa unità su cui semina OpenDrift — una MultiPolygon
+        # conta come i suoi componenti, non come un poligono solo.
+        n_polygons = int(len(seed_gdf.geometry.explode(index_parts=False)))
+        total = pnum_per_polygon * n_polygons
+        if total > 100000:
+            raise ProcessorExecuteError(
+                f'{pnum_per_polygon} particelle × {n_polygons} poligoni = {total}: '
+                f'oltre il limite di 100000 particelle per scenario.'
+            )
+        seeding_mode = 'per_polygon'
+        pnum         = total  # il totale effettivo, così la scheda scenario non mente
+    else:
+        pnum_per_polygon = None
+
     cmems_margin = float(data.get('cmems_margin', 5.0))
     cmems_margin = max(0.0, min(cmems_margin, 20.0))
     description  = (data.get('description') or '').strip()
@@ -271,25 +312,29 @@ def _build_custom_scenario(data, shp_path=None, area_label=None):
     tshift   = max(1, min(int(data.get('tshift', 30)), 365))
 
     sc = {
-        'scenario_id':     custom_id,
-        'label_it':        label,
-        'label_en':        label,
-        'area_it':         area_label or 'Area personalizzata',
-        'area_en':         area_label or 'Custom area',
-        'pressure':        pressure,
-        'pnum':            pnum,
-        'duration_days':   duration_days,
-        'time_step_hours': time_step_hours,
-        'start_time':      start_time_str,
-        'res':             res,
-        'cmems_margin':    cmems_margin,
-        'description':     description,
-        'seedings':        seedings,
-        'tshift':          tshift,
-        'nc_filename':     f'{custom_id}_s0.nc',
-        'nc_filenames':    [f'{custom_id}_s{n}.nc' for n in range(seedings)],
-        'shapefile':       shp_path,
-        'source':          'custom',
+        'scenario_id':      custom_id,
+        'label_it':         label,
+        'label_en':         label,
+        'area_it':          area_label or 'Area personalizzata',
+        'area_en':          area_label or 'Custom area',
+        'pressure':         pressure,
+        'pnum':             pnum,
+        'seeding_mode':     seeding_mode,
+        'pnum_per_polygon': pnum_per_polygon,
+        'n_polygons':       n_polygons,
+        'duration_days':    duration_days,
+        'time_step_hours':  time_step_hours,
+        'start_time':       start_time_str,
+        'res':              res,
+        'cmems_margin':     cmems_margin,
+        'description':      description,
+        'seedings':         seedings,
+        'tshift':           tshift,
+        'nc_filename':      f'{custom_id}_s0.nc',
+        'nc_filenames':     [f'{custom_id}_s{n}.nc' for n in range(seedings)],
+        'shapefile':        shp_path,
+        'bounds':           bounds,
+        'source':           'custom',
     }
     meta_path = os.path.join(SCENARIOS_DIR, f'{custom_id}.json')
     with open(meta_path, 'w') as f:
@@ -383,7 +428,22 @@ def _run_scenario(scenario_id, sc, shp_path):
 
     tmp_nc = os.path.join(OUT_DIR, f'precompute_{uuid.uuid4().hex}.nc')
     try:
-        o.seed_from_shapefile(shapefile=shp_path, number=pnum, time=start_time)
+        if sc.get('seeding_mode') == 'per_polygon':
+            # seed_from_shapefile ripartirebbe pnum proporzionalmente all'area; qui
+            # ogni poligono riceve lo stesso numero di particelle, così le righe
+            # della matrice di connettività sono confrontabili fra loro.
+            per_poly = int(sc['pnum_per_polygon'])
+            polygons = list(gdf.geometry.explode(index_parts=False))
+            for polygon in polygons:
+                lons, lats = polygon.exterior.coords.xy
+                o.seed_within_polygon(lons=np.asarray(lons), lats=np.asarray(lats),
+                                      number=per_poly, time=start_time)
+            logger.info(
+                f'[{scenario_id}] Per-polygon seeding: {per_poly} × {len(polygons)} '
+                f'= {per_poly * len(polygons)} particles'
+            )
+        else:
+            o.seed_from_shapefile(shapefile=shp_path, number=pnum, time=start_time)
         ts = timedelta(hours=time_step_hours)
         logger.info(
             f'[{scenario_id}] Run: model={pm_cfg["class"]}, pnum={pnum}, '

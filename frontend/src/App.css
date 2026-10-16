@@ -80,10 +80,13 @@ html[data-mantine-color-scheme="light"] body {
   display: block;
 }
 
-/* ── PMAR cell tooltip ──────────────────────────────────────────────────── */
-.pmar-cell-tooltip {
-  position: absolute;
-  z-index: 1001;
+/* ── Tooltip della mappa ─────────────────────────────────────────────────────
+   Stessa veste per i due tooltip di hover — le celle del raster PMAR (div
+   posizionato a mano) e i poligoni di connettività (tooltip di Leaflet) — così
+   quando sono visibili insieme si leggono come due parti dello stesso oggetto.
+   Lo stile è quello dei pannelli dell'app: fondo traslucido, blur, bordo tenue. */
+.pmar-cell-tooltip,
+.leaflet-tooltip.pmar-map-tooltip {
   background: var(--panel-bg);
   border: 1px solid var(--panel-border);
   border-radius: 8px;
@@ -96,6 +99,17 @@ html[data-mantine-color-scheme="light"] body {
   backdrop-filter: blur(20px) saturate(180%);
   -webkit-backdrop-filter: blur(20px) saturate(180%);
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.12);
+}
+
+.pmar-cell-tooltip {
+  position: absolute;
+  z-index: 1001;
+}
+
+/* Leaflet disegna la freccia con uno ::before colorato come il suo fondo bianco:
+   su un pannello traslucido stonerebbe, e il tooltip segue comunque il cursore. */
+.leaflet-tooltip.pmar-map-tooltip::before {
+  display: none;
 }
 
 .pmar-cell-tooltip b {
@@ -113,4 +127,38 @@ html[data-mantine-color-scheme="light"] body {
   opacity: 0.50;
   font-size: 9.5px !important;
   letter-spacing: 0.02em;
+}
+
+/* Titolo e righe metrica del tooltip di connettività: stessa gerarchia di colore
+   del tooltip delle celle (accento per l'identificativo, grigio per le etichette),
+   ma incolonnate, perché qui i valori sono tre e si confrontano a colpo d'occhio. */
+.pmar-tt-title {
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 1px;
+}
+
+.pmar-tt-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  font-size: 10px;
+}
+
+.pmar-tt-row span { color: var(--text-secondary); }
+
+.pmar-tt-row b {
+  color: var(--text-primary);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.pmar-tt-warn {
+  margin-top: 3px;
+  font-size: 10px;
+  color: #f87171;
+  white-space: normal;
+  max-width: 200px;
+  line-height: 1.35;
 }

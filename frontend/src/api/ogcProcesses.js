@@ -11,6 +11,7 @@
 export const Process = {
   OPENDRIFT:              'opendrift',
   PMAR:                   'pmar',
+  CONNECTIVITY:           'connectivity',
   PRECOMPUTE:             'precompute',
   SCENARIO_STATUS:        'scenario_status',
   WINDFARMS:              'windfarms',

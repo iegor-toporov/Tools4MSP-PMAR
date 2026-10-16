@@ -20,6 +20,7 @@ DTO-PMAR/
 ├── processes/
 │   ├── OpenDriftProcess.py              # OGC API process: runs OpenDrift with CMEMS data
 │   ├── PMARProcess.py                   # OGC API process: PMAR density analysis on a precomputed scenario
+│   ├── ConnectivityProcess.py           # OGC API process: connectivity matrix + graph metrics between areas
 │   ├── PrecomputeProcess.py             # OGC API process: precomputes and stores a trajectory NC file
 │   ├── ScenarioStatusProcess.py         # OGC API process: lists saved scenarios + Tools4MSP areas
 │   ├── WindfarmsProcess.py              # OGC API process: EMODnet wind farm preview (bbox query)
@@ -39,6 +40,8 @@ DTO-PMAR/
 │   │   ├── api/
 │   │   │   ├── ogcProcesses.js          # OGC API - Processes client: no React, no UI library, no i18n
 │   │   │   └── ogcProcesses.test.js     # Unit tests for the client (node:test, no browser needed)
+│   │   ├── geometry/
+│   │   │   └── seedShape.js             # Seeding-area conversions (GeoJSON, bbox, label): no React, no i18n
 │   │   ├── hooks/
 │   │   │   └── usePreviewLayer.js       # React adapter: keeps one EMODnet overlay in sync with the seeding area
 │   │   ├── components/                  # Panels, map overlays, analysis windows (Mantine v9, react-leaflet)
@@ -74,13 +77,14 @@ DTO-PMAR/
 
 **Backend:** [pygeoapi](https://pygeoapi.io) (port 5001) exposes all processes via the OGC API - Processes standard. Long-running precomputations are offloaded to a **Celery** worker backed by **Redis**. Shared data utilities (CMEMS dataset definitions, EMODnet WFS fetch functions) live in `data/` and are imported by the process modules.
 
-**Frontend:** React 19 + Vite SPA with Mantine v9 and react-leaflet. In production it is built into a static bundle and served by **nginx**, which also proxies `/processes/*` to the backend.
+**Frontend:** React 19 + Vite SPA with Mantine v9 and react-leaflet. In production it is built into a static bundle and served by **nginx**, which also proxies `/processes/*` to the backend. The proxy raises `client_max_body_size` to 64 MB: shapefiles and GeoTIFFs travel base64-encoded inside the JSON body, which inflates them by a third, and nginx's 1 MB default rejected any real file with an opaque `413` before it ever reached the backend.
 
 The frontend is organised in three layers, so that the code which talks to the backend is independent of the code which draws the interface:
 
 | Layer | Path | Depends on |
 |---|---|---|
 | API client | `src/api/ogcProcesses.js` | the Fetch API only — no React, no UI library, no i18n |
+| Geometry | `src/geometry/seedShape.js` | nothing — pure functions over plain objects |
 | React adapters | `src/hooks/` | the API client + React |
 | Presentation | `src/App.jsx`, `src/components/` | everything above |
 
@@ -133,6 +137,16 @@ cd frontend && npm install && npm run dev   # http://localhost:3000
 
 `cache/`, `out/`, and `scenarios/` are tracked in git as empty directories (via `.gitkeep`) so Docker can mount them with correct permissions from the first run.
 
+### `.git_token` is required to build the backend
+
+PMAR is installed from a private repository, pinned to an exact commit. The build reads the token
+from a file named `.git_token` in the project root (a GitHub token with `repo` scope), mounted as a
+Docker build secret and never stored in the image. **The build fails with an explicit message if
+the file is missing** — an image built without PMAR would appear healthy and then fail every
+analysis at runtime with an obscure `ImportError`.
+
+The file is per-machine and git-ignored: it has to be created on each server separately from `.env`.
+
 ## OpenDrift process
 
 **Endpoint:** `POST /processes/opendrift/execution`
@@ -176,9 +190,20 @@ The user defines a seeding area and simulation parameters, then triggers a **pre
 
 | Mode | Description |
 |---|---|
-| Draw | Circle or rectangle drawn interactively on the map. Supports a custom area name. |
+| Draw | Circle, rectangle, or free **polygon** drawn interactively on the map. Supports a custom area name. |
 | Shapefile | ZIP archive containing `.shp`, `.shx`, `.dbf` files |
 | Pre-defined area | Geographic area from the [Tools4MSP API](https://api.tools4msp.eu/api/v2/domainareas/) |
+
+**Drawing polygons.** Click to drop vertices; close the polygon by clicking its first vertex or
+with a double click. The tool stays armed, so several polygons can be accumulated into one seeding
+area — useful when the areas of interest are disjoint. `Backspace` removes the last vertex, `Esc`
+discards the polygon being drawn, and the panel offers *Undo last* (removes the last closed
+polygon) and *Done*. Each polygon becomes a separate feature of the GeoJSON sent to the backend,
+and therefore a separate geometry in the scenario shapefile.
+
+Selecting an existing simulation highlights **its** seeding area on the map and frames the view on
+it; the drawn area is hidden while that is the case, and comes back when the selection is cleared.
+Starting a new drawing clears the selection, so exactly one area is shown at any time.
 
 **Simulation parameters:**
 
@@ -190,8 +215,23 @@ The user defines a seeding area and simulation parameters, then triggers a **pre
 | Start date | ISO 8601 date | 10 days ago |
 | Duration | 1–730 days | 30 |
 | Particles | 10–100 000 | 1 000 |
+| Particles per polygon | 10–20 000 (shapefile seeding only) | off |
 | Time step | 1, 3, 6, 12, 24 h | 1 h |
 | CMEMS margin | 0–20° | 5° |
+
+**Connectivity seeding.** By default OpenDrift splits the particle budget between polygons *in
+proportion to their area*, so a small polygon gets very few. A connectivity matrix compares its
+rows with one another, and a row estimated from a handful of particles is not comparable with the
+others. Switching on *Connectivity seeding* releases the same number of particles in every polygon
+instead. Measured on three polygons of very different size:
+
+```
+seed_from_shapefile (proportional):  {0: 272, 1: 25, 2: 3}
+per polygon (100 each):              {0: 100, 1: 100, 2: 100}
+```
+
+The field replaces *Particles*; the effective total is `particles per polygon × polygons`, capped
+at 100 000, and is what the scenario card then reports.
 
 A live estimate of the temporary NetCDF file size is shown below the form, colour-coded by severity (normal / caution >500 MB / warning >2 GB).
 
@@ -201,9 +241,11 @@ Existing simulations are listed in a dropdown at the top of the tab. Selecting o
 
 ### Tab 2 — Analysis
 
-Once a simulation is selected from the Simulation tab, the Analysis tab allows running the PMAR density analysis on it with different configurations without re-running the OpenDrift simulation.
+Once a simulation is selected from the Simulation tab, the Analysis tab runs analyses on it
+without re-running the OpenDrift simulation. It holds two sub-tabs, both working on the same
+precomputed trajectories.
 
-**Analysis parameters:**
+#### Sources — pressure propagation
 
 | Parameter | Options | Default |
 |---|---|---|
@@ -212,6 +254,32 @@ Once a simulation is selected from the Simulation tab, the Analysis tab allows r
 | Study area margin | 0–20° | 1° |
 
 Running the analysis produces a particle density heatmap overlaid on the map.
+
+#### Connectivity — exchange between areas
+
+Computes how much water-borne material moves between areas, as described in Bosi et al. (2026).
+The nodes of the network come from one of two sources:
+
+| Source | How the nodes are defined |
+|---|---|
+| Shapefile | A ZIP of polygons. An attribute column can be used to label the nodes. |
+| Grid | A regular grid of **ocean** cells over a bounding box; land cells are excluded automatically. Resolution 1°, 0.5°, 0.25° or 0.1°; the box defaults to the scenario's own seeding area and can be narrowed by hand. |
+
+| Parameter | Options | Default |
+|---|---|---|
+| Probability | `Transit` (passes through j at least once within the horizon — structural connectivity) or `Transition` (is in j exactly after the horizon, e.g. a known larval duration) | `Transit` |
+| Horizon | Days | Full scenario duration |
+| Label column | Shapefile attribute used to name the nodes | — |
+| Self-loops | Whether a polygon's return to itself counts toward its metrics | off (matches the reference work) |
+
+The result is drawn directly on the map: the polygons coloured by the selected metric
+(**in-strength**, **out-strength**, **betweenness**), and the directed network of exchanges on
+top of them. Polygons holding fewer than 30 particles at t=0 are drawn grey and dashed instead of
+coloured — their row is not statistically meaningful — and the run reports how many there were.
+
+Clicking a polygon isolates its own connections, with a toggle for incoming / outgoing / both;
+clicking it again restores the whole network. The *Connectivity* button in the tools panel opens
+the full matrix in a floating window, with a TSV download at full precision.
 
 ## Precompute process
 
@@ -231,6 +299,7 @@ Runs an OpenDrift simulation, saves the trajectory as `scenarios/custom_<id>.nc`
 | `start_time` | ISO 8601 datetime |
 | `duration_days` | Duration in days |
 | `pnum` | Number of particles (max 100 000) |
+| `pnum_per_polygon` | Releases this many particles in **every** polygon instead of splitting `pnum` by area; overrides `pnum`, total capped at 100 000 |
 | `time_step_hours` | Time step in hours (1–24) |
 | `label` | Human-readable title for the scenario |
 | `description` | Free-text notes about the simulation |
@@ -245,11 +314,26 @@ Exactly one of `geojson`, `shapefile_b64`, or `t4msp_area_id` must be provided.
 { "scenario_id": "custom_a1b2c3d4", "status": "done", "nc_filename": "custom_a1b2c3d4.nc" }
 ```
 
+The scenario metadata also records `seeding_mode` (`total` or `per_polygon`), `pnum_per_polygon`,
+`n_polygons`, and `bounds` (the seeding area's bounding box), all of which the frontend reads back
+through the scenario status process.
+
 ## Scenario status process
 
 **Endpoint:** `POST /processes/scenario_status/execution`
 
 Returns the list of all saved custom scenarios and the available Tools4MSP geographic areas.
+
+Two inputs make it answer about a single item instead, so that the map can highlight one area
+without the listing paying for it:
+
+| Input | Returns |
+|---|---|
+| `area_id` | `{ "geo": … }` — geometry of that Tools4MSP area, fetched once and cached in memory |
+| `scenario_id` | `{ "geo": … }` — seeding geometry of that scenario, read from its shapefile and merged with `union_all()` so a multi-polygon area stays a single geometry |
+
+The listing is polled every 5 seconds while a precomputation runs, which is why reading shapefiles
+belongs in these branches and not in the listing itself.
 
 ### Output
 
@@ -271,6 +355,10 @@ Returns the list of all saved custom scenarios and the available Tools4MSP geogr
       "start_time": "2026-04-01",
       "res": 0.1,
       "cmems_margin": 5.0,
+      "seeding_mode": "per_polygon",
+      "pnum_per_polygon": 500,
+      "n_polygons": 9,
+      "bounds": [11.89, 42.49, 16.42, 45.68],
       "source": "custom"
     }
   },
@@ -373,6 +461,86 @@ pmar_<pressure>_<YYYYMMDD>-<YYYYMMDD>_p<pnum>[_<use_source>].tif
 ### PROJ note
 
 `pmar.py` hardcodes `PROJ_LIB` to a conda path at import time, corrupting PROJ for pyproj and rasterio. PMARProcess.py removes both `PROJ_LIB` and `PROJ_DATA` from the environment after importing PMAR, allowing each library to find its own data directory.
+
+## Connectivity process
+
+**Endpoint:** `POST /processes/connectivity/execution`  
+**Execution mode:** asynchronous (`Prefer: respond-async`)
+
+Builds a connectivity matrix between areas from the Lagrangian trajectories of a precomputed
+scenario, and derives the graph metrics described in Bosi et al. (2026). The metrics are **not**
+reimplemented here: they come from the PMAR library (`get_cm`, `get_cm_within_range`,
+`connectivity_analysis`, `get_network`, `export_network`), which this process drives and whose
+output it packages for the map.
+
+### Inputs
+
+| Parameter | Description |
+|---|---|
+| `scenario_id` | Precomputed scenario to read trajectories from (required) |
+| `shapefile_b64` | Base64-encoded ZIP of the polygons used as network nodes |
+| `geojson` | Polygons as GeoJSON (alternative to the shapefile) |
+| `grid_res` | Builds the nodes as a regular grid of ocean cells instead: 1.0, 0.5, 0.25 or 0.1 degrees |
+| `bbox` | `[lon_min, lat_min, lon_max, lat_max]` for the grid; defaults to the scenario's seeding area |
+| `mode` | `transit` (default) or `transition` |
+| `t_days` | Time horizon in days; defaults to the scenario duration |
+| `node_label_field` | Shapefile attribute used to label the nodes |
+| `self_loops` | Whether i→i counts toward the metrics (default `false`) |
+| `margin` | Degrees added around the nodes when defining the study area (default 1.0) |
+
+Either polygons (`shapefile_b64` / `geojson`) or `grid_res` must be provided; polygons win if both
+are given.
+
+### Output
+
+```json
+{
+  "type": "connectivity",
+  "mode": "transit",
+  "node_source": "grid",
+  "grid_res": 0.5,
+  "grid_bbox": [11.89, 42.49, 16.42, 45.68],
+  "polygons_geojson": { "type": "FeatureCollection", "features": [] },
+  "edges_geojson":    { "type": "FeatureCollection", "features": [] },
+  "matrix": [[0.95, 0.04], [0.01, 0.97]],
+  "node_ids": [0, 1],
+  "node_labels": ["r0c3", "r0c4"],
+  "n_released": [412, 388],
+  "min_particles": 30,
+  "metric_ranges": { "in_strength": [0.0, 1.9] },
+  "bounds": [[42.49, 11.89], [45.68, 16.42]],
+  "warnings": []
+}
+```
+
+Each polygon feature carries `node_id`, `node_label`, `in_strength`, `out_strength`,
+`betweenness`, `n_released` and `reliable`. Each edge feature — the curve **and** the arrowhead
+drawn at its end — carries `source`, `target` and `p`, which is what lets the frontend isolate
+one node's connections without asking the backend again.
+
+### Limits and guards
+
+| Limit | Value | Why |
+|---|---|---|
+| `MAX_POLYGONS` | 300 | The matrix is dense and travels whole through Redis and into the browser |
+| `MIN_PARTICLES` | 30 | Below this a row is reported as unreliable rather than shown as a result |
+| `MAX_TIME_PASSES` | 180 | Transit repeats a point-in-polygon pass per timestep; beyond this the time axis is subsampled |
+| `MAX_EDGE_FEATURES` | 1500 | Drawing limit only — the matrix stays complete |
+
+When the network exceeds the drawing limit it is thinned **fairly**, in rounds: each round every
+node gives up its strongest remaining outgoing edge. Keeping the globally strongest edges instead
+concentrates the drawing on a few corridor cells, and clicking any other cell then shows nothing
+at all despite a matrix full of values.
+
+### Notes
+
+- `get_cm_within_range` does **not** assign `self.cm`, unlike `get_cm`, while
+  `connectivity_analysis()` requires it — the process assigns it explicitly.
+- With multi-seeding scenarios the matrices of the individual runs are averaged here;
+  `PMARmulti.get_cm` only averages *transition* matrices.
+- The grid is built once with `make_grid` + `make_vector_grid` and then passed as `cm_grid`, so
+  the two node sources share the whole downstream path. `make_grid` masks land using Natural
+  Earth ocean polygons, downloaded on first use inside the container.
 
 ## Anthropogenic layers
 
@@ -494,30 +662,41 @@ failure, cancellation, and empty overlays.
 
 ### PMAR tab — Simulation
 
-- Define a seeding area by drawing on the map (with optional area name), uploading a shapefile, or selecting a Tools4MSP pre-defined area
+- Define a seeding area by drawing on the map — circle, rectangle, or several free polygons (with optional area name) — uploading a shapefile, or selecting a Tools4MSP pre-defined area
 - Set simulation metadata: title, description
 - Set simulation parameters: pressure type, start date, duration, particles, time step, CMEMS margin
 - Live NetCDF size estimate, colour-coded by severity
 - Precompute button runs the simulation asynchronously; status is polled automatically
-- Saved simulations listed in a dropdown; selecting one shows a full summary (area, pressure, dates, particles, time step, CMEMS margin, description)
+- Saved simulations listed in a dropdown; selecting one shows a full summary (area, pressure, dates, particles, time step, CMEMS margin, description) and highlights that simulation's seeding area on the map
+- *Connectivity seeding* releases the same number of particles in every polygon of an uploaded shapefile
 
 ### PMAR tab — Analysis
 
-- Select a saved simulation from the dropdown in the Simulation tab
-- Choose an anthropogenic weighting layer, grid resolution, and study area margin
-- After analysis, a **controls bar** appears at the bottom with:
-  - **Indicator selector**: switch between Density, SUM, MAX, Q90 rasters (shown only when indicators are available)
-  - Toggle heatmap overlay
-  - Toggle seeding area polygon
-  - Toggle wind farms layer
-  - Toggle offshore installations layer
-  - Download raster as GeoTIFF
+Two sub-tabs, **Sources** and **Connectivity**, sharing the selected simulation.
+
+- *Sources*: choose an anthropogenic weighting layer, grid resolution, and study area margin
+- *Connectivity*: choose the nodes (polygon shapefile, or a generated grid of ocean cells with a
+  resolution and a bounding box), the probability type, the time horizon, and whether self-loops
+  count; the result is coloured polygons plus the directed network of exchanges
+- Clicking a polygon isolates its connections, with incoming / outgoing / both
+- Hovering a polygon or a raster cell shows a tooltip; the two are placed on opposite sides of the
+  cursor so that they never overlap
+
+After an analysis a **controls bar** appears at the bottom, laid out as two aligned columns — the
+row name on the left, its controls on the right:
+
+| Row | Controls |
+|---|---|
+| PMAR | Indicator selector: Density, SUM, MAX, Q90, σ (when available) |
+| Connectivity | Metric selector: in-strength, out-strength, betweenness |
+| Selection | Selected node, incoming / outgoing / both, clear (only while a polygon is selected) |
+| Show / hide | Heatmap, seeding area, connectivity polygons, network, EMODnet layers, GeoTIFF download |
 
 ### Map
 
 - **Top-right toolbar**: contains two buttons — light/dark theme toggle (switches CartoDB basemap and all panel colours) and IT/EN language switch. Copernicus Marine credentials are configured server-side via environment variables (see `.env`).
 - **Natura 2000 layer**: protected marine areas fetched from the EmodNet WFS and displayed as a semi-transparent overlay. Toggled from the PMAR controls bar.
-- **Analysis tools panel** (right side, vertically centred): six labelled buttons — Histogram, Statistics, Profile, Threshold, CSV, Compare — active only when a PMAR raster is loaded. A "Close all" button appears when analysis windows are open.
+- **Analysis tools panel** (right side, vertically centred): seven labelled buttons — Histogram, Statistics, Profile, Threshold, CSV, Compare, Connectivity. Each is enabled by the result it works on: the first six need a PMAR raster, *Connectivity* needs a connectivity result and opens the matrix window. A "Close all" button appears when analysis windows are open.
 
 ## Logging
 

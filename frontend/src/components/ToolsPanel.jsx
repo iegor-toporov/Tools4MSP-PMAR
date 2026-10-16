@@ -1,17 +1,24 @@
 import { Tooltip, Button, Badge } from '@mantine/core'
 import {
   IconChartBar, IconChartAreaLine, IconWaveSine,
-  IconBolt, IconFileTypeCsv, IconStack2, IconX,
+  IconBolt, IconFileTypeCsv, IconStack2, IconTable, IconX,
 } from '@tabler/icons-react'
 import { useLang } from '../LanguageContext'
 
+/**
+ * `needs` names the result a tool operates on, because the two analyses produce
+ * different results: every raster tool is useless without a PPI raster, and the
+ * connectivity matrix is useless without a connectivity run. A single
+ * `hasRaster` gate would have disabled the matrix on a connectivity-only session.
+ */
 const TOOLS = [
-  { key: 'histogram',  Icon: IconChartBar,      labelKey: 'histogramBtn' },
-  { key: 'stats',      Icon: IconChartAreaLine,  labelKey: 'statsBtn' },
-  { key: 'profile',    Icon: IconWaveSine,       labelKey: 'profileBtn' },
-  { key: 'threshold',  Icon: IconBolt,           labelKey: 'thresholdBtn' },
-  { key: 'csv',        Icon: IconFileTypeCsv,    labelKey: 'csvBtn' },
-  { key: 'comparison', Icon: IconStack2,         labelKey: 'comparisonBtn' },
+  { key: 'histogram',    Icon: IconChartBar,      labelKey: 'histogramBtn',    needs: 'raster' },
+  { key: 'stats',        Icon: IconChartAreaLine, labelKey: 'statsBtn',        needs: 'raster' },
+  { key: 'profile',      Icon: IconWaveSine,      labelKey: 'profileBtn',      needs: 'raster' },
+  { key: 'threshold',    Icon: IconBolt,          labelKey: 'thresholdBtn',    needs: 'raster' },
+  { key: 'csv',          Icon: IconFileTypeCsv,   labelKey: 'csvBtn',          needs: 'raster' },
+  { key: 'comparison',   Icon: IconStack2,        labelKey: 'comparisonBtn',   needs: 'raster' },
+  { key: 'connectivity', Icon: IconTable,         labelKey: 'connectivityBtn', needs: 'connectivity' },
 ]
 
 const BTN_WIDTH = 152
@@ -20,6 +27,7 @@ export default function ToolsPanel({
   activeMapTool,
   onSetTool,
   hasRaster,
+  hasConnectivity = false,
   windowCounts = {},
   openWindowCount = 0,
   onCloseAll,
@@ -40,7 +48,8 @@ export default function ToolsPanel({
       alignItems: 'stretch',
       width: BTN_WIDTH,
     }}>
-      {TOOLS.map(({ key, Icon, labelKey }) => {
+      {TOOLS.map(({ key, Icon, labelKey, needs }) => {
+        const enabled  = needs === 'connectivity' ? hasConnectivity : hasRaster
         const isActive = activeMapTool === key
         const count    = windowCounts[key] ?? 0
         return (
@@ -51,9 +60,9 @@ export default function ToolsPanel({
               radius="md"
               variant={isActive ? 'filled' : 'default'}
               color={isActive ? 'blue' : undefined}
-              disabled={!hasRaster}
+              disabled={!enabled}
               leftSection={<Icon size={15} />}
-              onClick={hasRaster ? () => onSetTool(key) : undefined}
+              onClick={enabled ? () => onSetTool(key) : undefined}
               styles={{ inner: { justifyContent: 'flex-start' } }}
               style={{
                 backdropFilter: 'blur(20px) saturate(180%)',

@@ -21,6 +21,8 @@ import { computeStats, PmarStatsModal } from './components/PmarStats'
 import { PmarThresholdModal } from './components/PmarThreshold'
 import { PmarComparisonModal } from './components/PmarComparison'
 import { sampleProfile, PmarProfileModal } from './components/PmarProfile'
+import { seedShapeToGeoJSON, seedShapeBounds } from './geometry/seedShape'
+import { PmarConnectivityMatrix } from './components/PmarConnectivityMatrix'
 import 'leaflet/dist/leaflet.css'
 import './App.css'
 
@@ -58,6 +60,16 @@ function logNorm(val, vmin, vmax) {
   const logMin = Math.log10(Math.max(vmin, 1e-12))
   const logMax = Math.log10(vmax)
   return Math.max(0, Math.min(1, (Math.log10(val) - logMin) / (logMax - logMin)))
+}
+
+/**
+ * Linear [0,1] normalisation, for metrics that are linear and may legitimately be 0.
+ * logNorm() cannot serve them: it returns null for any value <= 0.
+ */
+function linNorm(val, vmin, vmax) {
+  if (!isFinite(val)) return null
+  if (vmax <= vmin) return 0
+  return Math.max(0, Math.min(1, (val - vmin) / (vmax - vmin)))
 }
 
 // ── Standard map-pin icon (reusable for all anthropogenic layers) ──────────────
@@ -375,6 +387,133 @@ function Natura2000Layer({ geojson, visible }) {
   return null
 }
 
+// ── Connectivity polygons layer ───────────────────────────────────────────────
+/**
+ * Draws the user's polygons filled by the selected connectivity metric.
+ *
+ * Unmounts on !visible rather than calling setStyle(): setStyle() applies one style
+ * to the whole group and would flatten the per-feature colours.
+ */
+function ConnectivityLayer({ data, metric, visible, labels, selectedNode, onSelectNode }) {
+  const map      = useMap()
+  const layerRef = useRef(null)
+
+  useEffect(() => {
+    layerRef.current?.remove()
+    layerRef.current = null
+    const fc = data?.polygons_geojson
+    if (!visible || !fc?.features?.length) return
+
+    const [vmin, vmax] = data.metric_ranges?.[metric] ?? [0, 1]
+
+    layerRef.current = L.geoJSON(fc, {
+      style: f => {
+        const pr = f.properties ?? {}
+        // Polygons holding too few particles carry no usable statistic: showing them
+        // in the colour scale would present noise as a result.
+        if (!pr.reliable) {
+          return { color: '#64748b', fillColor: '#94a3b8', fillOpacity: 0.15,
+                   weight: 1, opacity: 0.6, dashArray: '3 3' }
+        }
+        const [r, g, b] = spectralR(linNorm(pr[metric], vmin, vmax) ?? 0)
+        // Il selezionato si distingue solo per il bordo: cambiare anche il
+        // riempimento lo toglierebbe dalla scala di colore della metrica.
+        const picked = pr.node_id === selectedNode
+        return { color: picked ? '#ffffff' : '#1e293b', fillColor: `rgb(${r},${g},${b})`,
+                 fillOpacity: 0.72, weight: picked ? 3 : 1, opacity: picked ? 1 : 0.9 }
+      },
+      onEachFeature: (f, layer) => {
+        const pr  = f.properties ?? {}
+        const num = v => (Number.isFinite(Number(v)) ? Number(v).toFixed(3) : '–')
+        const row = (k, v) => `<div class="pmar-tt-row"><span>${k}</span><b>${v}</b></div>`
+        layer.bindTooltip(
+          `<div class="pmar-tt-title">${pr.node_label ?? ''}</div>
+           ${row(labels.inStrength,  num(pr.in_strength))}
+           ${row(labels.outStrength, num(pr.out_strength))}
+           ${row(labels.betweenness, num(pr.betweenness))}
+           ${pr.reliable ? '' : `<div class="pmar-tt-warn">${labels.weak}</div>`}`,
+          // Sopra il cursore: sotto ci va il tooltip delle celle del raster, così
+          // con i due layer accesi insieme non si coprono a vicenda.
+          { sticky: true, direction: 'top', offset: [0, -12], className: 'pmar-map-tooltip' }
+        )
+
+        // Il click isola gli archi del poligono. `stopPropagation` evita che
+        // risalga alla mappa, dove SeedDrawer ha il suo gestore di disegno.
+        layer.on('click', (e) => {
+          L.DomEvent.stopPropagation(e)
+          onSelectNode?.(pr.node_id)
+        })
+      },
+    }).addTo(map)
+
+    return () => { layerRef.current?.remove(); layerRef.current = null }
+  }, [data, metric, visible, map, labels, selectedNode, onSelectNode])
+
+  return null
+}
+
+// ── Connectivity network edges layer ──────────────────────────────────────────
+/**
+ * Draws the directed edges produced by PMAR's export_network(), which already bakes
+ * stroke colour and width into each feature's properties.
+ *
+ * With a node selected, only the edges touching it are drawn. Every feature carries
+ * `source`/`target`, the arrowhead polygons included, so one filter thins out the
+ * curve and its arrowhead together.
+ *
+ * The edges live in their own pane above the standard overlay pane. Inside a single
+ * pane the order is whatever was added last, so the polygons — which are re-created
+ * on every metric or selection change — would otherwise end up covering the network
+ * with their 72% fill.
+ */
+const EDGES_PANE = 'connectivityEdges'
+function ConnectivityEdgesLayer({ geojson, visible, selectedNode, direction }) {
+  const map      = useMap()
+  const layerRef = useRef(null)
+
+  useEffect(() => {
+    layerRef.current?.remove()
+    layerRef.current = null
+    if (!visible || !geojson?.features?.length) return
+
+    if (!map.getPane(EDGES_PANE)) {
+      const pane = map.createPane(EDGES_PANE)
+      pane.style.zIndex = 450          // sopra overlayPane (400), sotto i marker (600)
+      // Senza questo il pane intercetterebbe il mouse al posto dei poligoni
+      // sottostanti, e il click che isola gli archi smetterebbe di funzionare.
+      pane.style.pointerEvents = 'none'
+    }
+
+    layerRef.current = L.geoJSON(geojson, {
+      pane: EDGES_PANE,
+      style: f => {
+        const pr = f.properties ?? {}
+        return {
+          color:       pr.stroke ?? '#0f172a',
+          weight:      pr['stroke-width'] ?? 1.5,
+          opacity:     pr['stroke-opacity'] ?? 0.75,
+          fillColor:   pr.fill ?? pr.stroke ?? '#0f172a',
+          fillOpacity: pr['fill-opacity'] ?? 0.75,
+        }
+      },
+      filter: f => {
+        if (selectedNode === null || selectedNode === undefined) return true
+        const { source, target } = f.properties ?? {}
+        // Un auto-anello (source === target) è insieme entrante e uscente,
+        // quindi resta visibile in tutte e tre le modalità.
+        if (direction === 'in')  return target === selectedNode
+        if (direction === 'out') return source === selectedNode
+        return source === selectedNode || target === selectedNode
+      },
+      interactive: false,
+    }).addTo(map)
+
+    return () => { layerRef.current?.remove(); layerRef.current = null }
+  }, [geojson, visible, map, selectedNode, direction])
+
+  return null
+}
+
 // ── PMAR seeding area polygon layer ─────────────────────────────────────────
 function SeedingAreaLayer({ geojson, visible }) {
   const map      = useMap()
@@ -393,6 +532,10 @@ function SeedingAreaLayer({ geojson, visible }) {
         opacity:     0.85,
         dashArray:   '6 4',
       },
+      // Puro contorno dell'area di studio: nulla vi è associato. Lasciandolo
+      // interattivo si prenderebbe l'hover dei poligoni di connettività, perché
+      // compare dopo l'analisi PMAR e finisce quindi sopra di loro nel pane SVG.
+      interactive: false,
     }).addTo(map)
     return () => { layerRef.current?.remove(); layerRef.current = null }
   }, [geojson, visible, map])
@@ -468,6 +611,10 @@ function PmarLayer({ pmarData, visible, passagesLabel }) {
     }
 
     function onMouseMove(e) {
+      // Il raster nascosto non deve lasciare in giro il suo tooltip: senza questo
+      // controllo il primo movimento del mouse lo rimostrerebbe su celle invisibili.
+      if (!visibleRef.current) { tooltip.style.display = 'none'; return }
+
       const { lat, lng } = e.latlng
       const col = Math.floor((lng - raster_lon_min + raster_res / 2) / raster_res)
       const row = Math.floor((lat - raster_lat_min + raster_res / 2) / raster_res)
@@ -487,17 +634,26 @@ function PmarLayer({ pmarData, visible, passagesLabel }) {
             `<br><span>${latC}° N · ${lonC}° E</span>` +
             `<br><span class="pmar-cell-id">ID: ${cellId}</span>`
           tooltip.style.display = 'block'
+
+          // Sotto il cursore: sopra ci va il tooltip dei poligoni di connettività.
+          // Vicino al bordo inferiore della mappa si ribalta sopra, altrimenti
+          // uscirebbe dal riquadro proprio dove serve.
+          const mapH = map.getSize().y
+          const below = e.containerPoint.y + 18
+          const flip  = below + tooltip.offsetHeight > mapH - 8
           tooltip.style.left = (e.containerPoint.x + 14) + 'px'
-          tooltip.style.top  = (e.containerPoint.y - 44) + 'px'
+          tooltip.style.top  = (flip ? e.containerPoint.y - tooltip.offsetHeight - 14 : below) + 'px'
           return
         }
       }
       tooltip.style.display = 'none'
     }
 
+    const onMouseOut = () => { tooltip.style.display = 'none' }
+
     map.on('moveend zoomend resize', draw)
     map.on('mousemove', onMouseMove)
-    map.on('mouseout',  () => { tooltip.style.display = 'none' })
+    map.on('mouseout',  onMouseOut)
     draw()
     canvas.style.display = visibleRef.current ? '' : 'none'
 
@@ -506,6 +662,7 @@ function PmarLayer({ pmarData, visible, passagesLabel }) {
       map.getContainer().removeChild(tooltip)
       map.off('moveend zoomend resize', draw)
       map.off('mousemove', onMouseMove)
+      map.off('mouseout',  onMouseOut)
       canvasRef.current  = null
       tooltipRef.current = null
     }
@@ -519,59 +676,6 @@ function PmarLayer({ pmarData, visible, passagesLabel }) {
   }, [visible])
 
   return null
-}
-
-// ── Seed shape → GeoJSON ──────────────────────────────────────────────────────
-function seedShapeToGeoJSON(shape) {
-  if (!shape) return null
-  if (shape.type === 'circle') {
-    const { lon, lat, radius } = shape
-    const N      = 64
-    const coords = []
-    for (let i = 0; i < N; i++) {
-      const angle = (i / N) * 2 * Math.PI
-      const dLat  = (radius / 111320) * Math.cos(angle)
-      const dLon  = (radius / (111320 * Math.cos(lat * Math.PI / 180))) * Math.sin(angle)
-      coords.push([lon + dLon, lat + dLat])
-    }
-    coords.push(coords[0])
-    return {
-      type: 'FeatureCollection',
-      features: [{
-        type: 'Feature',
-        geometry: { type: 'Polygon', coordinates: [coords] },
-        properties: {},
-      }],
-    }
-  }
-  const { lon_min, lat_min, lon_max, lat_max } = shape
-  return {
-    type: 'FeatureCollection',
-    features: [{
-      type: 'Feature',
-      geometry: {
-        type: 'Polygon',
-        coordinates: [[
-          [lon_min, lat_min], [lon_max, lat_min],
-          [lon_max, lat_max], [lon_min, lat_max],
-          [lon_min, lat_min],
-        ]],
-      },
-      properties: {},
-    }],
-  }
-}
-
-function seedShapeBounds(shape) {
-  if (!shape) return null
-  if (shape.type === 'circle') {
-    const { lon, lat, radius } = shape
-    const dLat = radius / 111320
-    const dLon = radius / (111320 * Math.cos(lat * Math.PI / 180))
-    return { lon_min: lon - dLon, lat_min: lat - dLat, lon_max: lon + dLon, lat_max: lat + dLat }
-  }
-  const { lon_min, lat_min, lon_max, lat_max } = shape
-  return { lon_min, lat_min, lon_max, lat_max }
 }
 
 // ── Histogram instance (one per drawn selection) ─────────────────────────────
@@ -706,6 +810,9 @@ export default function App() {
   const [seedShape,           setSeedShape]           = useState(null)
   const [showSeedShape,       setShowSeedShape]       = useState(true)
   const [t4mspPreviewGeoJSON, setT4mspPreviewGeoJSON] = useState(null)
+  // Area della simulazione scelta nel pannello: mentre è evidenziata, l'area
+  // disegnata resta nascosta, così sulla mappa se ne vede una sola.
+  const [scenarioAreaGeoJSON, setScenarioAreaGeoJSON] = useState(null)
 
   const [simData,     setSimData]     = useState(null)
   const [currentStep, setCurrentStep] = useState(0)
@@ -721,6 +828,18 @@ export default function App() {
   const [pmarLoading,     setPmarLoading]     = useState(false)
   const [pmarJobId,       setPmarJobId]       = useState(null)
   const [pmarStopping,    setPmarStopping]    = useState(false)
+
+  const [connectivityData,     setConnectivityData]     = useState(null)
+  const [connectivityLoading,  setConnectivityLoading]  = useState(false)
+  const [connectivityJobId,    setConnectivityJobId]    = useState(null)
+  const [connectivityStopping, setConnectivityStopping] = useState(false)
+  const [connectivityMetric,   setConnectivityMetric]   = useState('in_strength')
+  const [showConnectivity,     setShowConnectivity]     = useState(true)
+  const [showConnEdges,        setShowConnEdges]        = useState(true)
+  // Poligono selezionato per isolare i suoi archi, e quali archi mostrarne.
+  const [selectedNode,         setSelectedNode]         = useState(null)
+  const [edgeDirection,        setEdgeDirection]        = useState('both')
+  const [showConnMatrix,       setShowConnMatrix]       = useState(false)
   const [pmarStatus,      setPmarStatus]      = useState('')
   const [pmarStatusType,  setPmarStatusType]  = useState('')
   const [pmarErrorMsg,    setPmarErrorMsg]    = useState(null)
@@ -736,8 +855,15 @@ export default function App() {
   const [comparisonAreas,   setComparisonAreas]   = useState([])
   const mapRef = useRef(null)
 
-  const toggleTool = (tool) =>
+  /**
+   * The raster tools arm a drawing interaction on the map, so at most one may be
+   * active. The connectivity matrix arms nothing — it only opens its own window —
+   * so it keeps its own state rather than competing for `activeMapTool`.
+   */
+  const toggleTool = (tool) => {
+    if (tool === 'connectivity') { setShowConnMatrix(v => !v); return }
     setActiveMapTool(prev => prev === tool ? null : tool)
+  }
 
   const [useSource,        setUseSource]        = useState('none')
   const [showOffshoreInstallations, setShowOffshoreInstallations] = useState(true)
@@ -776,9 +902,39 @@ export default function App() {
     setSeedShape(null)
   }
 
-  function handleShapeDone(shape) {
+  /**
+   * Una forma conclusa. Il disegno a poligoni resta armato (`keepDrawing`) per
+   * poterne accumulare più d'uno nella stessa area di seeding.
+   */
+  function handleShapeDone(shape, opts) {
     setSeedShape(shape)
+    if (!opts?.keepDrawing) setDrawMode(null)
+  }
+
+  /**
+   * Evidenzia l'area della simulazione scelta e inquadra la mappa su di essa:
+   * selezionarla è un gesto esplicito, e l'area può stare fuori dalla vista.
+   */
+  function handleScenarioArea(geojson) {
+    setScenarioAreaGeoJSON(geojson)
+    if (!geojson || !mapRef.current) return
+    try {
+      mapRef.current.fitBounds(L.geoJSON(geojson).getBounds(), { padding: [60, 60] })
+    } catch { /* geometria degenere: si lascia la vista com'è */ }
+  }
+
+  /** Fine del disegno a poligoni: esce dalla modalità e tiene l'area. */
+  function handleFinishDraw() {
     setDrawMode(null)
+  }
+
+  /** Toglie l'ultimo poligono chiuso; azzera l'area se era l'unico. */
+  function handleUndoLastPolygon() {
+    setSeedShape(prev => {
+      if (prev?.type !== 'polygon') return prev
+      const rings = prev.rings.slice(0, -1)
+      return rings.length ? { ...prev, rings } : null
+    })
   }
 
   function handleClearSeedShape() {
@@ -820,10 +976,11 @@ export default function App() {
       return
     }
 
+    // OpenDriftProcess accetta solo seeding_type circle|rectangle: per un'area
+    // poligonale si semina nel rettangolo che la contiene.
     const seedParams = seedShape.type === 'circle'
       ? { seeding_type: 'circle', lon: seedShape.lon, lat: seedShape.lat, radius: seedShape.radius }
-      : { seeding_type: 'rectangle', lon_min: seedShape.lon_min, lat_min: seedShape.lat_min,
-          lon_max: seedShape.lon_max, lat_max: seedShape.lat_max }
+      : { seeding_type: 'rectangle', ...seedShapeBounds(seedShape) }
 
     setLoading(true)
     setStatus(t.status.running(t.modelLabels?.[model] ?? model))
@@ -947,6 +1104,65 @@ export default function App() {
     }
   }
 
+  async function handleRunConnectivity(inputs) {
+    setConnectivityLoading(true)
+    setConnectivityData(null)
+    // Gli indici di nodo del run precedente non significano niente su un altro
+    // shapefile: la selezione va azzerata, non traslata.
+    setSelectedNode(null)
+
+    try {
+      const jobId = await executeAsync(Process.CONNECTIVITY, inputs)
+      setConnectivityJobId(jobId)
+
+      const { outcome } = await waitForJob(jobId)
+      if (outcome === JobOutcome.DISMISSED) return
+
+      const raw  = await fetchJobResults(jobId)
+      const data = raw.result ?? raw
+      if (!data.polygons_geojson) throw new Error(t.status.badResponse)
+
+      setConnectivityData(data)
+      setConnectivityMetric('in_strength')
+      setShowConnectivity(true)
+      setShowConnEdges(true)
+      if (data.bounds && mapRef.current)
+        mapRef.current.fitBounds(L.latLngBounds(data.bounds), { padding: [50, 50] })
+
+      notifications.show({
+        title:     t.pmar.analysisReadyTitle,
+        message:   (data.warnings?.length
+                     ? data.warnings[0]
+                     : t.pmar.analysisReadyBody),
+        color:     data.warnings?.length ? 'yellow' : 'green',
+        icon:      <IconCircleCheck size={18} />,
+        autoClose: 20000,
+      })
+
+    } catch (err) {
+      setPmarErrorMsg(describeError(err, t))
+    } finally {
+      setConnectivityLoading(false)
+      setConnectivityJobId(null)
+      setConnectivityStopping(false)
+    }
+  }
+
+  /** Click su un poligono: isola i suoi archi, riclic sullo stesso deseleziona. */
+  function handleSelectNode(nodeId) {
+    setSelectedNode(prev => (prev === nodeId ? null : nodeId))
+    // Senza questo il click su un poligono con gli archi spenti non farebbe
+    // vedere niente, e sembrerebbe che non sia successo nulla.
+    setShowConnEdges(true)
+  }
+
+  const connectivityLabels = useMemo(() => ({
+    inStrength:  t.pmarControls.metricInStrength,
+    outStrength: t.pmarControls.metricOutStrength,
+    betweenness: t.pmarControls.metricBetweenness,
+    weak:        t.pmar.connectivity.weakWarning.replace('{n}', connectivityData?.min_particles ?? 30),
+  }), [t, connectivityData?.min_particles])
+
   const activePmarData = useMemo(
     () => getActivePmarData(pmarData, activeIndicator),
     [pmarData, activeIndicator],
@@ -1020,6 +1236,7 @@ export default function App() {
     setProfileEntries(prev   => { prev.forEach(h => h.layer?.remove()); return [] })
     setThresholdEntries(prev => { prev.forEach(h => h.layer?.remove()); return [] })
     setComparisonAreas(prev  => { prev.forEach(a => a.layer?.remove()); return [] })
+    setShowConnMatrix(false)
   }
 
   async function handleFetchNatura2000() {
@@ -1075,16 +1292,41 @@ export default function App() {
         />
         <SimLayer simData={simData} currentStep={currentStep} />
         <PmarLayer pmarData={activePmarData} visible={showPmarRaster} passagesLabel={t.pmarControls.tooltipPassages} />
-        <SeedingAreaLayer geojson={pmarData?.seeding_geojson ?? null} visible={showSeedShape} />
+        {/* Due sorgenti per la stessa area: quella che accompagna un risultato PMAR
+            e quella della simulazione scelta nel pannello. Quando c'è la seconda è
+            la stessa identica area, quindi se ne disegna una sola. Entrambe
+            rispondono al tasto mostra/nascondi. */}
+        <SeedingAreaLayer
+          geojson={pmarData?.seeding_geojson ?? null}
+          visible={showSeedShape && !scenarioAreaGeoJSON}
+        />
+        <SeedingAreaLayer
+          geojson={scenarioAreaGeoJSON}
+          visible={showSeedShape && !!scenarioAreaGeoJSON}
+        />
         <SeedingAreaLayer geojson={t4mspPreviewGeoJSON} visible={!!t4mspPreviewGeoJSON} />
         <WindFarmsLayer geojson={windfarmsGeoJSON} visible={showWindFarms} />
         <OffshoreInstallationsLayer geojson={offshoreGeoJSON} visible={showOffshoreInstallations} />
         <MspZonesLayer geojson={mspZonesGeoJSON} visible={showMspZones} />
         <Natura2000Layer geojson={natura2000Geojson} visible={showNatura2000} />
+        <ConnectivityEdgesLayer
+          geojson={connectivityData?.edges_geojson ?? null}
+          visible={showConnEdges}
+          selectedNode={selectedNode}
+          direction={edgeDirection}
+        />
+        <ConnectivityLayer
+          data={connectivityData}
+          metric={connectivityMetric}
+          visible={showConnectivity}
+          labels={connectivityLabels}
+          selectedNode={selectedNode}
+          onSelectNode={handleSelectNode}
+        />
         <SeedDrawer
           drawMode={drawMode}
           seedShape={seedShape}
-          showSeedShape={showSeedShape}
+          showSeedShape={showSeedShape && !scenarioAreaGeoJSON}
           onShapeDone={handleShapeDone}
         />
         {pmarData && (
@@ -1164,6 +1406,8 @@ export default function App() {
         pmarStatusType={pmarStatusType}
         drawMode={drawMode}
         onStartDraw={handleStartDraw}
+        onFinishDraw={handleFinishDraw}
+        onUndoLastPolygon={handleUndoLastPolygon}
         onClearSeedShape={handleClearSeedShape}
         seedShape={seedShape}
         activeTool={activeTool}
@@ -1184,6 +1428,13 @@ export default function App() {
         onToggleNatura2000={() => setShowNatura2000(v => !v)}
         hasSeedShape={!!seedShape || !!pmarData}
         onT4mspPreview={setT4mspPreviewGeoJSON}
+        onScenarioArea={handleScenarioArea}
+        onRunConnectivity={handleRunConnectivity}
+        connectivityLoading={connectivityLoading}
+        connectivityStopping={connectivityStopping}
+        onStopConnectivity={async () => {
+          if (connectivityJobId) { setConnectivityStopping(true); await dismissJob(connectivityJobId) }
+        }}
       />
 
       {pmarData && showPmarRaster && (() => {
@@ -1199,7 +1450,7 @@ export default function App() {
         )
       })()}
 
-      {pmarData && (
+      {(pmarData || connectivityData) && (
         <PmarControls
           showPmarRaster={showPmarRaster}
           onTogglePmarRaster={() => setShowPmarRaster(v => !v)}
@@ -1220,6 +1471,20 @@ export default function App() {
           onIndicatorChange={setActiveIndicator}
           hasIndicators={!!(pmarData?.sum_raster_values) || !!(pmarData?.std_raster_values)}
           hasStdRaster={!!(pmarData?.std_raster_values)}
+          hasRaster={!!pmarData}
+          hasSeedingArea={!!(pmarData?.seeding_geojson || scenarioAreaGeoJSON || seedShape)}
+          hasConnectivity={!!connectivityData}
+          connectivityMetric={connectivityMetric}
+          onConnectivityMetricChange={setConnectivityMetric}
+          showConnectivity={showConnectivity}
+          onToggleConnectivity={() => setShowConnectivity(v => !v)}
+          showConnEdges={showConnEdges}
+          onToggleConnEdges={() => setShowConnEdges(v => !v)}
+          selectedNodeLabel={selectedNode === null ? null
+            : (connectivityData?.node_labels?.[selectedNode] ?? String(selectedNode))}
+          edgeDirection={edgeDirection}
+          onEdgeDirectionChange={setEdgeDirection}
+          onClearSelection={() => setSelectedNode(null)}
         />
       )}
 
@@ -1227,16 +1492,26 @@ export default function App() {
         activeMapTool={activeMapTool}
         onSetTool={toggleTool}
         hasRaster={!!pmarData}
+        hasConnectivity={!!connectivityData}
         windowCounts={{
-          histogram:  histograms.length,
-          stats:      statsEntries.length,
-          profile:    profileEntries.length,
-          threshold:  thresholdEntries.length,
-          comparison: comparisonAreas.length,
+          histogram:    histograms.length,
+          stats:        statsEntries.length,
+          profile:      profileEntries.length,
+          threshold:    thresholdEntries.length,
+          comparison:   comparisonAreas.length,
+          connectivity: showConnMatrix ? 1 : 0,
         }}
-        openWindowCount={histograms.length + statsEntries.length + profileEntries.length + thresholdEntries.length + comparisonAreas.length}
+        openWindowCount={histograms.length + statsEntries.length + profileEntries.length + thresholdEntries.length + comparisonAreas.length + (showConnMatrix ? 1 : 0)}
         onCloseAll={handleCloseAll}
       />
+
+      {showConnMatrix && connectivityData && (
+        <PmarConnectivityMatrix
+          data={connectivityData}
+          onClose={() => setShowConnMatrix(false)}
+          stackIndex={0}
+        />
+      )}
 
       {histograms.map((h, i) => (
         <HistogramEntry
