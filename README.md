@@ -72,7 +72,8 @@ DTO-PMAR/
 ├── docker-compose.yml                   # Orchestrates backend, celery-worker, redis, frontend
 ├── pygeoapi-config.yml                  # OGC API config: process registrations, server metadata
 ├── .env.example                         # Template for required environment variables
-└── .env                                 # Runtime secrets: GIT_TOKEN, CMEMS credentials (not committed)
+├── .env                                 # Runtime secrets: CMEMS credentials (not committed)
+└── .git_token                           # GitHub token for the private PMAR repo, build-time only (not committed)
 ```
 
 **Backend:** [pygeoapi](https://pygeoapi.io) (port 5001) exposes all processes via the OGC API - Processes standard. Long-running precomputations are offloaded to a **Celery** worker backed by **Redis**. Shared data utilities (CMEMS dataset definitions, EMODnet WFS fetch functions) live in `data/` and are imported by the process modules.
@@ -96,7 +97,7 @@ No component issues a `fetch` of its own: every call to the backend goes through
 
 - Docker and Docker Compose
 - A `.env` file with runtime secrets (see below)
-- A GitHub personal access token (read access to the private PMAR repo) set as `GIT_TOKEN` in `.env` (used only at image build time)
+- A file named `.git_token` in the project root, containing a GitHub token with `repo` scope (read access to the private PMAR repo). Used only at image build time, and **required**: the build stops without it
 - A free [Copernicus Marine](https://marine.copernicus.eu/) account
 
 ## Getting started
@@ -105,8 +106,12 @@ No component issues a `fetch` of its own: every call to the backend goes through
 git clone <repo>
 cd DTO-PMAR
 
-# Copy .env.example to .env and fill in your credentials (including GIT_TOKEN)
+# Copy .env.example to .env and fill in your Copernicus Marine credentials
 cp .env.example .env
+
+# The PMAR library lives in a private repository: the build reads a GitHub token
+# with repo scope from this file, and stops with an explicit error without it.
+printf '%s' 'ghp_your_token_here' > .git_token
 
 # The compose file joins an external network managed by the reverse proxy in production.
 # Create it once locally, otherwise the stack will not start.
@@ -114,6 +119,11 @@ docker network create traefik_geonode_webgateway
 
 docker compose up --build -d
 ```
+
+`.git_token` is mounted as a Docker **build secret**, so the token is never stored in a layer of
+the image. It is per-machine and git-ignored, which means it has to be created separately on each
+server — copying `.env` over is not enough. An image built without it would look healthy and then
+fail every analysis at runtime with an obscure `ImportError`, so the build refuses to proceed.
 
 The backend runs on port 5001 and the frontend on port 80, both **inside the Docker network only**: in production the Traefik reverse proxy routes traffic to the frontend container, so no port is published to the host. The Celery worker and Redis are started automatically.
 
@@ -136,16 +146,6 @@ cd frontend && npm install && npm run dev   # http://localhost:3000
 ```
 
 `cache/`, `out/`, and `scenarios/` are tracked in git as empty directories (via `.gitkeep`) so Docker can mount them with correct permissions from the first run.
-
-### `.git_token` is required to build the backend
-
-PMAR is installed from a private repository, pinned to an exact commit. The build reads the token
-from a file named `.git_token` in the project root (a GitHub token with `repo` scope), mounted as a
-Docker build secret and never stored in the image. **The build fails with an explicit message if
-the file is missing** — an image built without PMAR would appear healthy and then fail every
-analysis at runtime with an obscure `ImportError`.
-
-The file is per-machine and git-ignored: it has to be created on each server separately from `.env`.
 
 ## OpenDrift process
 
