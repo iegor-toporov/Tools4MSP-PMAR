@@ -174,6 +174,10 @@ Models marked **Vertical** use dynamic CMEMS depth: the seafloor depth (`deptho`
 | `number` | Number of particles (max 10 000) | 100 |
 | `duration_hours` | Simulation duration in hours (max 720) | 24 |
 
+This process has no polygon seeding: unlike precompute, it takes coordinates rather than a
+geometry. An area drawn as polygons is therefore submitted as the **bounding rectangle** that
+contains it.
+
 ### Output
 
 JSON with `times` (ISO timestamps array), `steps` (per-timestep particle positions `[lon, lat]`), and `model` name.
@@ -292,7 +296,7 @@ Runs an OpenDrift simulation, saves the trajectory as `scenarios/custom_<id>.nc`
 
 | Parameter | Description |
 |---|---|
-| `geojson` | GeoJSON string of the seeding area |
+| `geojson` | GeoJSON string of the seeding area: a `FeatureCollection` whose features are the polygons of the area — one when drawing a circle or a rectangle, several when drawing free polygons |
 | `shapefile_b64` | Base64-encoded shapefile ZIP (alternative to GeoJSON) |
 | `t4msp_area_id` | Integer ID of a Tools4MSP domain area (alternative to GeoJSON) |
 | `pressure` | `generic`, `plastic`, `oil`, or `larvae` |
@@ -307,6 +311,11 @@ Runs an OpenDrift simulation, saves the trajectory as `scenarios/custom_<id>.nc`
 | `cmems_margin` | Degrees added beyond the seeding area bbox for CMEMS download (default: 5.0) |
 
 Exactly one of `geojson`, `shapefile_b64`, or `t4msp_area_id` must be provided.
+
+Whichever is used, **every polygon it contains becomes a separate geometry** in the scenario's
+shapefile, and particles are seeded in all of them: by default split in proportion to their area,
+or in equal numbers when `pnum_per_polygon` is set. The scenario metadata records `n_polygons`, so
+the rest of the application knows how many areas the simulation was seeded from.
 
 ### Output
 
@@ -655,7 +664,7 @@ failure, cancellation, and empty overlays.
 
 ### OpenDrift tab
 
-- Interactive seeding: draw a **circle** or **rectangle** on the map
+- Interactive seeding: draw a **circle**, a **rectangle**, or free **polygons** on the map (polygons are sent to this process as their bounding rectangle)
 - Animated particle trajectories with play/pause, time slider, and speed control
 - Stranded particles highlighted in red
 - Toggle seeding area overlay
