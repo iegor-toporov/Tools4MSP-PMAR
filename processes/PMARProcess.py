@@ -567,6 +567,13 @@ class PMARProcessor(BaseProcessor):
                     p_i.grid       = make_grid(res=res, study_area=study_area)
                     if use_weighted:
                         p_i.set_weights(res=res, study_area=study_area, use=use_raster, normalize=True)
+                        # harmonize_use (dentro set_weights) ricampiona il raster 0/1 e
+                        # lascia pesi ~1e-30 a particelle che dovrebbero pesare 0. Le loro
+                        # tracce entrano nel raster con valori minuscoli, il 2° percentile
+                        # (vmin) crolla a 1e-12 e la scala log copre 14 ordini: quasi tutte
+                        # le celle diventano rosso scuro. I pesi veri sono ≥ 1e-2 × max.
+                        w = p_i.ds['weight']
+                        p_i.ds['weight'] = w.where(w >= float(w.max()) * 1e-6, 0)
                     h_i = p_i.get_histogram(
                         res=res,
                         study_area=study_area,
