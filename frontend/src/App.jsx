@@ -13,8 +13,7 @@ import { usePreviewLayer } from './hooks/usePreviewLayer'
 import Panel from './components/Panel'
 import SeedDrawer from './components/SeedDrawer'
 import AnimationControls from './components/AnimationControls'
-import PmarControls from './components/PmarControls'
-import ToolsPanel from './components/ToolsPanel'
+import AnalysesPanel, { MAX_ANALYSES } from './components/AnalysesPanel'
 import { HistogramDrawLayer, PmarHistogramModal, MapRefSetter, ConnectorLine,
          RectSelectionLayer, LineSelectionLayer, computeHistogramFromSnap } from './components/PmarHistogram'
 import { computeStats, PmarStatsModal } from './components/PmarStats'
@@ -138,7 +137,9 @@ function OffshoreInstallationsLayer({ geojson, visible }) {
     layerRef.current = null
     markersRef.current.forEach(m => m.remove())
     markersRef.current = []
-    if (!geojson?.features?.length) return
+    // Nascosto = non disegnato: con la sola trasparenza restava nel DOM, e un
+    // layer ricreato mentre era nascosto ricompariva.
+    if (!visible || !geojson?.features?.length) return
 
     const icon = createPinIcon('#fed7aa', '#ea580c')
 
@@ -172,16 +173,7 @@ function OffshoreInstallationsLayer({ geojson, visible }) {
       layerRef.current?.remove()
       markersRef.current.forEach(m => m.remove())
     }
-  }, [geojson, map])
-
-  useEffect(() => {
-    if (!layerRef.current) return
-    layerRef.current.setStyle({ opacity: visible ? 0.85 : 0, fillOpacity: visible ? 0.25 : 0 })
-    markersRef.current.forEach(m => {
-      const el = m.getElement()
-      if (el) el.style.opacity = visible ? '1' : '0'
-    })
-  }, [visible])
+  }, [geojson, visible, map])
 
   return null
 }
@@ -197,7 +189,9 @@ function WindFarmsLayer({ geojson, visible }) {
     layerRef.current = null
     markersRef.current.forEach(m => m.remove())
     markersRef.current = []
-    if (!geojson?.features?.length) return
+    // Nascosto = non disegnato: con la sola trasparenza restava nel DOM, e un
+    // layer ricreato mentre era nascosto ricompariva.
+    if (!visible || !geojson?.features?.length) return
 
     const icon = createPinIcon('#fef08a', '#ca8a04')
 
@@ -236,19 +230,7 @@ function WindFarmsLayer({ geojson, visible }) {
       layerRef.current?.remove()
       markersRef.current.forEach(m => m.remove())
     }
-  }, [geojson, map])
-
-  useEffect(() => {
-    if (!layerRef.current) return
-    layerRef.current.setStyle({
-      opacity:     visible ? 0.75 : 0,
-      fillOpacity: visible ? 0.18 : 0,
-    })
-    markersRef.current.forEach(m => {
-      const el = m.getElement()
-      if (el) el.style.opacity = visible ? '1' : '0'
-    })
-  }, [visible])
+  }, [geojson, visible, map])
 
   return null
 }
@@ -264,7 +246,9 @@ function MspZonesLayer({ geojson, visible }) {
     layerRef.current = null
     markersRef.current.forEach(m => m.remove())
     markersRef.current = []
-    if (!geojson?.features?.length) return
+    // Nascosto = non disegnato: con la sola trasparenza restava nel DOM, e un
+    // layer ricreato mentre era nascosto ricompariva.
+    if (!visible || !geojson?.features?.length) return
 
     const icon = createPinIcon('#a5f3fc', '#0891b2')
 
@@ -299,16 +283,7 @@ function MspZonesLayer({ geojson, visible }) {
       layerRef.current?.remove()
       markersRef.current.forEach(m => m.remove())
     }
-  }, [geojson, map])
-
-  useEffect(() => {
-    if (!layerRef.current) return
-    layerRef.current.setStyle({ opacity: visible ? 0.85 : 0, fillOpacity: visible ? 0.25 : 0 })
-    markersRef.current.forEach(m => {
-      const el = m.getElement()
-      if (el) el.style.opacity = visible ? '1' : '0'
-    })
-  }, [visible])
+  }, [geojson, visible, map])
 
   return null
 }
@@ -517,7 +492,7 @@ function SeedingAreaLayer({ geojson, visible }) {
 const DIMMED_FILL = 'rgba(148,163,184,0.18)'
 const DIMMED_LINE = '#94a3b8'
 
-function PmarLayer({ pmarData, visible, passagesLabel, classes, highlight }) {
+function PmarLayer({ pmarData, visible, passagesLabel, classes, highlight, interactive = true }) {
   const map          = useMap()
   const canvasRef    = useRef(null)
   const tooltipRef   = useRef(null)
@@ -530,6 +505,9 @@ function PmarLayer({ pmarData, visible, passagesLabel, classes, highlight }) {
   // a ogni clic sulla legenda.
   const highlightRef = useRef(highlight)
   highlightRef.current = highlight
+  // Con più heatmap sulla mappa il tooltip lo apre solo quella dell'analisi attiva.
+  const interactiveRef = useRef(interactive)
+  interactiveRef.current = interactive
   const classesRef   = useRef(classes)
   classesRef.current = classes
 
@@ -598,7 +576,7 @@ function PmarLayer({ pmarData, visible, passagesLabel, classes, highlight }) {
     function onMouseMove(e) {
       // Il raster nascosto non deve lasciare in giro il suo tooltip: senza questo
       // controllo il primo movimento del mouse lo rimostrerebbe su celle invisibili.
-      if (!visibleRef.current) { tooltip.style.display = 'none'; return }
+      if (!visibleRef.current || !interactiveRef.current) { tooltip.style.display = 'none'; return }
 
       const { lat, lng } = e.latlng
       const col = Math.floor((lng - raster_lon_min + raster_res / 2) / raster_res)
@@ -845,6 +823,70 @@ const toggleIn = setter => i => setter(prev => {
   return next
 })
 
+const NO_HIGHLIGHT = new Set()
+
+// Layer EMODnet che un risultato PMAR può portarsi dietro.
+const SOURCE_LAYER_COMPONENTS = [
+  ['windfarms_geojson', WindFarmsLayer],
+  ['offshore_geojson',  OffshoreInstallationsLayer],
+  ['msp_zones_geojson', MspZonesLayer],
+]
+
+/** Tutto ciò che un'analisi PMAR disegna: heatmap, area di semina, layer sorgente. */
+function PmarAnalysisLayers({ analysis, raster, isActive, passagesLabel, classes, highlight }) {
+  const { data, view: v } = analysis
+  return (
+    <>
+      <PmarLayer pmarData={raster} visible={v.visible} interactive={isActive}
+                 passagesLabel={passagesLabel} classes={classes} highlight={highlight} />
+      <SeedingAreaLayer geojson={analysis.areaGeoJSON} visible={v.visible && v.showSeedArea} />
+      {SOURCE_LAYER_COMPONENTS.map(([key, Layer]) => data[key] ? (
+        <Layer key={key} geojson={data[key]} visible={v.visible && v.showSource} />
+      ) : null)}
+    </>
+  )
+}
+
+/** Poligoni e frecce di un'analisi di connettività, con la sua selezione di nodo. */
+function ConnectivityAnalysisLayers({ analysis, labels, onSelectNode, metricClasses,
+                                      metricHighlight, edgeHighlight, visible }) {
+  const { id, data, view: v } = analysis
+  const selectNode = useCallback(nodeId => onSelectNode(id, nodeId), [onSelectNode, id])
+  return (
+    <>
+      <SeedingAreaLayer geojson={analysis.areaGeoJSON} visible={visible && v.showSeedArea} />
+      <ConnectivityEdgesLayer
+        geojson={data.edges_geojson ?? null}
+        visible={visible && v.showEdges}
+        selectedNode={v.selectedNode}
+        direction={v.edgeDirection}
+        highlight={edgeHighlight}
+      />
+      <ConnectivityLayer
+        data={data}
+        metric={v.metric}
+        visible={visible && v.showPolygons}
+        labels={labels}
+        selectedNode={v.selectedNode}
+        onSelectNode={selectNode}
+        classes={metricClasses}
+        highlight={metricHighlight}
+      />
+    </>
+  )
+}
+
+/** Stato di visualizzazione di un'analisi: ciò che prima stava nella barra in basso. */
+const DEFAULT_VIEW = {
+  visible: true, showSeedArea: true,
+  indicator: 'ppi', showSource: true,                       // PMAR
+  metric: 'in_strength', showPolygons: true, showEdges: true, // connettività
+  selectedNode: null, edgeDirection: 'both',
+}
+
+// Margini per fitBounds: a sinistra il pannello principale, a destra quello delle analisi.
+const FIT_PADDING = { paddingTopLeft: [340, 40], paddingBottomRight: [340, 40] }
+
 // ── App ───────────────────────────────────────────────────────────────────────
 export default function App() {
   const { t, lang, toggle } = useLang()
@@ -871,29 +913,33 @@ export default function App() {
   const [status,             setStatus]             = useState('')
   const [statusType,         setStatusType]         = useState('')
 
-  const [pmarData,        setPmarData]        = useState(null)
+  // ── Analisi salvate in sessione (pannello di destra), la più recente in testa ──
+  const [analyses,         setAnalyses]         = useState([])
+  const [activeAnalysisId, setActiveAnalysisId] = useState(null)
+  // Scenario selezionato a sinistra: la sua area non si disegna se un'analisi dello
+  // stesso scenario mostra già la propria (sarebbe la stessa area due volte).
+  const [selectedScenarioId, setSelectedScenarioId] = useState(null)
+  const activeAnalysis = analyses.find(a => a.id === activeAnalysisId) ?? null
+  const activePmar = activeAnalysis?.kind === 'pmar' ? activeAnalysis : null
+  const activeConn = activeAnalysis?.kind === 'connectivity' ? activeAnalysis : null
+  // I nomi di prima, ora derivati dall'analisi attiva: strumenti e legenda li usano così.
+  const pmarData           = activePmar?.data ?? null
+  const activeIndicator    = activePmar?.view.indicator ?? 'ppi'
+  const connectivityData   = activeConn?.data ?? null
+  const connectivityMetric = activeConn?.view.metric ?? 'in_strength'
+
   const [pmarLoading,     setPmarLoading]     = useState(false)
   const [pmarJobId,       setPmarJobId]       = useState(null)
   const [pmarStopping,    setPmarStopping]    = useState(false)
 
-  const [connectivityData,     setConnectivityData]     = useState(null)
   const [connectivityLoading,  setConnectivityLoading]  = useState(false)
   const [connectivityJobId,    setConnectivityJobId]    = useState(null)
   const [connectivityStopping, setConnectivityStopping] = useState(false)
-  const [connectivityMetric,   setConnectivityMetric]   = useState('in_strength')
-  const [showConnectivity,     setShowConnectivity]     = useState(true)
-  const [showConnEdges,        setShowConnEdges]        = useState(true)
-  // Poligono selezionato per isolare i suoi archi, e quali archi mostrarne.
-  const [selectedNode,         setSelectedNode]         = useState(null)
-  const [edgeDirection,        setEdgeDirection]        = useState('both')
-  const [showConnMatrix,       setShowConnMatrix]       = useState(false)
+  // Id dell'analisi di connettività di cui è aperta la matrice (null = chiusa).
+  const [showConnMatrix,       setShowConnMatrix]       = useState(null)
   const [pmarStatus,      setPmarStatus]      = useState('')
   const [pmarStatusType,  setPmarStatusType]  = useState('')
   const [pmarErrorMsg,    setPmarErrorMsg]    = useState(null)
-  const [showPmarRaster,   setShowPmarRaster]   = useState(true)
-  const [showWindFarms,    setShowWindFarms]    = useState(true)
-  const [showMspZones,    setShowMspZones]    = useState(true)
-  const [activeIndicator,  setActiveIndicator]  = useState('ppi')
   const [activeMapTool,     setActiveMapTool]     = useState(null)
   const [histograms,        setHistograms]        = useState([])
   const [statsEntries,      setStatsEntries]      = useState([])
@@ -908,12 +954,11 @@ export default function App() {
    * so it keeps its own state rather than competing for `activeMapTool`.
    */
   const toggleTool = (tool) => {
-    if (tool === 'connectivity') { setShowConnMatrix(v => !v); return }
+    if (tool === 'connectivity') { setShowConnMatrix(v => (v ? null : activeConn?.id ?? null)); return }
     setActiveMapTool(prev => prev === tool ? null : tool)
   }
 
   const [useSource,        setUseSource]        = useState('none')
-  const [showOffshoreInstallations, setShowOffshoreInstallations] = useState(true)
 
   const [natura2000Geojson, setNatura2000Geojson] = useState(null)
   const [showNatura2000,    setShowNatura2000]    = useState(true)
@@ -951,23 +996,18 @@ export default function App() {
     enabled: useSource === 'msp_zones', bounds: previewBounds,
   })
 
-  // Sulla mappa c'è solo il layer della sorgente selezionata: cambiando bottone il
-  // precedente sparisce, anche se era arrivato col risultato di un'analisi. Quello
-  // del risultato fa da riserva finché la preview non è pronta.
-  const windfarmsGeoJSON = useSource === 'windfarms'
-    ? (windfarms.data ?? pmarData?.windfarms_geojson ?? null) : null
-  const offshoreGeoJSON  = useSource === 'offshore_installations'
-    ? (offshore.data  ?? pmarData?.offshore_geojson  ?? null) : null
-  const mspZonesGeoJSON  = useSource === 'msp_zones'
-    ? (mspZones.data  ?? pmarData?.msp_zones_geojson ?? null) : null
-
-  /** Scegliere una sorgente la mostra, anche se il suo layer era stato nascosto. */
-  function handleUseSourceChange(source) {
-    setUseSource(source)
-    if (source === 'windfarms')              setShowWindFarms(true)
-    if (source === 'offshore_installations') setShowOffshoreInstallations(true)
-    if (source === 'msp_zones')              setShowMspZones(true)
-  }
+  // Preview della sorgente scelta a sinistra, prima di lanciare: cambiando bottone
+  // la precedente sparisce. Il layer arrivato con un risultato vive nella sua scheda.
+  // Come per l'area di semina: se un'analisi di questo scenario con questa sorgente
+  // esiste già (anche nascosta), il layer lo comanda lo switch della sua scheda;
+  // altrimenti spegnerlo lascerebbe accesa questa copia identica.
+  const sourceCoveredByAnalysis = analyses.some(a =>
+    a.kind === 'pmar' && a.info?.scenario?.id === selectedScenarioId
+    && a.info?.params?.use_source === useSource)
+  const preview = data => (sourceCoveredByAnalysis ? null : data)
+  const windfarmsGeoJSON = useSource === 'windfarms'              ? preview(windfarms.data) : null
+  const offshoreGeoJSON  = useSource === 'offshore_installations' ? preview(offshore.data)  : null
+  const mspZonesGeoJSON  = useSource === 'msp_zones'              ? preview(mspZones.data)  : null
 
   const timerRef = useRef(null)
 
@@ -994,11 +1034,12 @@ export default function App() {
    * Evidenzia l'area della simulazione scelta e inquadra la mappa su di essa:
    * selezionarla è un gesto esplicito, e l'area può stare fuori dalla vista.
    */
-  function handleScenarioArea(geojson) {
+  function handleScenarioArea(geojson, scenarioId = null) {
     setScenarioAreaGeoJSON(geojson)
+    setSelectedScenarioId(geojson ? scenarioId : null)
     if (!geojson || !mapRef.current) return
     try {
-      mapRef.current.fitBounds(L.geoJSON(geojson).getBounds(), { padding: [60, 60] })
+      mapRef.current.fitBounds(L.geoJSON(geojson).getBounds(), FIT_PADDING)
     } catch { /* geometria degenere: si lascia la vista com'è */ }
   }
 
@@ -1098,7 +1139,8 @@ export default function App() {
     }
   }
 
-  async function handleRunPmar({ scenario_id, pressure, start_time, duration_days, pnum, res, margin, time_step_hours, shapefile_b64, geotiff_b64 }) {
+  async function handleRunPmar({ scenario_id, pressure, start_time, duration_days, pnum, res, margin, time_step_hours, shapefile_b64, geotiff_b64, title, info }) {
+    if (analyses.length >= MAX_ANALYSES) return
     let inputs
 
     if (scenario_id) {
@@ -1127,7 +1169,6 @@ export default function App() {
     }
 
     setPmarLoading(true)
-    setPmarData(null)
     setPmarStatus(t.pmar.btnRunning)
     setPmarStatusType('')
 
@@ -1144,17 +1185,16 @@ export default function App() {
 
       if (!data.raster_values || !data.bounds) throw new Error(t.status.badResponse)
 
-      const label = lang === 'it' ? data.label_it : data.label_en
-      setPmarData(data)
+      addAnalysis({
+        kind: 'pmar',
+        title: title || (lang === 'it' ? data.label_it : data.label_en) || 'PMAR',
+        info, data, areaGeoJSON: data.seeding_geojson ?? null,
+      })
       if (data.bounds && mapRef.current)
-        mapRef.current.fitBounds(L.latLngBounds(data.bounds), { padding: [50, 50] })
-      setActiveIndicator('ppi')
+        mapRef.current.fitBounds(L.latLngBounds(data.bounds), FIT_PADDING)
+      // Le finestre degli strumenti già aperte restano: sono istantanee dell'analisi
+      // su cui sono state fatte, e "Chiudi tutto" le toglie.
       setActiveMapTool(null)
-      setHistograms(prev        => { prev.forEach(h => h.layer?.remove()); return [] })
-      setStatsEntries(prev      => { prev.forEach(h => h.layer?.remove()); return [] })
-      setProfileEntries(prev    => { prev.forEach(h => h.layer?.remove()); return [] })
-      setThresholdEntries(prev  => { prev.forEach(h => h.layer?.remove()); return [] })
-      setComparisonAreas(prev => { prev.forEach(a => a.layer?.remove()); return [] })
       setPmarStatus('')
       setPmarStatusType('')
       notifications.show({
@@ -1181,12 +1221,13 @@ export default function App() {
     }
   }
 
-  async function handleRunConnectivity(inputs) {
+  async function handleRunConnectivity(inputs, { title, info } = {}) {
+    if (analyses.length >= MAX_ANALYSES) return
+    // Il backend non restituisce l'area di semina: si prende quella dello scenario
+    // selezionato, adesso, perché durante l'attesa se ne può scegliere un altro.
+    const areaAtStart = selectedScenarioId && selectedScenarioId === info?.scenario?.id
+      ? scenarioAreaGeoJSON : null
     setConnectivityLoading(true)
-    setConnectivityData(null)
-    // Gli indici di nodo del run precedente non significano niente su un altro
-    // shapefile: la selezione va azzerata, non traslata.
-    setSelectedNode(null)
 
     try {
       const jobId = await executeAsync(Process.CONNECTIVITY, inputs)
@@ -1199,12 +1240,15 @@ export default function App() {
       const data = raw.result ?? raw
       if (!data.polygons_geojson) throw new Error(t.status.badResponse)
 
-      setConnectivityData(data)
-      setConnectivityMetric('in_strength')
-      setShowConnectivity(true)
-      setShowConnEdges(true)
+      // Ogni analisi ha la sua selezione di nodo: gli indici di un'altra rete non
+      // significherebbero niente qui.
+      addAnalysis({
+        kind: 'connectivity',
+        title: title || (lang === 'it' ? data.label_it : data.label_en) || 'Connectivity',
+        info, data, areaGeoJSON: areaAtStart,
+      })
       if (data.bounds && mapRef.current)
-        mapRef.current.fitBounds(L.latLngBounds(data.bounds), { padding: [50, 50] })
+        mapRef.current.fitBounds(L.latLngBounds(data.bounds), FIT_PADDING)
 
       const warnings = (data.warnings ?? []).map(w => describeWarning(w, t)).filter(Boolean)
       notifications.show({
@@ -1230,12 +1274,43 @@ export default function App() {
     }
   }
 
+  // ── Gestione delle analisi salvate ──────────────────────────────────────
+  /**
+   * Ogni analisi ha la propria area di semina (`areaGeoJSON`), comandata dallo switch
+   * della sua scheda: l'evidenziazione della selezione a sinistra è solo un'anteprima.
+   */
+  function addAnalysis({ kind, title, info, data, areaGeoJSON = null }) {
+    const id = `an-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+    setAnalyses(prev => (prev.length >= MAX_ANALYSES ? prev
+      : [{ id, kind, title, info, data, areaGeoJSON, createdAt: Date.now(),
+           view: { ...DEFAULT_VIEW } }, ...prev]))
+    setActiveAnalysisId(id)
+  }
+
+  /** Aggiorna la vista di un'analisi; `patch` è un oggetto o una funzione della vista. */
+  function updateView(id, patch) {
+    setAnalyses(prev => prev.map(a => (a.id !== id ? a
+      : { ...a, view: { ...a.view, ...(typeof patch === 'function' ? patch(a.view) : patch) } })))
+  }
+
+  function renameAnalysis(id, title) {
+    setAnalyses(prev => prev.map(a => (a.id === id ? { ...a, title } : a)))
+  }
+
+  /** Eliminando l'attiva diventa attiva la più recente rimasta. */
+  function deleteAnalysis(id) {
+    const rest = analyses.filter(a => a.id !== id)
+    setAnalyses(rest)
+    if (id === activeAnalysisId) setActiveAnalysisId(rest[0]?.id ?? null)
+    if (showConnMatrix === id) setShowConnMatrix(null)
+  }
+
   /** Click su un poligono: isola i suoi archi, riclic sullo stesso deseleziona. */
-  function handleSelectNode(nodeId) {
-    setSelectedNode(prev => (prev === nodeId ? null : nodeId))
-    // Senza questo il click su un poligono con gli archi spenti non farebbe
-    // vedere niente, e sembrerebbe che non sia successo nulla.
-    setShowConnEdges(true)
+  function handleSelectNode(analysisId, nodeId) {
+    setActiveAnalysisId(analysisId)
+    // Riaccendere le frecce: con le frecce spente il click non farebbe vedere niente.
+    updateView(analysisId, v => ({ selectedNode: v.selectedNode === nodeId ? null : nodeId,
+                                   showEdges: true }))
   }
 
   const connectivityLabels = useMemo(() => ({
@@ -1245,15 +1320,23 @@ export default function App() {
     weak:        t.pmar.connectivity.weakWarning.replace('{n}', connectivityData?.min_particles ?? 30),
   }), [t, connectivityData?.min_particles])
 
+  // Raster dell'indicatore scelto, calcolato una volta per analisi e indicatore: un
+  // oggetto nuovo a ogni render farebbe ricreare il canvas di PmarLayer.
+  const rasterCache = useRef(new WeakMap())
+  const rasterOf = useCallback((data, indicator) => {
+    let byIndicator = rasterCache.current.get(data)
+    if (!byIndicator) { byIndicator = new Map(); rasterCache.current.set(data, byIndicator) }
+    if (!byIndicator.has(indicator)) byIndicator.set(indicator, getActivePmarData(data, indicator))
+    return byIndicator.get(indicator)
+  }, [])
   const activePmarData = useMemo(
-    () => getActivePmarData(pmarData, activeIndicator),
-    [pmarData, activeIndicator],
+    () => (pmarData ? rasterOf(pmarData, activeIndicator) : null),
+    [pmarData, activeIndicator, rasterOf],
   )
 
   // ── Legenda interattiva: classi, conteggi e classi accese per ogni layer ──
-  // Pannello strumenti: chiuso all'avvio; la sua altezza limita quella della legenda.
+  // Strumenti di analisi (in cima al pannello di destra): chiusi all'avvio.
   const [toolsExpanded, setToolsExpanded] = useState(false)
-  const [toolsBottom,   setToolsBottom]   = useState(60)
 
   const [ppiHighlight,    setPpiHighlight]    = useState(() => new Set())
   const [metricHighlight, setMetricHighlight] = useState(() => new Set())
@@ -1276,7 +1359,7 @@ export default function App() {
   const legendSections = useMemo(() => {
     const out = []
     const L = t.legend
-    if (pmarData && showPmarRaster && ppiClasses) {
+    if (pmarData && activePmar.view.visible && ppiClasses) {
       const counts = countByClass(activePmarData.raster_values.flat(), ppiClasses)
       const ind = INDICATOR_LABEL_KEYS[activeIndicator]
       out.push({
@@ -1288,7 +1371,7 @@ export default function App() {
         selected: ppiHighlight, onToggle: toggleIn(setPpiHighlight), onReset: () => setPpiHighlight(new Set()),
       })
     }
-    if (connectivityData && showConnectivity && metricClasses) {
+    if (connectivityData && activeConn.view.visible && activeConn.view.showPolygons && metricClasses) {
       const feats = connectivityData.polygons_geojson?.features ?? []
       const reliable = feats.filter(f => f.properties?.reliable)
       const counts = countByClass(reliable.map(f => f.properties[connectivityMetric]), metricClasses)
@@ -1305,7 +1388,7 @@ export default function App() {
       })
     }
     const edgeFeats = connectivityData?.edges_geojson?.features ?? []
-    if (connectivityData && showConnEdges && edgeFeats.length) {
+    if (connectivityData && activeConn.view.visible && activeConn.view.showEdges && edgeFeats.length) {
       // Solo le curve: ogni connessione ha anche una punta di freccia, che non va contata.
       const ps = edgeFeats.filter(f => f.geometry?.type === 'LineString').map(f => f.properties?.p)
       const counts = countByClass(ps, PROBABILITY_BANDS)
@@ -1319,9 +1402,9 @@ export default function App() {
       })
     }
     return out
-  }, [t, pmarData, showPmarRaster, ppiClasses, activePmarData, activeIndicator, ppiHighlight,
-      connectivityData, showConnectivity, metricClasses, connectivityMetric, metricHighlight,
-      showConnEdges, edgeHighlight])
+  }, [t, pmarData, activePmar, ppiClasses, activePmarData, activeIndicator, ppiHighlight,
+      connectivityData, activeConn, metricClasses, connectivityMetric, metricHighlight,
+      edgeHighlight])
 
   function handleStatsResult(snap, layer, rd) {
     if (!rd) { layer?.remove(); return }
@@ -1391,7 +1474,7 @@ export default function App() {
     setProfileEntries(prev   => { prev.forEach(h => h.layer?.remove()); return [] })
     setThresholdEntries(prev => { prev.forEach(h => h.layer?.remove()); return [] })
     setComparisonAreas(prev  => { prev.forEach(a => a.layer?.remove()); return [] })
-    setShowConnMatrix(false)
+    setShowConnMatrix(null)
   }
 
   async function handleFetchNatura2000() {
@@ -1414,8 +1497,9 @@ export default function App() {
     }
   }
 
-  function handleDownloadPmar() {
-    const ind        = activeIndicator || 'ppi'
+  function handleDownloadPmar(an) {
+    const pmarData   = an.data
+    const ind        = an.view.indicator || 'ppi'
     const geotiffKey = ind === 'ppi' ? 'geotiff_b64' : `${ind}_geotiff_b64`
     if (!pmarData?.[geotiffKey]) return
     const bytes = atob(pmarData[geotiffKey])
@@ -1446,42 +1530,54 @@ export default function App() {
           maxZoom={19}
         />
         <SimLayer simData={simData} currentStep={currentStep} />
-        <PmarLayer pmarData={activePmarData} visible={showPmarRaster} passagesLabel={t.pmarControls.tooltipPassages}
-                   classes={ppiClasses} highlight={ppiHighlight} />
-        {/* Due sorgenti per la stessa area: quella che accompagna un risultato PMAR
-            e quella della simulazione scelta nel pannello. Quando c'è la seconda è
-            la stessa identica area, quindi se ne disegna una sola. Entrambe
-            rispondono al tasto mostra/nascondi. */}
-        <SeedingAreaLayer
-          geojson={pmarData?.seeding_geojson ?? null}
-          visible={showSeedShape && !scenarioAreaGeoJSON}
-        />
+        {/* ── Analisi PMAR: una heatmap (più area e layer sorgente) per analisi.
+             Dall'ultima alla più recente, così la più recente sta sopra. ── */}
+        {[...analyses].reverse().filter(a => a.kind === 'pmar').map(a => {
+          const isActive = a.id === activeAnalysisId
+          const v = a.view
+          return (
+            <PmarAnalysisLayers
+              key={a.id}
+              analysis={a}
+              raster={rasterOf(a.data, v.indicator)}
+              isActive={isActive}
+              passagesLabel={t.pmarControls.tooltipPassages}
+              classes={isActive ? ppiClasses : null}
+              highlight={isActive ? ppiHighlight : NO_HIGHLIGHT}
+            />
+          )
+        })}
+        {/* Area dello scenario scelto a sinistra: è un'anteprima. Appena esiste
+            un'analisi di quello scenario (anche nascosta) l'area la comanda lo switch
+            della scheda; altrimenti spegnerlo farebbe ricomparire questa, identica. */}
         <SeedingAreaLayer
           geojson={scenarioAreaGeoJSON}
-          visible={showSeedShape && !!scenarioAreaGeoJSON}
+          visible={showSeedShape && !!scenarioAreaGeoJSON && !analyses.some(a =>
+            a.info?.scenario?.id && a.info.scenario.id === selectedScenarioId)}
         />
         <SeedingAreaLayer geojson={t4mspPreviewGeoJSON} visible={!!t4mspPreviewGeoJSON} />
-        <WindFarmsLayer geojson={windfarmsGeoJSON} visible={showWindFarms} />
-        <OffshoreInstallationsLayer geojson={offshoreGeoJSON} visible={showOffshoreInstallations} />
-        <MspZonesLayer geojson={mspZonesGeoJSON} visible={showMspZones} />
+        {/* Preview della sorgente scelta a sinistra, prima di lanciare. */}
+        <WindFarmsLayer geojson={windfarmsGeoJSON} visible />
+        <OffshoreInstallationsLayer geojson={offshoreGeoJSON} visible />
+        <MspZonesLayer geojson={mspZonesGeoJSON} visible />
         <Natura2000Layer geojson={natura2000Geojson} visible={showNatura2000} />
-        <ConnectivityEdgesLayer
-          geojson={connectivityData?.edges_geojson ?? null}
-          visible={showConnEdges}
-          selectedNode={selectedNode}
-          direction={edgeDirection}
-          highlight={edgeHighlight}
-        />
-        <ConnectivityLayer
-          data={connectivityData}
-          metric={connectivityMetric}
-          visible={showConnectivity}
-          labels={connectivityLabels}
-          selectedNode={selectedNode}
-          onSelectNode={handleSelectNode}
-          classes={metricClasses}
-          highlight={metricHighlight}
-        />
+        {/* ── Analisi di connettività ── */}
+        {[...analyses].reverse().filter(a => a.kind === 'connectivity').map(a => {
+          const isActive = a.id === activeAnalysisId
+          const v = a.view
+          return (
+            <ConnectivityAnalysisLayers
+              key={a.id}
+              analysis={a}
+              labels={connectivityLabels}
+              onSelectNode={handleSelectNode}
+              metricClasses={isActive ? metricClasses : null}
+              metricHighlight={isActive ? metricHighlight : NO_HIGHLIGHT}
+              edgeHighlight={isActive ? edgeHighlight : NO_HIGHLIGHT}
+              visible={v.visible}
+            />
+          )
+        })}
         <SeedDrawer
           drawMode={drawMode}
           seedShape={seedShape}
@@ -1563,7 +1659,7 @@ export default function App() {
         activeTool={activeTool}
         onToolChange={handleToolChange}
         useSource={useSource}
-        onUseSourceChange={handleUseSourceChange}
+        onUseSourceChange={setUseSource}
         onAnalysisMarginChange={setAnalysisMargin}
         windfarmsLoading={windfarms.loading}
         windfarmsEmpty={windfarms.isEmpty}
@@ -1581,6 +1677,7 @@ export default function App() {
         onT4mspPreview={setT4mspPreviewGeoJSON}
         onScenarioArea={handleScenarioArea}
         onRunConnectivity={handleRunConnectivity}
+        analysesFull={analyses.length >= MAX_ANALYSES}
         connectivityLoading={connectivityLoading}
         connectivityStopping={connectivityStopping}
         onStopConnectivity={async () => {
@@ -1588,75 +1685,48 @@ export default function App() {
         }}
       />
 
-      {/* Dal fondo della finestra (20 px) fino a 12 px sotto il pannello strumenti. */}
-      <MapLegend sections={legendSections} labels={t.legend}
-                 maxHeight={`calc(100vh - ${Math.round(toolsBottom) + 32}px)`} />
+      <MapLegend sections={legendSections} labels={t.legend} />
 
-      {(pmarData || connectivityData) && (
-        <PmarControls
-          showPmarRaster={showPmarRaster}
-          onTogglePmarRaster={() => setShowPmarRaster(v => !v)}
-          showSeedShape={showSeedShape}
-          onToggleSeedShape={() => setShowSeedShape(v => !v)}
-          showWindFarms={showWindFarms}
-          onToggleWindFarms={() => setShowWindFarms(v => !v)}
-          hasWindFarms={!!windfarmsGeoJSON}
-          showOffshoreInstallations={showOffshoreInstallations}
-          onToggleOffshoreInstallations={() => setShowOffshoreInstallations(v => !v)}
-          hasOffshoreInstallations={!!offshoreGeoJSON}
-          showMspZones={showMspZones}
-          onToggleMspZones={() => setShowMspZones(v => !v)}
-          hasMspZones={!!mspZonesGeoJSON}
-          onDownloadPmar={handleDownloadPmar}
-          elevated={!!simData}
-          activeIndicator={activeIndicator}
-          onIndicatorChange={setActiveIndicator}
-          hasIndicators={!!(pmarData?.sum_raster_values) || !!(pmarData?.std_raster_values)}
-          hasStdRaster={!!(pmarData?.std_raster_values)}
-          hasRaster={!!pmarData}
-          hasSeedingArea={!!(pmarData?.seeding_geojson || scenarioAreaGeoJSON || seedShape)}
-          hasConnectivity={!!connectivityData}
-          connectivityMetric={connectivityMetric}
-          onConnectivityMetricChange={setConnectivityMetric}
-          showConnectivity={showConnectivity}
-          onToggleConnectivity={() => setShowConnectivity(v => !v)}
-          showConnEdges={showConnEdges}
-          onToggleConnEdges={() => setShowConnEdges(v => !v)}
-          selectedNodeLabel={selectedNode === null ? null
-            : (connectivityData?.node_labels?.[selectedNode] ?? String(selectedNode))}
-          edgeDirection={edgeDirection}
-          onEdgeDirectionChange={setEdgeDirection}
-          onClearSelection={() => setSelectedNode(null)}
+      {analyses.length > 0 && (
+        <AnalysesPanel
+          analyses={analyses}
+          activeId={activeAnalysisId}
+          onActivate={setActiveAnalysisId}
+          onDelete={deleteAnalysis}
+          onRename={renameAnalysis}
+          onUpdateView={updateView}
+          onDownload={handleDownloadPmar}
+          tools={{
+            activeMapTool,
+            onSetTool: toggleTool,
+            windowCounts: {
+              histogram:    histograms.length,
+              stats:        statsEntries.length,
+              profile:      profileEntries.length,
+              threshold:    thresholdEntries.length,
+              comparison:   comparisonAreas.length,
+              connectivity: showConnMatrix ? 1 : 0,
+            },
+            openWindowCount: histograms.length + statsEntries.length + profileEntries.length
+              + thresholdEntries.length + comparisonAreas.length + (showConnMatrix ? 1 : 0),
+            onCloseAll: handleCloseAll,
+            expanded: toolsExpanded,
+            onToggleExpanded: () => setToolsExpanded(v => !v),
+          }}
         />
       )}
 
-      <ToolsPanel
-        activeMapTool={activeMapTool}
-        onSetTool={toggleTool}
-        hasRaster={!!pmarData}
-        hasConnectivity={!!connectivityData}
-        windowCounts={{
-          histogram:    histograms.length,
-          stats:        statsEntries.length,
-          profile:      profileEntries.length,
-          threshold:    thresholdEntries.length,
-          comparison:   comparisonAreas.length,
-          connectivity: showConnMatrix ? 1 : 0,
-        }}
-        openWindowCount={histograms.length + statsEntries.length + profileEntries.length + thresholdEntries.length + comparisonAreas.length + (showConnMatrix ? 1 : 0)}
-        onCloseAll={handleCloseAll}
-        expanded={toolsExpanded}
-        onToggleExpanded={() => setToolsExpanded(v => !v)}
-        onBottomChange={setToolsBottom}
-      />
-
-      {showConnMatrix && connectivityData && (
-        <PmarConnectivityMatrix
-          data={connectivityData}
-          onClose={() => setShowConnMatrix(false)}
-          stackIndex={0}
-        />
-      )}
+      {(() => {
+        // La matrice è quella dell'analisi attiva quando è stata aperta.
+        const an = showConnMatrix && analyses.find(a => a.id === showConnMatrix)
+        return an ? (
+          <PmarConnectivityMatrix
+            data={an.data}
+            onClose={() => setShowConnMatrix(null)}
+            stackIndex={0}
+          />
+        ) : null
+      })()}
 
       {histograms.map((h, i) => (
         <HistogramEntry

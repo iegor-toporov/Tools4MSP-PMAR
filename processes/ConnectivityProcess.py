@@ -37,7 +37,7 @@ SIMPLIFY_TOLERANCE = 0.005
 
 # Risoluzioni ammesse per la griglia automatica (gradi). Una griglia fine su un
 # bacino intero produrrebbe migliaia di celle e una matrice n² ingestibile.
-GRID_RESOLUTIONS = (1.0, 0.5, 0.25, 0.1)
+GRID_RESOLUTIONS = (1.0, 0.5)
 
 # Tetto alle feature della rete di archi. Oltre, si tengono gli archi con
 # probabilità più alta: la matrice resta completa, si alleggerisce solo il disegno.
@@ -518,7 +518,9 @@ class ConnectivityProcessor(BaseProcessor):
                 ]
 
             released = (released / len(nc_list)).round().astype(int)
-            matrix = np.asarray(cm_mean.todense(), dtype=float).round(4)
+            # 6 decimali: a 4 le probabilità sotto 5e-5 diventerebbero 0 e sparirebbero
+            # dagli export sparsi (elenco di archi, Matrix Market) del frontend.
+            matrix = np.asarray(cm_mean.todense(), dtype=float).round(6)
 
             # Il GeoJSON deve portarsi dietro le properties: semplificare con
             # gdf.simplify() restituirebbe una GeoSeries e le perderebbe.

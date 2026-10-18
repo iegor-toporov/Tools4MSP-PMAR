@@ -50,6 +50,7 @@ export default function Panel({
   onT4mspPreview,
   onScenarioArea, onAnalysisMarginChange,
   onRunConnectivity, connectivityLoading, connectivityStopping, onStopConnectivity,
+  analysesFull,
 }) {
   const { t } = useLang()
   // Nodo della barra di azioni fissa: PmarPanel ci disegna i bottoni di avvio.
@@ -314,6 +315,7 @@ export default function Panel({
               connectivityStopping={connectivityStopping}
               onStopConnectivity={onStopConnectivity}
               actionsTarget={actionsEl}
+              analysesFull={analysesFull}
             />
           </ScrollArea>
           <Box ref={setActionsEl} className="pmar-actions" />

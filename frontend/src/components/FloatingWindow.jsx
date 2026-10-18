@@ -32,8 +32,10 @@ export const FloatingWindow = forwardRef(function FloatingWindow(
     if (!el) return
     const { width: elW, height: elH } = el.getBoundingClientRect()
     const { innerWidth: vw, innerHeight: vh } = window
-    el.style.top  = `${vh - 68 - stackIndex * 24 - elH}px`
-    el.style.left = `${vw - 16 - stackIndex * 16 - elW}px`
+    // In basso, a sinistra del pannello delle analisi (16 + 310 + 16 px dal bordo
+    // destro): sopra di esso ne coprirebbe i comandi.
+    el.style.top  = `${Math.max(16, vh - 20 - stackIndex * 24 - elH)}px`
+    el.style.left = `${Math.max(16, vw - 342 - stackIndex * 16 - elW)}px`
   }, [stackIndex]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (

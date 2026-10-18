@@ -272,7 +272,7 @@ precomputed trajectories.
 | Parameter | Options | Default |
 |---|---|---|
 | Source layer | `Uniform`, `Wind farms`, `Offshore installations`, `MSP aquaculture zones`, `Custom GeoTIFF` | `Uniform` |
-| Grid resolution | 0.001°, 0.01°, 0.05°, 0.1°, 0.2°, 0.5°, 1.0° | 0.1° |
+| Grid resolution | 0.1°, 0.05° | 0.1° |
 | Study area margin | 0–20° | 1° |
 
 Running the analysis produces a particle density heatmap overlaid on the map.
@@ -285,7 +285,7 @@ The nodes of the network come from one of two sources:
 | Source | How the nodes are defined |
 |---|---|
 | Shapefile | A ZIP of polygons. An attribute column can be used to label the nodes. |
-| Grid | A regular grid of **ocean** cells over a bounding box; land cells are excluded automatically. Resolution 1°, 0.5°, 0.25° or 0.1°; the box defaults to the scenario's own seeding area and can be narrowed by hand. |
+| Grid | A regular grid of **ocean** cells over a bounding box; land cells are excluded automatically. Resolution 1° or 0.5°; the box defaults to the scenario's own seeding area and can be narrowed by hand. |
 
 | Parameter | Options | Default |
 |---|---|---|
@@ -300,8 +300,19 @@ top of them. Polygons holding fewer than 30 particles at t=0 are drawn grey and 
 coloured — their row is not statistically meaningful — and the run reports how many there were.
 
 Clicking a polygon isolates its own connections, with a toggle for incoming / outgoing / both;
-clicking it again restores the whole network. The *Connectivity* button in the tools panel opens
-the full matrix in a floating window, with a TSV download at full precision.
+clicking it again restores the whole network. The *Connectivity matrix* tool opens the full
+matrix in a floating window: cells show the probability (0–1) with two decimals, and a non-zero
+value below 0.005 shows `<0.01` rather than `0.00` (hover a cell for the exact value). Three
+downloads, all at the backend's 6-decimal precision:
+
+| Button | Format | Contents |
+|---|---|---|
+| Dense TSV | n×n table | Every cell, zeros included; rows = origin, columns = destination |
+| Edges CSV | `source_id, source_label, target_id, target_label, p` | Only the non-zero pairs: the network's edge list (Excel, pandas, R, Gephi, networkx) |
+| .mtx | Matrix Market, coordinate | Only the non-zero pairs, 1-based; node labels in a comment. Read with `scipy.io.mmread`, R `Matrix::readMM`, MATLAB — the format PMAR itself writes with `mmwrite` |
+
+A connectivity matrix is mostly zeros (distant nodes exchange no particles), so the two sparse
+formats grow with the number of links rather than with n².
 
 ## Precompute process
 
@@ -407,7 +418,7 @@ Runs PMAR density analysis on a precomputed scenario trajectory.
 | Parameter | Description | Default |
 |---|---|---|
 | `scenario_id` | ID of a precomputed scenario (`custom_<id>`) | — |
-| `res` | Grid resolution in degrees | 0.1 |
+| `res` | Grid resolution in degrees: 0.1 or 0.05 (other values are refused) | 0.1 |
 | `margin` | Degrees added beyond the seeding bbox to define the study area | 1.0 |
 | `use_source` | Weighting layer: `none`, `windfarms`, `offshore_installations`, `msp_zones`, `geotiff` | `none` |
 | `geotiff_b64` | Base64-encoded GeoTIFF for custom weighting (when `use_source=geotiff`) | — |
@@ -506,7 +517,7 @@ output it packages for the map.
 | `scenario_id` | Precomputed scenario to read trajectories from (required) |
 | `shapefile_b64` | Base64-encoded ZIP of the polygons used as network nodes |
 | `geojson` | Polygons as GeoJSON (alternative to the shapefile) |
-| `grid_res` | Builds the nodes as a regular grid of ocean cells instead: 1.0, 0.5, 0.25 or 0.1 degrees |
+| `grid_res` | Builds the nodes as a regular grid of ocean cells instead: 1.0 or 0.5 degrees |
 | `bbox` | `[lon_min, lat_min, lon_max, lat_max]` for the grid; defaults to the scenario's seeding area |
 | `mode` | `transit` (default) or `transition` |
 | `t_days` | Time horizon in days; defaults to the scenario duration |
@@ -722,22 +733,30 @@ Two sub-tabs, **Sources** and **Connectivity**, sharing the selected simulation.
 - Hovering a polygon or a raster cell shows a tooltip; the two are placed on opposite sides of the
   cursor so that they never overlap
 
-After an analysis a **controls bar** appears at the bottom, laid out as two aligned columns — the
-row name on the left, its controls on the right:
+Every analysis is **saved for the session** (in memory: a page reload clears them), up to **10**.
+At 10 the Run buttons are disabled with a message until one is deleted. Before running, the
+*Analysis title* field names it; left empty, a title is generated (e.g. `PPI · Wind farms ·
+Black Sea 2019`).
 
-| Row | Controls |
+Saved analyses appear in the **Analyses panel** on the right, mirroring the main panel, newest
+first. At its top are the analysis tools; below, one card per analysis:
+
+| Part | Contents |
 |---|---|
-| PMAR | Indicator selector: Density, SUM, MAX, Q90, σ (when available) |
-| Connectivity | Metric selector: in-strength, out-strength, betweenness |
-| Selection | Selected node, incoming / outgoing / both, clear (only while a polygon is selected) |
-| Show / hide | Heatmap, seeding area, connectivity polygons, network, EMODnet layers, GeoTIFF download |
+| Compact row (every card) | Type badge (PMAR / Connectivity), title, show/hide, delete |
+| Expanded (active card only) | Rename, description — the simulation used (scenario, pressure, start, duration, particles, seedings, time step) and the analysis parameters — then its controls |
+| PMAR controls | Indicator (PPI, SUM, MAX, Q90, σ when available), seeding area and EMODnet source layer toggles, GeoTIFF download |
+| Connectivity controls | Metric (in-strength, out-strength, betweenness), seeding area, polygons and arrows toggles, selected node with incoming / outgoing / both and clear |
+
+Selecting a simulation highlights its seeding area as a preview, and choosing an EMODnet source previews that layer; once an analysis of that simulation (with that source) exists, the area and the layer are controlled only by the card's switches. Several analyses can be shown at once; clicking a card makes it **active**: the legend, the cell
+tooltip and the analysis tools follow it. Deleting the active one activates the newest remaining.
 
 ### Map
 
 - **Theme and language bar** (top left, next to the main panel; the map zoom control sits below it): light/dark theme toggle (switches CartoDB basemap and all panel colours) and IT/EN language switch. Copernicus Marine credentials are configured server-side via environment variables (see `.env`).
-- **Natura 2000 layer**: protected marine areas fetched from the EmodNet WFS and displayed as a semi-transparent overlay. Toggled from the PMAR controls bar.
-- **Interactive legend** (bottom right, below the tools panel): one section per visible layer — heatmap (6 log classes between `vmin` and `vmax`), connectivity polygons (5 linear classes of the active metric, plus unreliable polygons) and arrows (probability bands 0–1, 1–5, 5–10, 10–25, 25–50, 50–100 %). Each row shows its colour, range and count. Clicking rows switches classes on and off: on the map the chosen classes keep their colours and everything else is dimmed, and the arrow and node-selection filters combine. The × resets a section; a new result or indicator resets it too. Colours come from `src/legend/classes.js`, the same module the layers use, so legend and map cannot drift apart. When a new section appears the older ones collapse; the legend's height stops 12 px below the tools panel, which reports its own size (it changes when expanded or collapsed).
-- **Analysis tools panel** (top right, collapsed at start): click its header to expand it. The tools are split by the result they work on — *PMAR heatmap* (Histogram, Statistics, Profile, Threshold, CSV, Compare) and *Connectivity* (Connectivity matrix). A group whose result is missing is disabled and says which analysis enables it. The header shows how many analysis windows are open, and "Close all" appears inside when there are any.
+- **Natura 2000 layer**: protected marine areas fetched from the EmodNet WFS and displayed as a semi-transparent overlay. Fetched and toggled from *Additional layers* in the main panel.
+- **Interactive legend** (bottom left, next to the main panel): sections for the **active analysis** — heatmap (6 log classes between `vmin` and `vmax`), connectivity polygons (5 linear classes of the active metric, plus unreliable polygons) and arrows (probability bands 0–1, 1–5, 5–10, 10–25, 25–50, 50–100 %). Each row shows its colour, range and count. Clicking rows switches classes on and off: on the map the chosen classes keep their colours and everything else is dimmed, and the arrow and node-selection filters combine. The × resets a section; a new result or indicator resets it too. Colours come from `src/legend/classes.js`, the same module the layers use, so legend and map cannot drift apart. When a new section appears the older ones collapse.
+- **Analysis tools** (top of the Analyses panel, collapsed at start): they work on the active analysis. The tools are split by the result they work on — *PMAR heatmap* (Histogram, Statistics, Profile, Threshold, CSV, Compare) and *Connectivity* (Connectivity matrix). A group whose result is missing is disabled and says which analysis enables it. The header shows how many analysis windows are open, and "Close all" appears inside when there are any.
 
 ## Logging
 

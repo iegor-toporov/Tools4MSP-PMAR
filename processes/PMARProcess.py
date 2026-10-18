@@ -204,6 +204,7 @@ PROCESS_METADATA = {
         },
         'res': {
             'title': 'Output grid resolution in degrees',
+            'description': 'Allowed values: 0.1, 0.05.',
             'schema': {'type': 'number', 'default': 0.1},
             'minOccurs': 0, 'maxOccurs': 1,
         },
@@ -348,7 +349,7 @@ class PMARProcessor(BaseProcessor):
                             f'Clicca Calcola nel pannello.'
                         )
                 pressure   = sc['pressure']
-                res        = float(data.get('res', sc['res']))
+                res        = _check_res(data.get('res', DEFAULT_RES))
                 start_time = datetime.fromisoformat(sc['start_time'])
                 end_time   = start_time + timedelta(days=sc['duration_days'])
                 pnum       = sc['pnum']
@@ -366,7 +367,7 @@ class PMARProcessor(BaseProcessor):
                 pressure        = data.get('pressure', 'generic')
                 duration_days   = int(data.get('duration_days', 3))
                 pnum            = min(int(data.get('pnum', 200)), 100000)
-                res             = float(data.get('res', 0.1))
+                res             = _check_res(data.get('res', DEFAULT_RES))
                 time_step_hours = int(data.get('time_step_hours', 1))
                 time_step_hours = max(1, min(time_step_hours, 24))
 
@@ -817,6 +818,26 @@ def _make_colorbar_png(norm, cmap, text_color):
     plt.close(fig_cb)
     buf.seek(0)
     return base64.b64encode(buf.getvalue()).decode('utf-8')
+
+
+# Risoluzioni ammesse per la griglia dell'analisi (gradi). Deve restare allineato a
+# RESOLUTIONS in frontend/src/components/PmarPanel.jsx. Il limite vale anche lato API:
+# con il link pubblico della demo, una griglia molto fine su un'area grande
+# occuperebbe il worker a lungo.
+PMAR_RESOLUTIONS = (0.1, 0.05)
+DEFAULT_RES = 0.1
+
+
+def _check_res(value):
+    try:
+        res = float(value)
+    except (TypeError, ValueError):
+        res = None
+    if res not in PMAR_RESOLUTIONS:
+        raise ProcessorExecuteError(
+            f'Risoluzione non ammessa: {value}. Valori possibili: {list(PMAR_RESOLUTIONS)}.'
+        )
+    return res
 
 
 def _raster_to_png(h):

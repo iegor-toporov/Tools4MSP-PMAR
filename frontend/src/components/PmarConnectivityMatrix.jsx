@@ -1,8 +1,16 @@
-import { forwardRef } from 'react'
-import { Button, Text, Box } from '@mantine/core'
+import { forwardRef, useMemo } from 'react'
+import { Button, Text, Box, Group } from '@mantine/core'
 import { IconDownload } from '@tabler/icons-react'
 import { useLang } from '../LanguageContext'
 import { FloatingWindow } from './FloatingWindow'
+import { formatCell, sparseEntries, toDenseTsv, toEdgeListCsv, toMatrixMarket } from '../export/connectivityMatrix'
+
+/** Scarica un testo come file. Blob e non `data:` URI: con 300 nodi sarebbe enorme. */
+function saveText(text, filename, type) {
+  const url = URL.createObjectURL(new Blob([text], { type }))
+  Object.assign(document.createElement('a'), { href: url, download: filename }).click()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
 
 const SPECTRAL_R = [
   [94, 79, 162], [50, 136, 189], [102, 194, 165], [171, 221, 164],
@@ -40,15 +48,20 @@ export const PmarConnectivityMatrix = forwardRef(function PmarConnectivityMatrix
   /** Same rule as the map: too few particles released, the row means nothing. */
   const reliable = i => released[i] === undefined || released[i] >= minPart
 
-  function downloadTsv() {
-    if (!matrix) return
-    const header = [c.connectivityFrom, ...labels].join('\t')
-    const body   = matrix.map((row, i) => [labels[i], ...row].join('\t')).join('\n')
-    Object.assign(document.createElement('a'), {
-      href:     'data:text/tab-separated-values;charset=utf-8,' + encodeURIComponent(`${header}\n${body}`),
-      download: `pmar_connectivity_${data.mode}_${Date.now()}.tsv`,
-    }).click()
-  }
+  const nonZero = useMemo(() => (matrix ? sparseEntries(matrix).length : 0), [matrix])
+  const fileBase = () => `pmar_connectivity_${data.mode}_${Date.now()}`
+
+  // Densa (tutte le n² caselle), elenco di archi e Matrix Market (solo le non nulle).
+  const downloads = [
+    { key: 'dense', label: c.downloadDense,
+      run: () => saveText(toDenseTsv(matrix, labels, c.connectivityFrom), `${fileBase()}.tsv`, 'text/tab-separated-values') },
+    { key: 'edges', label: c.downloadEdges,
+      run: () => saveText(toEdgeListCsv(matrix, labels), `${fileBase()}_edges.csv`, 'text/csv') },
+    { key: 'mtx', label: c.downloadMtx,
+      run: () => saveText(
+        toMatrixMarket(matrix, { comment: `PMAR connectivity · ${data.mode} · ${data.t_days} d`, labels }),
+        `${fileBase()}.mtx`, 'text/plain') },
+  ]
 
   const cell = { padding: '1px 4px', fontSize: 10, fontFamily: '"SF Mono", ui-monospace, monospace' }
 
@@ -103,7 +116,7 @@ export const PmarConnectivityMatrix = forwardRef(function PmarConnectivityMatrix
                             border: '1px solid var(--modal-divider)',
                           }}
                         >
-                          {v > 0 ? Math.round(v * 100) : ''}
+                          {formatCell(v)}
                         </td>
                       ))}
                     </tr>
@@ -112,15 +125,16 @@ export const PmarConnectivityMatrix = forwardRef(function PmarConnectivityMatrix
               </table>
             </Box>
             <Text size="10px" c="dimmed" mt={6}>
-              {data.mode} · {data.t_days} d · n={labels.length}
+              {data.mode} · {data.t_days} d · n={labels.length} · {c.nonZeroPairs.replace('{n}', nonZero)}
             </Text>
-            <Button
-              fullWidth size="xs" variant="light" color="teal" mt="xs"
-              leftSection={<IconDownload size={12} />}
-              onClick={downloadTsv}
-            >
-              {c.statsDownload}
-            </Button>
+            <Group grow gap={6} mt="xs">
+              {downloads.map(d => (
+                <Button key={d.key} size="xs" variant="light" color="teal"
+                        leftSection={<IconDownload size={12} />} onClick={d.run}>
+                  {d.label}
+                </Button>
+              ))}
+            </Group>
           </>
         )}
       </Box>

@@ -1,5 +1,4 @@
-import { useEffect, useRef } from 'react'
-import { Button, Badge, Text } from '@mantine/core'
+import { Button, Badge, Text, SimpleGrid } from '@mantine/core'
 import {
   IconChartBar, IconChartAreaLine, IconWaveSine, IconBolt, IconFileTypeCsv, IconStack2,
   IconTable, IconX, IconTool, IconChevronDown, IconChevronUp,
@@ -7,6 +6,9 @@ import {
 import { useLang } from '../LanguageContext'
 
 /**
+ * Blocco "Strumenti di analisi" in cima al pannello delle analisi (AnalysesPanel):
+ * lavorano sull'analisi attiva.
+ *
  * Strumenti divisi per il risultato su cui lavorano: quelli della heatmap PMAR non
  * servono a niente senza un raster PPI, la matrice senza una connettività. Un unico
  * gate su `hasRaster` disabiliterebbe la matrice in una sessione di sola connettività.
@@ -31,8 +33,6 @@ const GROUPS = [
   },
 ]
 
-export const TOOLS_WIDTH = 216
-
 const COUNT_BADGE = {
   position: 'absolute', top: -4, right: -4, fontSize: 8, minWidth: 14, height: 14,
   padding: 0, pointerEvents: 'none', zIndex: 1,
@@ -48,26 +48,12 @@ export default function ToolsPanel({
   onCloseAll,
   expanded,
   onToggleExpanded,
-  onBottomChange,
 }) {
   const { t } = useLang()
   const c = t.toolsPanel
 
-  // Dove finisce il pannello: la legenda, sotto, si ferma lì. Cambia aprendo e
-  // chiudendo il pannello e con i suggerimenti dei gruppi.
-  const ref = useRef(null)
-  useEffect(() => {
-    const el = ref.current
-    if (!el || !onBottomChange) return
-    const report = () => onBottomChange(el.getBoundingClientRect().bottom)
-    const ro = new ResizeObserver(report)
-    ro.observe(el)
-    report()
-    return () => ro.disconnect()
-  }, [onBottomChange])
-
   return (
-    <div ref={ref} className="tools-panel" style={{ width: TOOLS_WIDTH }}>
+    <div className="tools-panel">
       <button
         type="button"
         className="tools-panel-head"
@@ -94,6 +80,8 @@ export default function ToolsPanel({
                   {c[group.titleKey]}
                 </Text>
                 {!enabled && <Text size="10px" c="dimmed" lh={1.3}>{c[group.hintKey]}</Text>}
+                {/* Due colonne: dentro il pannello delle analisi lo spazio va alle schede. */}
+                <SimpleGrid cols={group.tools.length > 1 ? 2 : 1} spacing={5} verticalSpacing={5}>
                 {group.tools.map(({ key, Icon, labelKey }) => {
                   const isActive = activeMapTool === key
                   const count    = windowCounts[key] ?? 0
@@ -118,6 +106,7 @@ export default function ToolsPanel({
                     </div>
                   )
                 })}
+                </SimpleGrid>
               </section>
             )
           })}

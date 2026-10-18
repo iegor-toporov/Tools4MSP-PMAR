@@ -111,22 +111,16 @@ function SourceButton({ active, Icon, loading, onClick, children }) {
   )
 }
 
+// Deve restare allineato a PMAR_RESOLUTIONS in processes/PMARProcess.py
 const RESOLUTIONS = [
-  { value: '0.001', label: '0.001°' },
-  { value: '0.01',  label: '0.01°' },
-  { value: '0.05',  label: '0.05°' },
-  { value: '0.1',   label: '0.1°'  },
-  { value: '0.2',   label: '0.2°'  },
-  { value: '0.5',   label: '0.5°'  },
-  { value: '1.0',   label: '1.0°'  },
+  { value: '0.1',  label: '0.1°'  },
+  { value: '0.05', label: '0.05°' },
 ]
 
 // Deve restare allineato a GRID_RESOLUTIONS in processes/ConnectivityProcess.py
 const GRID_RESOLUTIONS = [
-  { value: '1.0',  label: '1.0°'  },
-  { value: '0.5',  label: '0.5°'  },
-  { value: '0.25', label: '0.25°' },
-  { value: '0.1',  label: '0.1°'  },
+  { value: '1.0', label: '1.0°' },
+  { value: '0.5', label: '0.5°' },
 ]
 
 const TIME_STEPS = [
@@ -218,7 +212,7 @@ export default function PmarPanel({
   showNatura2000, onFetchNatura2000, onToggleNatura2000,
   hasSeedShape, onT4mspPreview, onScenarioArea, onAnalysisMarginChange,
   onRunConnectivity, connectivityLoading, connectivityStopping, onStopConnectivity,
-  actionsTarget,
+  actionsTarget, analysesFull = false,
 }) {
   const { t, lang } = useLang()
   const p = t.pmar
@@ -262,6 +256,8 @@ export default function PmarPanel({
   const [analysisMode,   setAnalysisMode]   = useState('sources')
   const [connShpB64,     setConnShpB64]     = useState(null)
   const [connShpName,    setConnShpName]    = useState('')
+  // Titolo dell'analisi che si sta per lanciare; vuoto = titolo automatico.
+  const [analysisTitle,  setAnalysisTitle]  = useState('')
   const [connMode,       setConnMode]       = useState('transit')
   const [connDays,       setConnDays]       = useState('')
   const [connLabelField, setConnLabelField] = useState('')
@@ -395,7 +391,7 @@ export default function PmarPanel({
     const invia = geo => {
       if (annullato || !geo) return
       onScenarioArea?.({ type: 'FeatureCollection',
-                         features: [{ type: 'Feature', geometry: geo, properties: {} }] })
+                         features: [{ type: 'Feature', geometry: geo, properties: {} }] }, scenarioId)
     }
 
     if (scenarioGeoCache.current[scenarioId]) {
@@ -487,8 +483,25 @@ export default function PmarPanel({
     reader.readAsDataURL(file)
   }
 
+  /**
+   * Dati per la scheda dell'analisi nel pannello di destra: lo scenario usato e i
+   * parametri. Si salvano i valori grezzi (anche le etichette in entrambe le lingue),
+   * così la descrizione segue la lingua corrente anche dopo.
+   */
+  function scenarioInfo() {
+    const sc = scenarioStatuses[scenarioId] ?? {}
+    return {
+      id: scenarioId, label_it: sc.label_it, label_en: sc.label_en,
+      area_it: sc.area_it, area_en: sc.area_en, pressure: sc.pressure,
+      start_time: sc.start_time, duration_days: sc.duration_days, pnum: sc.pnum,
+      seedings: sc.seedings, tshift: sc.tshift, time_step_hours: sc.time_step_hours,
+    }
+  }
+
   function handleRunConnectivity() {
     if (!canRunConnectivity) return
+    const title = analysisTitle.trim() || autoTitle
+    setAnalysisTitle('')
     onRunConnectivity({
       scenario_id:      scenarioId,
       mode:             connMode,
@@ -501,17 +514,42 @@ export default function PmarPanel({
                 // Senza riquadro il backend usa l'area dello scenario, che è
                 // esattamente il default che i campi mostrano.
                 ...(connBboxValid ? { bbox: connBbox.map(Number) } : {}) }),
+    }, {
+      title,
+      info: {
+        scenario: scenarioInfo(),
+        params: {
+          mode: connMode, self_loops: connSelfLoops,
+          t_days: connDays ? parseFloat(connDays) : scenarioStatuses[scenarioId]?.duration_days,
+          node_source: connSource,
+          ...(connSource === 'shapefile'
+                ? { shapefile_name: connShpName, label_field: connLabelField.trim() || null }
+                : { grid_res: parseFloat(connRes), bbox: connBboxValid ? connBbox.map(Number) : null }),
+        },
+      },
     })
   }
 
   function handleSubmit(e) {
     e.preventDefault()
-    if (runMode !== 'scenario') return
+    // Il pannello è un unico <form>: Invio in un campo della sotto-tab Connettività
+    // (titolo, riquadro, orizzonte) non deve lanciare l'analisi delle sorgenti.
+    if (runMode !== 'scenario' || analysisMode !== 'sources' || !canSubmit) return
+    const title = analysisTitle.trim() || autoTitle
+    setAnalysisTitle('')
     onRun({
       scenario_id: scenarioId,
       res: parseFloat(res),
       margin: parseFloat(margin) || 0,
       geotiff_b64: useSource === 'geotiff' ? geotiffB64 : null,
+      title,
+      info: {
+        scenario: scenarioInfo(),
+        params: {
+          use_source: useSource, res: parseFloat(res), margin: parseFloat(margin) || 0,
+          ...(useSource === 'geotiff' ? { geotiff_name: geotiffName } : {}),
+        },
+      },
     })
   }
 
@@ -543,9 +581,25 @@ export default function PmarPanel({
     : null
 
   const canRunConnectivity =
-    !connectivityLoading && runMode === 'scenario' &&
+    !connectivityLoading && !analysesFull && runMode === 'scenario' &&
     !!scenarioId && scenarioStatuses[scenarioId]?.status === 'ready' &&
     (connSource === 'shapefile' ? !!connShpB64 : !!connRes)
+
+  // Titolo proposto quando il campo è vuoto: tipo di analisi, dettaglio, scenario.
+  const scenarioLabel = (() => {
+    const sc = scenarioStatuses[scenarioId]
+    return sc ? (lang === 'it' ? sc.label_it : sc.label_en) : ''
+  })()
+  const autoTitle = (analysisMode === 'connectivity'
+    ? [p.connectivity.subTabConnectivity,
+       connSource === 'grid' ? `${p.connectivity.sourceGrid} ${connRes}°` : (connShpName || p.connectivity.sourceShapefile),
+       scenarioLabel]
+    : ['PPI', p.useSources[useSource], scenarioLabel]
+  ).filter(Boolean).join(' · ')
+
+  const limitNote = analysesFull && (
+    <Text size="xs" c="orange.6" ta="center">{t.analyses.limitReached}</Text>
+  )
 
   const emodnetState = {
     windfarms:              { loading: windfarmsLoading, empty: windfarmsEmpty, emptyText: p.useWindfarmsEmpty },
@@ -553,7 +607,7 @@ export default function PmarPanel({
     msp_zones:              { loading: mspZonesLoading,  empty: mspZonesEmpty,  emptyText: p.useMspZonesEmpty },
   }
 
-  const canSubmit = !loading && runMode === 'scenario' &&
+  const canSubmit = !loading && !analysesFull && runMode === 'scenario' &&
     !!scenarioId && scenarioStatuses[scenarioId]?.status === 'ready' &&
     (useSource !== 'geotiff' || !!geotiffB64)
 
@@ -641,6 +695,7 @@ export default function PmarPanel({
             {p.btnRun}
           </Button>
         )}
+        {limitNote}
       </Stack>
     )
   } else if (runMode === 'scenario' && analysisMode === 'connectivity') {
@@ -679,6 +734,7 @@ export default function PmarPanel({
         {connSource === 'shapefile' && !connShpB64 && (
           <Text size="xs" c="dimmed" ta="center">{p.connectivity.hintNoShapefile}</Text>
         )}
+        {limitNote}
       </Stack>
     )
   }
@@ -1208,6 +1264,17 @@ export default function PmarPanel({
                   </Paper>
                 )
               })()}
+
+              {/* ── Titolo dell'analisi (comune a Sorgenti e Connettività) ── */}
+              <TextInput
+                size="xs"
+                label={t.analyses.titleLabel}
+                placeholder={autoTitle}
+                value={analysisTitle}
+                onChange={e => setAnalysisTitle(e.target.value)}
+                maxLength={80}
+                styles={LABEL_STYLES}
+              />
 
               {/* ── Sotto-tab: Sorgenti | Connettività ─────────── */}
               <Tabs value={analysisMode} onChange={setAnalysisMode} variant="pills" radius="sm">

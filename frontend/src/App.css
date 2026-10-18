@@ -65,18 +65,9 @@ html[data-mantine-color-scheme="light"] body {
   box-shadow: 0 2px 16px rgba(0, 0, 0, 0.12);
 }
 
-/* ── Pannello strumenti di analisi (ToolsPanel.jsx), in alto a destra ─────── */
+/* ── Strumenti di analisi (ToolsPanel.jsx), in cima al pannello delle analisi ── */
 .tools-panel {
-  position: absolute;
-  top: 16px;
-  right: 16px;
-  z-index: 1001;
-  background: var(--panel-bg);
-  border: 1px solid var(--panel-border);
-  border-radius: 12px;
-  backdrop-filter: blur(20px) saturate(180%);
-  -webkit-backdrop-filter: blur(20px) saturate(180%);
-  box-shadow: 0 2px 16px rgba(0, 0, 0, 0.14);
+  border-bottom: 1px solid var(--modal-divider);
   color: var(--text-primary);
 }
 
@@ -92,7 +83,6 @@ html[data-mantine-color-scheme="light"] body {
   color: inherit;
   background: none;
   border: none;
-  border-radius: 12px;
   cursor: pointer;
   text-align: left;
 }
@@ -119,12 +109,12 @@ html[data-mantine-color-scheme="light"] body {
 .map-legend {
   position: absolute;
   bottom: 20px;
-  right: 16px;
+  /* In basso a sinistra, accanto al pannello principale (16 + 310 + 16). */
+  left: 342px;
   z-index: 1000;
   width: 176px;
-  /* Valore di riserva: App lo sostituisce con lo spazio sotto il pannello strumenti
-     (in alto a destra), che cambia aprendo e chiudendo il pannello. */
-  max-height: calc(100vh - 100px);
+  /* Fino sotto la barra tema/lingua e lo zoom, in alto a sinistra. */
+  max-height: calc(100vh - 160px);
   min-height: 0;
   overflow-y: auto;
   background: var(--panel-bg);
@@ -326,3 +316,28 @@ html[data-mantine-color-scheme="light"] body {
 .pmar-actions:empty {
   display: none;
 }
+
+/* ── Pannello delle analisi (AnalysesPanel.jsx), a destra ──────────────────── */
+.analysis-card {
+  cursor: pointer;
+  background: var(--modal-bg);
+  border: 1px solid var(--modal-divider);
+  transition: border-color 0.12s, opacity 0.12s;
+}
+.analysis-card:hover { border-color: rgba(10, 132, 255, 0.35); }
+.analysis-card.is-active {
+  border-color: rgba(10, 132, 255, 0.75);
+  box-shadow: 0 0 0 1px rgba(10, 132, 255, 0.35);
+}
+.analysis-card.is-hidden .analysis-title { opacity: 0.55; }
+
+.analysis-desc {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--panel-bg);
+  border: 1px solid var(--modal-divider);
+}
+.analysis-desc-block { display: flex; flex-direction: column; gap: 1px; }
