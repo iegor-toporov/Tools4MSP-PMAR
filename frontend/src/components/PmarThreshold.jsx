@@ -1,7 +1,10 @@
 import { forwardRef, useEffect, useRef } from 'react'
-import { Text, Box, Slider } from '@mantine/core'
+import { Text, Box, Slider, Button } from '@mantine/core'
+import { IconDownload } from '@tabler/icons-react'
 import { useLang } from '../LanguageContext'
 import { FloatingWindow } from './FloatingWindow'
+import { cellAreaKm2, thresholdCsv } from '../export/pmarTools'
+import { saveText } from '../export/download'
 
 // ── Value formatter ───────────────────────────────────────────────────────────
 
@@ -25,17 +28,24 @@ export const PmarThresholdModal = forwardRef(function PmarThresholdModal(
   const areaRef   = useRef(null)
   const pctRef    = useRef(null)
 
-  const { values = [], vmin, vmax, rasterRes } = result
-  const logMin      = Math.log10(Math.max(vmin > 0 ? vmin : 1e-6, 1e-12))
-  const logMax      = Math.log10(Math.max(vmax > 0 ? vmax : 1,    1e-12))
-  const cellAreaKm2 = ((rasterRes ?? 0.1) * 111.32) ** 2
+  // Celle con valore > 0 e la loro latitudine: l'area di una cella dipende da cos(lat)
+  // (prima era (res·111.32)², a 44° N sovrastimata di circa il 39%).
+  const { cells = [], vmin, vmax, rasterRes = 0.1 } = result
+  const logMin = Math.log10(Math.max(vmin > 0 ? vmin : 1e-6, 1e-12))
+  const logMax = Math.log10(Math.max(vmax > 0 ? vmax : 1,    1e-12))
 
   function compute(sliderVal) {
-    if (logMax <= logMin || !values.length)
+    if (logMax <= logMin || !cells.length)
       return { threshold: Math.pow(10, logMin), nAbove: 0, area: 0, pct: 0 }
     const threshold = Math.pow(10, logMin + (sliderVal / 1000) * (logMax - logMin))
-    const nAbove    = values.filter(v => v >= threshold).length
-    return { threshold, nAbove, area: nAbove * cellAreaKm2, pct: nAbove / values.length * 100 }
+    let nAbove = 0, area = 0
+    for (const c of cells) if (c.v >= threshold) { nAbove++; area += cellAreaKm2(c.lat, rasterRes) }
+    return { threshold, nAbove, area, pct: nAbove / cells.length * 100 }
+  }
+
+  // La curva di superamento: le stesse grandezze del cursore, per 50 soglie.
+  function downloadCsv() {
+    saveText(thresholdCsv(result, result.meta), `pmar_threshold_${Date.now()}.csv`)
   }
 
   function updateDom(sliderVal) {
@@ -51,7 +61,7 @@ export const PmarThresholdModal = forwardRef(function PmarThresholdModal(
   return (
     <FloatingWindow ref={ref} title={c.thresholdTitle} onClose={onClose} stackIndex={stackIndex}>
       <Box px="sm" pt="xs" pb={6}>
-        {values.length === 0 ? (
+        {cells.length === 0 ? (
           <Text size="xs" c="dimmed" ta="center" py="md">{c.statsNoData}</Text>
         ) : (
           <>
@@ -79,6 +89,13 @@ export const PmarThresholdModal = forwardRef(function PmarThresholdModal(
                 ))}
               </tbody>
             </table>
+            <Button
+              fullWidth size="xs" variant="light" color="blue" mt="xs"
+              leftSection={<IconDownload size={12} />}
+              onClick={downloadCsv}
+            >
+              {c.downloadCsv}
+            </Button>
           </>
         )}
       </Box>

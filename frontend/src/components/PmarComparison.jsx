@@ -2,6 +2,8 @@ import { forwardRef, useEffect, useRef, useState } from 'react'
 import { Button, Text, Box, Group, ActionIcon, ColorSwatch } from '@mantine/core'
 import { IconX, IconDownload } from '@tabler/icons-react'
 import { useLang } from '../LanguageContext'
+import { comparisonCsv } from '../export/pmarTools'
+import { saveText } from '../export/download'
 import { FloatingWindow } from './FloatingWindow'
 
 export const AREA_COLORS = ['#0a84ff', '#30d158', '#ff9f0a', '#bf5af2', '#ff453a', '#64d2ff', '#ffd60a', '#ff375f']
@@ -159,58 +161,10 @@ export const PmarComparisonModal = forwardRef(function PmarComparisonModal(
     return km2 >= 10 ? `~${Math.round(km2)} km²` : `~${km2.toFixed(1)} km²`
   }
 
-  function downloadPng() {
-    const svg = svgRef.current
-    if (!svg || !results.length) return
-    const vb = svg.viewBox.baseVal
-    const pw = vb.width, ph = vb.height
-    const SCALE = 2
-
-    const padH    = 12, padVTop = 10, padVBot = 8
-    const rowH    = 18, rowGap  = 4,  swatchS = 10
-    const textX   = padH + swatchS + 7
-    const legendH = padVTop + results.length * rowH + (results.length - 1) * rowGap + padVBot
-
-    const isDark    = mapTheme !== 'light'
-    const bg        = isDark ? '#2c2c2e' : '#ffffff'
-    const textColor = isDark ? '#ffffff' : '#1c1c1e'
-
-    const canvas = document.createElement('canvas')
-    canvas.width  = pw * SCALE
-    canvas.height = (legendH + ph) * SCALE
-    const ctx = canvas.getContext('2d')
-
-    ctx.fillStyle = bg
-    ctx.fillRect(0, 0, pw * SCALE, legendH * SCALE)
-    ctx.textBaseline = 'middle'
-    ctx.font = `${11 * SCALE}px system-ui, -apple-system, sans-serif`
-    results.forEach((r, i) => {
-      const rowTop    = padVTop + i * (rowH + rowGap)
-      const swatchTop = rowTop + (rowH - swatchS) / 2
-      ctx.fillStyle   = AREA_COLORS[i % AREA_COLORS.length]
-      ctx.globalAlpha = 0.85
-      ctx.fillRect(padH * SCALE, swatchTop * SCALE, swatchS * SCALE, swatchS * SCALE)
-      ctx.globalAlpha = 1
-      ctx.fillStyle = textColor
-      ctx.fillText(
-        `${names[i] ?? String.fromCharCode(65 + i)} — ${r.total.toLocaleString()} cells · ${fmtArea(r)}`,
-        textX * SCALE,
-        (rowTop + rowH / 2) * SCALE,
-      )
-    })
-
-    const clone = svg.cloneNode(true)
-    clone.setAttribute('width',  pw)
-    clone.setAttribute('height', ph)
-    const img = new Image()
-    img.onload = () => {
-      ctx.drawImage(img, 0, legendH * SCALE, pw * SCALE, ph * SCALE)
-      Object.assign(document.createElement('a'), {
-        href:     canvas.toDataURL('image/png'),
-        download: `pmar_comparison_${Date.now()}.png`,
-      }).click()
-    }
-    img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(clone.outerHTML)
+  // Tabella lunga (area, classe): stessi dati del grafico, pronti per pandas o R.
+  function downloadCsv() {
+    if (!results.length) return
+    saveText(comparisonCsv(results, names, results[0].meta), `pmar_comparison_${Date.now()}.csv`)
   }
 
   const hasChart = results.length >= 2
@@ -267,9 +221,9 @@ export const PmarComparisonModal = forwardRef(function PmarComparisonModal(
             <Button
               fullWidth size="xs" variant="light" color="blue" mt="xs"
               leftSection={<IconDownload size={12} />}
-              onClick={downloadPng}
+              onClick={downloadCsv}
             >
-              {c.comparisonDownload}
+              {c.downloadCsv}
             </Button>
           </>
         )}

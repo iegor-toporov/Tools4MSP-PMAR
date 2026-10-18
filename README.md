@@ -758,6 +758,24 @@ tooltip and the analysis tools follow it. Deleting the active one activates the 
 - **Interactive legend** (bottom left, next to the main panel): sections for the **active analysis** — heatmap (6 log classes between `vmin` and `vmax`), connectivity polygons (5 linear classes of the active metric, plus unreliable polygons) and arrows (probability bands 0–1, 1–5, 5–10, 10–25, 25–50, 50–100 %). Each row shows its colour, range and count. Clicking rows switches classes on and off: on the map the chosen classes keep their colours and everything else is dimmed, and the arrow and node-selection filters combine. The × resets a section; a new result or indicator resets it too. Colours come from `src/legend/classes.js`, the same module the layers use, so legend and map cannot drift apart. When a new section appears the older ones collapse.
 - **Analysis tools** (top of the Analyses panel, collapsed at start): they work on the active analysis. The tools are split by the result they work on — *PMAR heatmap* (Histogram, Statistics, Profile, Threshold, CSV, Compare) and *Connectivity* (Connectivity matrix). A group whose result is missing is disabled and says which analysis enables it. The header shows how many analysis windows are open, and "Close all" appears inside when there are any.
 
+  Every PMAR tool downloads a **CSV**, never an image. Each file starts with `#` metadata lines —
+  tool, analysis title, scenario (label, start, duration, particles, seedings), source layer,
+  value (PPI or indicator, and whether it is weighted), grid resolution, the selection and the
+  export time — followed by the table. Read it with `pandas.read_csv(f, comment='#')` or
+  `read.csv(f, comment.char='#')`. Labels in the files are always in English.
+
+  | Tool | Columns | Notes |
+  |---|---|---|
+  | Histogram | `bin, lower, upper, count, fraction` | 20 log10 bins between vmin and vmax; the first bin starts at 0 and the last ends at `inf`, because values outside the range are counted there (as on the map) |
+  | Statistics | `stat, value` | Cells > 0 in the rectangle; population std; quantiles by linear interpolation, the numpy / pandas / R default |
+  | Profile | `sample, distance_km, lat, lon, cell_id, value` | Points evenly spaced along the line, each with the cell it falls in |
+  | Threshold | `threshold, cells_above, area_km2, pct_cells` | Exceedance curve over 50 log10 thresholds; areas are real cell areas (cos(lat)) |
+  | CSV | `row, col, cell_id, lat, lon, cell_area_km2, value` | Every cell of the rectangle, zeros included; lat/lon are cell centres |
+  | Compare | `area, bin, lower, upper, count, fraction` | Long format, one block of histogram bins per area; each area described in the header |
+
+  `cell_id` (`{lon}E_{lat}N`) is the same identifier shown by the map tooltip. The builders live in
+  `frontend/src/export/pmarTools.js` and are unit-tested.
+
 ## Logging
 
 All processes write to **stdout**, which Docker captures via `docker logs`. Use `docker logs dto-pmar-backend-1` (or `dto-pmar-celery-worker-1`) to stream logs in real time.

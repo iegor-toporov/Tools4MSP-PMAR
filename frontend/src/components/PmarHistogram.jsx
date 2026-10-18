@@ -4,6 +4,8 @@ import L from 'leaflet'
 import { Button, Text, Box, Group } from '@mantine/core'
 import { IconDownload } from '@tabler/icons-react'
 import { useLang } from '../LanguageContext'
+import { histogramCsv } from '../export/pmarTools'
+import { saveText } from '../export/download'
 import { FloatingWindow } from './FloatingWindow'
 
 // ── Histogram computation ─────────────────────────────────────────────────────
@@ -280,45 +282,9 @@ export const PmarHistogramModal = forwardRef(function PmarHistogramModal({ resul
   const areaKm2 = Math.abs(dLat * dLon * 111.32 * 111.32 * Math.cos(latMid * Math.PI / 180))
   const areaStr = areaKm2 >= 10 ? `~${Math.round(areaKm2)} km²` : `~${areaKm2.toFixed(1)} km²`
 
-  function downloadPng() {
-    const svg = svgRef.current
-    if (!svg) return
-    const { width: svgW, height: svgH } = svg.getBoundingClientRect()
-    const pw = Math.round(svgW), ph = Math.round(svgH)
-    const SCALE = 2
-
-    const isDark    = mapTheme !== 'light'
-    const bg        = isDark ? '#2c2c2e' : '#ffffff'
-    const textColor = isDark ? 'rgba(235,235,245,0.55)' : 'rgba(0,0,0,0.45)'
-    const padH = 12, padV = 8, lineH = 18
-    const headerH = padV * 2 + lineH
-
-    const canvas = document.createElement('canvas')
-    canvas.width  = pw * SCALE
-    canvas.height = (headerH + ph) * SCALE
-    const ctx = canvas.getContext('2d')
-
-    ctx.fillStyle = bg
-    ctx.fillRect(0, 0, canvas.width, canvas.height)
-
-    const meta = `${result.total.toLocaleString()} ${c.histogramCells}  ·  ${areaStr}  ·  min ${formatVal(result.valMin)}  ·  max ${formatVal(result.valMax)}  ·  μ ${formatVal(result.mean)}`
-    ctx.font         = `${10 * SCALE}px system-ui, -apple-system, sans-serif`
-    ctx.fillStyle    = textColor
-    ctx.textBaseline = 'middle'
-    ctx.fillText(meta, padH * SCALE, (padV + lineH / 2) * SCALE)
-
-    const clone = svg.cloneNode(true)
-    clone.setAttribute('width',  pw)
-    clone.setAttribute('height', ph)
-    const img = new Image()
-    img.onload = () => {
-      ctx.drawImage(img, 0, headerH * SCALE, pw * SCALE, ph * SCALE)
-      Object.assign(document.createElement('a'), {
-        href:     canvas.toDataURL('image/png'),
-        download: `pmar_histogram_${Date.now()}.png`,
-      }).click()
-    }
-    img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(clone.outerHTML)
+  // Classi con i loro limiti e conteggi, più il contesto: un dato riusabile, non un'immagine.
+  function downloadCsv() {
+    saveText(histogramCsv(result, result.meta), `pmar_histogram_${Date.now()}.csv`)
   }
 
   return (
@@ -343,9 +309,9 @@ export const PmarHistogramModal = forwardRef(function PmarHistogramModal({ resul
             <Button
               fullWidth size="xs" variant="light" color="blue" mt="xs"
               leftSection={<IconDownload size={12} />}
-              onClick={downloadPng}
+              onClick={downloadCsv}
             >
-              {c.histogramDownload}
+              {t.toolsPanel.downloadCsv}
             </Button>
           </>
         )}

@@ -3,31 +3,12 @@ import { Button, Text, Box } from '@mantine/core'
 import { IconDownload } from '@tabler/icons-react'
 import { useLang } from '../LanguageContext'
 import { FloatingWindow } from './FloatingWindow'
+import { statsCsv } from '../export/pmarTools'
+import { saveText } from '../export/download'
 
-// ── Computation ───────────────────────────────────────────────────────────────
-
-export function computeStats(rasterValues, colMin, colMax, rowMin, rowMax) {
-  const vals = []
-  for (let r = rowMin; r <= rowMax; r++)
-    for (let c = colMin; c <= colMax; c++) {
-      const v = rasterValues[r]?.[c]
-      if (v > 0 && isFinite(v)) vals.push(v)
-    }
-  if (!vals.length) return null
-  vals.sort((a, b) => a - b)
-  const n    = vals.length
-  const sum  = vals.reduce((s, v) => s + v, 0)
-  const mean = sum / n
-  const std  = Math.sqrt(vals.reduce((s, v) => s + (v - mean) ** 2, 0) / n)
-  const pct  = (p) => vals[Math.min(n - 1, Math.floor(p * n))]
-  return {
-    n, mean, std,
-    min: vals[0], max: vals[n - 1],
-    median: pct(0.5),
-    q25: pct(0.25), q75: pct(0.75),
-    q90: pct(0.90), q95: pct(0.95), q99: pct(0.99),
-  }
-}
+// Il calcolo sta in export/pmarTools.js (quantili come numpy/pandas); qui si
+// riesporta per chi lo importava da questo file.
+export { computeStats } from '../export/pmarTools'
 
 // ── Value formatter ───────────────────────────────────────────────────────────
 
@@ -47,29 +28,11 @@ export const PmarStatsModal = forwardRef(function PmarStatsModal(
   const { t } = useLang()
   const c = t.toolsPanel
 
-  function downloadTsv() {
+  function downloadCsv() {
     if (!result.stats) return
-    const s = result.stats
-    const rows = [
-      ['stat', 'value'],
-      ['n',      s.n],
-      ['mean',   s.mean],
-      ['median', s.median],
-      ['std',    s.std],
-      ['min',    s.min],
-      ['max',    s.max],
-      ['q25',    s.q25],
-      ['q75',    s.q75],
-      ['q90',    s.q90],
-      ['q95',    s.q95],
-      ['q99',    s.q99],
-    ]
-    const tsv = rows.map(r => r.join('\t')).join('\n')
-    Object.assign(document.createElement('a'), {
-      href:     'data:text/tab-separated-values;charset=utf-8,' + encodeURIComponent(tsv),
-      download: `pmar_stats_${Date.now()}.tsv`,
-    }).click()
+    saveText(statsCsv(result, result.meta), `pmar_stats_${Date.now()}.csv`)
   }
+
 
   const rows = result.stats ? [
     [c.statsN,      result.stats.n.toLocaleString()],
@@ -105,9 +68,9 @@ export const PmarStatsModal = forwardRef(function PmarStatsModal(
             <Button
               fullWidth size="xs" variant="light" color="blue" mt="xs"
               leftSection={<IconDownload size={12} />}
-              onClick={downloadTsv}
+              onClick={downloadCsv}
             >
-              {c.statsDownload}
+              {c.downloadCsv}
             </Button>
           </>
         )}

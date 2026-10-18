@@ -38,6 +38,21 @@ export const FloatingWindow = forwardRef(function FloatingWindow(
     el.style.left = `${Math.max(16, vw - 342 - stackIndex * 16 - elW)}px`
   }, [stackIndex]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // La posizione si calcola all'apertura, ma il contenuto può crescere dopo (il
+  // Confronto aggiunge il grafico alla seconda area): senza questo il fondo della
+  // finestra, col bottone di download, finiva fuori dallo schermo.
+  useEffect(() => {
+    const el = nodeRef.current
+    if (!el) return
+    const keepInside = () => {
+      const overflow = el.getBoundingClientRect().bottom - (window.innerHeight - 8)
+      if (overflow > 0) el.style.top = `${Math.max(8, parseFloat(el.style.top || '0') - overflow)}px`
+    }
+    const ro = new ResizeObserver(keepInside)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
   return (
     <Draggable nodeRef={nodeRef} handle=".fw-handle" cancel=".fw-cancel">
       <Paper

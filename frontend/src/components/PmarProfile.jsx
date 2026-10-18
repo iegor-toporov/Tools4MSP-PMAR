@@ -2,6 +2,8 @@ import { forwardRef, useRef } from 'react'
 import { Button, Text, Box } from '@mantine/core'
 import { IconDownload } from '@tabler/icons-react'
 import { useLang } from '../LanguageContext'
+import { cellCenter, cellId, profileCsv } from '../export/pmarTools'
+import { saveText } from '../export/download'
 import { FloatingWindow } from './FloatingWindow'
 
 // ── Profile sampling ──────────────────────────────────────────────────────────
@@ -20,7 +22,9 @@ export function sampleProfile(latA, lonA, latB, lonB, rd, nSamples = 300) {
     if (col < 0 || col >= raster_nx || row < 0 || row >= raster_ny) continue
     const v    = raster_values[row]?.[col] ?? 0
     const dist = Math.hypot((lat - latA) * 111.32, (lon - lonA) * 111.32 * cosLat)
-    pts.push({ dist, value: v })
+    // Posizione del campione e id della cella che lo contiene, per l'export.
+    const centre = cellCenter(rd, row, col)
+    pts.push({ dist, value: v, lat, lon, cellId: cellId(centre.lon, centre.lat, raster_res) })
   }
 
   return { pts, totalDist: pts.at(-1)?.dist ?? 0, latA, lonA, latB, lonB }
@@ -125,26 +129,9 @@ export const PmarProfileModal = forwardRef(function PmarProfileModal(
 
   const hasData = result.pts?.some(p => p.value > 0)
 
-  function downloadPng() {
-    const svg = svgRef.current
-    if (!svg) return
-    const { width: svgW, height: svgH } = svg.getBoundingClientRect()
-    const pw = Math.round(svgW), ph = Math.round(svgH)
-    const canvas = document.createElement('canvas')
-    canvas.width  = pw * 2
-    canvas.height = ph * 2
-    const clone = svg.cloneNode(true)
-    clone.setAttribute('width',  pw)
-    clone.setAttribute('height', ph)
-    const img = new Image()
-    img.onload = () => {
-      canvas.getContext('2d').drawImage(img, 0, 0, pw * 2, ph * 2)
-      Object.assign(document.createElement('a'), {
-        href:     canvas.toDataURL('image/png'),
-        download: `pmar_profile_${Date.now()}.png`,
-      }).click()
-    }
-    img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(clone.outerHTML)
+  // Un campione per riga: distanza, posizione, cella e valore lungo la linea.
+  function downloadCsv() {
+    saveText(profileCsv(result, result.meta), `pmar_profile_${Date.now()}.csv`)
   }
 
   return (
@@ -158,9 +145,9 @@ export const PmarProfileModal = forwardRef(function PmarProfileModal(
             <Button
               fullWidth size="xs" variant="light" color="blue" mt="xs"
               leftSection={<IconDownload size={12} />}
-              onClick={downloadPng}
+              onClick={downloadCsv}
             >
-              {c.profileDownload}
+              {c.downloadCsv}
             </Button>
           </>
         )}

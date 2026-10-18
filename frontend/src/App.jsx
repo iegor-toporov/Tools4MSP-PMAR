@@ -21,6 +21,8 @@ import { PmarThresholdModal } from './components/PmarThreshold'
 import { PmarComparisonModal } from './components/PmarComparison'
 import { sampleProfile, PmarProfileModal } from './components/PmarProfile'
 import { seedShapeToGeoJSON, seedShapeBounds } from './geometry/seedShape'
+import { cellsCsv } from './export/pmarTools'
+import { saveText } from './export/download'
 import { spectralR, logNorm, linNorm, logClasses, linearClasses, classIndex,
          PROBABILITY_BANDS, redsColor, formatBound, formatPercent } from './legend/classes'
 import { PmarConnectivityMatrix } from './components/PmarConnectivityMatrix'
@@ -876,6 +878,18 @@ function ConnectivityAnalysisLayers({ analysis, labels, onSelectNode, metricClas
   )
 }
 
+// Etichette dei file esportati dagli strumenti: in inglese, fisse, così un CSV non
+// cambia a seconda della lingua dell'interfaccia di chi l'ha scaricato.
+const EXPORT_SOURCE_LABELS = {
+  none: 'Uniform (no weighting)', windfarms: 'Wind farms (EMODnet)',
+  offshore_installations: 'Offshore installations (EMODnet)',
+  msp_zones: 'MSP aquaculture zones (EMODnet)', geotiff: 'Custom GeoTIFF',
+}
+const EXPORT_VALUE_LABELS = {
+  ppi: 'PPI, particle passages per cell', sum: 'SUM indicator', max: 'MAX indicator',
+  q90: 'Q90 indicator', std: 'standard deviation across seedings',
+}
+
 /** Stato di visualizzazione di un'analisi: ciò che prima stava nella barra in basso. */
 const DEFAULT_VIEW = {
   visible: true, showSeedArea: true,
@@ -1406,10 +1420,31 @@ export default function App() {
       connectivityData, activeConn, metricClasses, connectivityMetric, metricHighlight,
       edgeHighlight])
 
+  /**
+   * Contesto per i file degli strumenti, preso dall'analisi attiva al momento della
+   * selezione: se poi si attiva un'altra analisi, il file dice comunque da dove viene.
+   */
+  function toolMeta() {
+    const a = activePmar
+    if (!a) return {}
+    const sc = a.info?.scenario ?? {}
+    const src = a.info?.params?.use_source
+    const ind = a.view.indicator
+    return {
+      title: a.title,
+      scenario: { label: sc.label_en || sc.label_it, start_time: sc.start_time,
+                  duration_days: sc.duration_days, pnum: sc.pnum, seedings: sc.seedings },
+      sourceLayer: EXPORT_SOURCE_LABELS[src] ?? src,
+      valueLabel: (EXPORT_VALUE_LABELS[ind] ?? ind)
+        + (ind === 'ppi' && src && src !== 'none' ? ', weighted by the source layer' : ''),
+      res: activePmarData?.raster_res,
+    }
+  }
+
   function handleStatsResult(snap, layer, rd) {
     if (!rd) { layer?.remove(); return }
     const stats = computeStats(rd.raster_values, snap.colMin, snap.colMax, snap.rowMin, snap.rowMax)
-    setStatsEntries(prev => [...prev, { id: Date.now(), layer, result: { ...snap, stats } }])
+    setStatsEntries(prev => [...prev, { id: Date.now(), layer, result: { ...snap, stats, meta: toolMeta() } }])
   }
 
   function handleProfileResult(lineData, layer, rd) {
@@ -1420,6 +1455,7 @@ export default function App() {
       id: Date.now(), layer,
       result: {
         ...profile,
+        meta: toolMeta(),
         snapLatMin: Math.min(latA, latB),
         snapLatMax: Math.max(latA, latB),
         snapLonMin: Math.min(lonA, lonB),
@@ -1430,34 +1466,23 @@ export default function App() {
 
   function handleThresholdResult(snap, layer, rd) {
     if (!rd) { layer?.remove(); return }
-    const values = []
+    // Con la latitudine di ogni cella: l'area di una cella dipende da cos(lat).
+    const cells = []
     for (let r = snap.rowMin; r <= snap.rowMax; r++)
       for (let c = snap.colMin; c <= snap.colMax; c++) {
         const v = rd.raster_values[r]?.[c]
-        if (v > 0 && isFinite(v)) values.push(v)
+        if (v > 0 && isFinite(v)) cells.push({ v, lat: rd.raster_lat_min + r * rd.raster_res })
       }
     setThresholdEntries(prev => [...prev, {
       id: Date.now(), layer,
-      result: { ...snap, values, vmin: rd.vmin, vmax: rd.vmax, rasterRes: rd.raster_res },
+      result: { ...snap, cells, vmin: rd.vmin, vmax: rd.vmax, rasterRes: rd.raster_res, meta: toolMeta() },
     }])
   }
 
+  /** Tutte le celle del rettangolo, zeri compresi, con id, centro e area. */
   function handleCsvResult(snap, layer, rd) {
     if (!rd) { layer?.remove(); return }
-    const rows = ['lat,lon,value']
-    for (let r = snap.rowMin; r <= snap.rowMax; r++)
-      for (let c = snap.colMin; c <= snap.colMax; c++) {
-        const v = rd.raster_values[r]?.[c]
-        if (!v || v <= 0 || !isFinite(v)) continue
-        const lat = (rd.raster_lat_min + r * rd.raster_res).toFixed(5)
-        const lon = (rd.raster_lon_min + c * rd.raster_res).toFixed(5)
-        rows.push(`${lat},${lon},${v}`)
-      }
-    const blob = new Blob([rows.join('\n')], { type: 'text/csv' })
-    Object.assign(document.createElement('a'), {
-      href: URL.createObjectURL(blob),
-      download: `pmar_cells_${Date.now()}.csv`,
-    }).click()
+    saveText(cellsCsv(rd, snap, toolMeta()), `pmar_cells_${Date.now()}.csv`)
     setTimeout(() => layer?.remove(), 1500)
   }
 
@@ -1465,7 +1490,7 @@ export default function App() {
     if (!rd) { layer?.remove(); return }
     const hist = computeHistogramFromSnap(snap, rd)
     if (!hist) { layer?.remove(); return }
-    setComparisonAreas(prev => [...prev, { id: Date.now(), result: { ...hist, ...snap }, layer }])
+    setComparisonAreas(prev => [...prev, { id: Date.now(), result: { ...hist, ...snap, meta: toolMeta() }, layer }])
   }
 
   function handleCloseAll() {
@@ -1589,7 +1614,7 @@ export default function App() {
             active={activeMapTool === 'histogram'}
             rasterData={activePmarData}
             onResult={(result, layer) =>
-              setHistograms(prev => [...prev, { id: Date.now(), result, layer }])
+              setHistograms(prev => [...prev, { id: Date.now(), result: { ...result, meta: toolMeta() }, layer }])
             }
           />
         )}
