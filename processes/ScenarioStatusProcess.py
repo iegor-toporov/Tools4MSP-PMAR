@@ -7,6 +7,7 @@ from pygeoapi.process.base import BaseProcessor
 
 from processes.PMARProcess import SCENARIOS_DIR, T4MSP_AREA_URL, _fetch_t4msp_areas
 from processes.logging_utils import setup_logger
+from processes.access import is_unlocked, require_scenario, scenario_allowed, token_configured
 
 logger = setup_logger('scenario_status_process', 'pmar', 'scenario_status.log')
 
@@ -154,6 +155,8 @@ class ScenarioStatusProcessor(BaseProcessor):
         Returns:
             tuple[str, dict]: ``('application/json', result)``.
         """
+        unlocked = is_unlocked(data)
+
         area_id = data.get('area_id')
         if area_id is not None:
             area_id = int(area_id)
@@ -170,6 +173,7 @@ class ScenarioStatusProcessor(BaseProcessor):
 
         scenario_id = data.get('scenario_id')
         if scenario_id:
+            require_scenario(scenario_id, unlocked)
             return 'application/json', {'geo': _scenario_geometry(scenario_id)}
 
         scenarios = {}
@@ -179,6 +183,8 @@ class ScenarioStatusProcessor(BaseProcessor):
                 with open(meta_file) as f:
                     sc = json.load(f)
                 sid          = sc.get('scenario_id', os.path.basename(meta_file).replace('.json', ''))
+                if not scenario_allowed(sid, unlocked):
+                    continue
                 _backfill_bounds(sc, meta_file)
                 nc_filenames = sc.get('nc_filenames') or [sc['nc_filename']]
                 existing     = [fn for fn in nc_filenames
@@ -223,7 +229,10 @@ class ScenarioStatusProcessor(BaseProcessor):
         t4msp_areas = [{'id': a['id'], 'label': a['label']} for a in _fetch_t4msp_areas()]
 
         logger.info(f'[ScenarioStatus] Custom scenarios: {len(scenarios)}, T4MSP areas: {len(t4msp_areas)}')
-        return 'application/json', {'scenarios': scenarios, 't4msp_areas': t4msp_areas}
+        # Il frontend ne ricava se mostrare il form di simulazione o la richiesta di token.
+        access = {'locked': token_configured(), 'unlocked': unlocked}
+        return 'application/json', {'scenarios': scenarios, 't4msp_areas': t4msp_areas,
+                                    'access': access}
 
     def __repr__(self):
         """Return an unambiguous string representation of this processor."""

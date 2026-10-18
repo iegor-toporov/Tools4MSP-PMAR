@@ -17,6 +17,7 @@ import numpy as np
 from pygeoapi.process.base import BaseProcessor, ProcessorExecuteError
 from processes.PMARProcess import SCENARIOS_DIR, _resolve_shapefile
 from processes.logging_utils import setup_logger
+from processes.access import is_unlocked, require_scenario
 
 logger = setup_logger('connectivity_process', 'pmar', 'connectivity.log')
 
@@ -228,6 +229,15 @@ def _make_grid_polygons(res, bbox):
     return gdf, labels
 
 
+def _warning(code, message, **params):
+    """Avviso per il client: ``code`` + parametri, che il frontend traduce.
+
+    ``message`` (in inglese) serve solo a chi usa l'API senza conoscere i codici:
+    il frontend compone il testo nella lingua dell'utente da ``code`` e parametri.
+    """
+    return {'code': code, **params, 'message': message}
+
+
 def _trim_edges(edges_geojson, warnings):
     """Dirada la rete quando è troppo fitta da disegnare, equamente fra i nodi.
 
@@ -254,7 +264,7 @@ def _trim_edges(edges_geojson, warnings):
     for pairs in by_source.values():
         pairs.sort(key=lambda t: t[0], reverse=True)
 
-    out, kept, rank = [], 0, 0
+    out, kept, rank, pairs_kept = [], 0, 0, 0
     deepest = max(len(v) for v in by_source.values())
     while rank < deepest and kept < MAX_EDGE_FEATURES:
         for source in sorted(by_source):
@@ -266,12 +276,14 @@ def _trim_edges(edges_geojson, warnings):
                 break
             out.extend(group)
             kept += len(group)
+            pairs_kept += 1
         rank += 1
 
-    warnings.append(
-        f'Rete troppo fitta per la mappa: disegnate {len(out) // 2} connessioni su '
-        f'{len(by_pair)}, le più probabili di ogni cella. La matrice resta completa.'
-    )
+    warnings.append(_warning(
+        'edges_trimmed', drawn=pairs_kept, total=len(by_pair),
+        message=f'Network too dense for the map: drawing {pairs_kept} of {len(by_pair)} '
+                f'connections, the most probable ones of each cell. The matrix is complete.',
+    ))
     edges_geojson['features'] = out
     return edges_geojson
 
@@ -399,6 +411,7 @@ class ConnectivityProcessor(BaseProcessor):
         os.environ.pop('PROJ_DATA', None)
 
         scenario_id = data.get('scenario_id')
+        require_scenario(scenario_id, is_unlocked(data))
         mode        = str(data.get('mode') or 'transit').lower()
         label_field = data.get('node_label_field') or None
         self_loops  = bool(data.get('self_loops', False))
@@ -523,11 +536,13 @@ class ConnectivityProcessor(BaseProcessor):
 
             weak = [labels[i] for i in range(n_nodes) if released[i] < MIN_PARTICLES]
             if weak:
-                warnings.append(
-                    f'{len(weak)} poligoni su {n_nodes} contengono meno di '
-                    f'{MIN_PARTICLES} particelle al tempo 0: le loro righe non sono '
-                    f'statisticamente affidabili.'
-                )
+                warnings.append(_warning(
+                    'weak_polygons', count=len(weak), total=n_nodes,
+                    min_particles=MIN_PARTICLES, labels=weak,
+                    message=f'{len(weak)} of {n_nodes} polygons hold fewer than '
+                            f'{MIN_PARTICLES} particles at time 0: their rows are not '
+                            f'statistically reliable.',
+                ))
             if int(released.sum()) == 0:
                 raise ProcessorExecuteError(
                     'Nessuna particella dello scenario si trova dentro i poligoni '

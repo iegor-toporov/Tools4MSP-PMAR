@@ -140,6 +140,31 @@ cd frontend && npm install && npm run dev   # http://localhost:3000
 
 `cache/`, `out/`, and `scenarios/` are tracked in git as empty directories (via `.gitkeep`) so Docker can mount them with correct permissions from the first run.
 
+## Demo mode
+
+For public demos the app can be shared with a link while keeping simulations to the team. Set
+two variables in `.env` and recreate the containers (`docker compose up -d`):
+
+```
+SIMULATION_TOKEN=<openssl rand -hex 24>
+PUBLIC_SCENARIOS=custom_927fb7ae,custom_xxxxxxxx,custom_yyyyyyyy
+```
+
+| Without the token (visitors) | With the token |
+|---|---|
+| Analysis (PPI, connectivity, tools) on the scenarios in `PUBLIC_SCENARIOS` only | Everything, on every scenario |
+| No `precompute`, no `opendrift`, no `pmar` without `scenario_id` (they run OpenDrift) | Simulations allowed |
+
+The check runs in the backend (`processes/access.py`), not only in the UI: a request sent
+straight to the API without the token fails with `ACCESS_DENIED`. The token travels as the
+`access_token` input, is removed from the inputs as soon as it is read, and never reaches logs
+or the job records in Redis. In the UI, the *New simulation* form is replaced by a token field;
+the token is kept in `sessionStorage`, so it survives a reload and is gone when the tab is
+closed. A *Lock* button returns to visitor mode.
+
+With `SIMULATION_TOKEN` unset the app behaves exactly as without demo mode. With it set and
+`PUBLIC_SCENARIOS` empty, visitors see every scenario but still cannot run simulations.
+
 ## OpenDrift process
 
 **Endpoint:** `POST /processes/opendrift/execution`
@@ -386,7 +411,6 @@ Runs PMAR density analysis on a precomputed scenario trajectory.
 | `margin` | Degrees added beyond the seeding bbox to define the study area | 1.0 |
 | `use_source` | Weighting layer: `none`, `windfarms`, `offshore_installations`, `msp_zones`, `geotiff` | `none` |
 | `geotiff_b64` | Base64-encoded GeoTIFF for custom weighting (when `use_source=geotiff`) | — |
-| `geotiff_url` | URL of a GeoTIFF to download (when `use_source=geotiff`, ignored if `geotiff_b64` given) | — |
 
 ### Output
 
@@ -448,7 +472,7 @@ Setting `cmems_margin` large enough to cover expected particle drift is importan
 - Transparent cells for value ≤ 0 or NaN
 - Rendered as a canvas overlay in the browser (not a server-side PNG)
 - Hovering over a cell shows its value, coordinates, and a stable **cell ID** in the format `{lon}E_{lat}N` (rounded to grid resolution) — useful for cross-run comparisons
-- The colorbar PNG is chosen at render time based on the current map theme (dark text for light theme, white text for dark theme)
+- The legend is drawn by the frontend, not from the `colorbar_b64` PNGs (still returned for API clients): see *Interactive legend* below
 
 ### GeoTIFF structure
 
@@ -519,6 +543,15 @@ Each polygon feature carries `node_id`, `node_label`, `in_strength`, `out_streng
 `betweenness`, `n_released` and `reliable`. Each edge feature — the curve **and** the arrowhead
 drawn at its end — carries `source`, `target` and `p`, which is what lets the frontend isolate
 one node's connections without asking the backend again.
+
+`warnings` holds objects, not sentences, so that the frontend can phrase them in the user's
+language: a `code`, the numbers it needs, and an English `message` for API clients that do not
+know the codes.
+
+| `code` | Extra fields | When |
+|---|---|---|
+| `edges_trimmed` | `drawn`, `total` | The network exceeded `MAX_EDGE_FEATURES` and was thinned for drawing |
+| `weak_polygons` | `count`, `total`, `min_particles`, `labels` | Some nodes hold fewer than `MIN_PARTICLES` particles at time 0 |
 
 ### Limits and guards
 
@@ -701,9 +734,10 @@ row name on the left, its controls on the right:
 
 ### Map
 
-- **Top-right toolbar**: contains two buttons — light/dark theme toggle (switches CartoDB basemap and all panel colours) and IT/EN language switch. Copernicus Marine credentials are configured server-side via environment variables (see `.env`).
+- **Theme and language bar** (top left, next to the main panel; the map zoom control sits below it): light/dark theme toggle (switches CartoDB basemap and all panel colours) and IT/EN language switch. Copernicus Marine credentials are configured server-side via environment variables (see `.env`).
 - **Natura 2000 layer**: protected marine areas fetched from the EmodNet WFS and displayed as a semi-transparent overlay. Toggled from the PMAR controls bar.
-- **Analysis tools panel** (right side, vertically centred): seven labelled buttons — Histogram, Statistics, Profile, Threshold, CSV, Compare, Connectivity. Each is enabled by the result it works on: the first six need a PMAR raster, *Connectivity* needs a connectivity result and opens the matrix window. A "Close all" button appears when analysis windows are open.
+- **Interactive legend** (bottom right, below the tools panel): one section per visible layer — heatmap (6 log classes between `vmin` and `vmax`), connectivity polygons (5 linear classes of the active metric, plus unreliable polygons) and arrows (probability bands 0–1, 1–5, 5–10, 10–25, 25–50, 50–100 %). Each row shows its colour, range and count. Clicking rows switches classes on and off: on the map the chosen classes keep their colours and everything else is dimmed, and the arrow and node-selection filters combine. The × resets a section; a new result or indicator resets it too. Colours come from `src/legend/classes.js`, the same module the layers use, so legend and map cannot drift apart. When a new section appears the older ones collapse; the legend's height stops 12 px below the tools panel, which reports its own size (it changes when expanded or collapsed).
+- **Analysis tools panel** (top right, collapsed at start): click its header to expand it. The tools are split by the result they work on — *PMAR heatmap* (Histogram, Statistics, Profile, Threshold, CSV, Compare) and *Connectivity* (Connectivity matrix). A group whose result is missing is disabled and says which analysis enables it. The header shows how many analysis windows are open, and "Close all" appears inside when there are any.
 
 ## Logging
 

@@ -25,6 +25,7 @@ from processes.OpenDriftProcess import (
     _build_model, OUT_DIR,
 )
 from processes.logging_utils import setup_logger
+from processes.access import is_unlocked, require_unlocked
 
 logger = setup_logger('precompute_process', 'pmar', 'precompute_process.log')
 
@@ -566,6 +567,9 @@ class PrecomputeProcessor(BaseProcessor):
             ProcessorExecuteError: If no geometry source is provided, if a
                 pre-computation is already running, or if the simulation fails.
         """
+        # Prima di tutto: un rifiuto non deve lasciare file di scenario a metà.
+        require_unlocked(is_unlocked(data))
+
         geojson_input  = data.get('geojson')
         shapefile_b64  = data.get('shapefile_b64')
         t4msp_area_id  = data.get('t4msp_area_id')

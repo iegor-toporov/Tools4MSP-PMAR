@@ -1,15 +1,17 @@
 import { useState, useRef, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import {
-  Tabs, Button, Group, Stack, Text, TextInput, Textarea,
+  Tabs, Button, Group, Stack, Text, TextInput, Textarea, PasswordInput,
   SimpleGrid, SegmentedControl, NativeSelect, Paper, ScrollArea,
   Switch, Badge, Collapse, ActionIcon, Divider,
 } from '@mantine/core'
-import { IconInfoCircle, IconX, IconChevronDown, IconChevronUp, IconCircleCheck } from '@tabler/icons-react'
+import { IconInfoCircle, IconX, IconChevronDown, IconChevronUp, IconCircleCheck,
+         IconLock, IconLockOpen, IconGridDots, IconWindmill, IconBuildingFactory2,
+         IconFish, IconFileUpload } from '@tabler/icons-react'
 import { notifications } from '@mantine/notifications'
 import { useLang } from '../LanguageContext'
-import { Process, JobOutcome, executeSync, executeAsync,
-         fetchJobStatus, fetchJobResults, dismissJob } from '../api/ogcProcesses'
+import { Process, JobOutcome, ACCESS_DENIED, executeSync, executeAsync,
+         fetchJobStatus, fetchJobResults, dismissJob, setAccessToken } from '../api/ogcProcesses'
 import { formatSeedShape, seedShapeToGeoJSON } from '../geometry/seedShape'
 import PolygonDrawControls from './PolygonDrawControls'
 
@@ -68,13 +70,46 @@ const PRESSURES = [
   { key: 'larvae',  labelKey: 'larvae'  },
 ]
 
-const USE_SOURCES = [
-  { key: 'none'                   },
-  { key: 'windfarms'              },
-  { key: 'offshore_installations' },
-  { key: 'msp_zones'              },
-  { key: 'geotiff'               },
+// Layer sorgente divisi per natura: nessun peso, dati EMODnet scaricati per l'area,
+// raster dell'utente. Ogni famiglia ha il suo riquadro nel pannello Analisi.
+const EMODNET_SOURCES = [
+  { key: 'windfarms',              Icon: IconWindmill },
+  { key: 'offshore_installations', Icon: IconBuildingFactory2 },
+  { key: 'msp_zones',              Icon: IconFish },
 ]
+
+const NOTE_WARN = { background: 'rgba(239,68,68,0.07)', borderRadius: 6, borderLeft: '2px solid rgba(239,68,68,0.4)' }
+
+/** Riquadro di una famiglia di layer sorgente: titolo, riga di spiegazione, bottoni. */
+function SourceGroup({ title, hint, children }) {
+  return (
+    <Stack gap={6} p="xs" style={{ border: '1px solid var(--panel-border)', borderRadius: 8 }}>
+      <div>
+        <Text size="11px" fw={600}>{title}</Text>
+        <Text size="10px" c="dimmed" lh={1.35}>{hint}</Text>
+      </div>
+      {children}
+    </Stack>
+  )
+}
+
+function SourceButton({ active, Icon, loading, onClick, children }) {
+  return (
+    <Button
+      size="xs"
+      fullWidth
+      justify="flex-start"
+      variant={active ? 'filled' : 'light'}
+      color="blue"
+      leftSection={<Icon size={14} />}
+      loading={loading}
+      onClick={onClick}
+      type="button"
+    >
+      {children}
+    </Button>
+  )
+}
 
 const RESOLUTIONS = [
   { value: '0.001', label: '0.001°' },
@@ -130,6 +165,48 @@ function defaultStartDate() {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
 }
 
+// Il token della modalità demo vive in sessionStorage: sopravvive a un ricarica,
+// sparisce chiudendo la scheda — quel che serve su un portatile da stand.
+const TOKEN_KEY = 'pmar.accessToken'
+
+function readStoredToken() {
+  try { return sessionStorage.getItem(TOKEN_KEY) } catch { return null }
+}
+
+function storeToken(token) {
+  try {
+    if (token) sessionStorage.setItem(TOKEN_KEY, token)
+    else sessionStorage.removeItem(TOKEN_KEY)
+  } catch { /* storage non disponibile: si resta sbloccati solo fino al ricarica */ }
+}
+
+/** Sostituisce il form di nuova simulazione quando la demo è bloccata. */
+function SimulationLock({ a, value, onChange, onUnlock, pending, error }) {
+  return (
+    <Stack gap="xs" style={{ borderTop: '1px solid var(--modal-divider)', paddingTop: 8 }}>
+      <Group gap={6}>
+        <IconLock size={14} style={{ color: 'var(--mantine-color-blue-4)' }} />
+        <Text size="xs" fw={700} c="blue.4" tt="uppercase" style={{ letterSpacing: '0.05em' }}>
+          {a.title}
+        </Text>
+      </Group>
+      <Text size="xs" c="dimmed">{a.body}</Text>
+      <PasswordInput
+        size="xs"
+        placeholder={a.placeholder}
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        error={error ? a.wrongToken : null}
+        // Il pannello è un unico <form>: Invio qui non deve lanciare l'analisi.
+        onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); onUnlock() } }}
+      />
+      <Button size="xs" type="button" onClick={onUnlock} loading={pending} disabled={!value.trim()}>
+        {a.unlock}
+      </Button>
+    </Stack>
+  )
+}
+
 export default function PmarPanel({
   onRun, loading, onStop, stopping, status, statusType,
   drawMode, onStartDraw, onFinishDraw, onUndoLastPolygon, onClearSeedShape, seedShape,
@@ -139,8 +216,9 @@ export default function PmarPanel({
   mspZonesLoading, mspZonesEmpty,
   natura2000Loading, natura2000Empty, natura2000Geojson,
   showNatura2000, onFetchNatura2000, onToggleNatura2000,
-  hasSeedShape, onT4mspPreview, onScenarioArea,
+  hasSeedShape, onT4mspPreview, onScenarioArea, onAnalysisMarginChange,
   onRunConnectivity, connectivityLoading, connectivityStopping, onStopConnectivity,
+  actionsTarget,
 }) {
   const { t, lang } = useLang()
   const p = t.pmar
@@ -178,7 +256,6 @@ export default function PmarPanel({
   const [margin,      setMargin]      = useState('1')
   const [geotiffB64,  setGeotiffB64]  = useState(null)
   const [geotiffName, setGeotiffName] = useState('')
-  const [geotiffUrl,  setGeotiffUrl]  = useState('')
   const geotiffRef = useRef(null)
 
   // Sotto-tab dell'Analisi: 'sources' (PPI pesato) | 'connectivity'
@@ -204,6 +281,18 @@ export default function PmarPanel({
   const [precomputeStopping,    setPrecomputeStopping]    = useState(false)
   const [refetchFlag,           setRefetchFlag]           = useState(0)
 
+  // Modalità demo: finché il backend non risponde si assume l'accesso pieno, che è
+  // anche il comportamento senza token configurato.
+  const [access, setAccess] = useState(() => {
+    setAccessToken(readStoredToken())
+    return { locked: false, unlocked: true }
+  })
+  const [tokenInput,    setTokenInput]    = useState('')
+  const [unlockPending, setUnlockPending] = useState(false)
+  const [unlockError,   setUnlockError]   = useState(false)
+  const pendingTokenRef = useRef(null)
+  const canSimulate = !access.locked || access.unlocked
+
   useEffect(() => {
     executeSync(Process.SCENARIO_STATUS, {})
       .then(data => {
@@ -213,10 +302,46 @@ export default function PmarPanel({
           s[id] = { ...info, status: info.computed ? 'ready' : 'not_computed' }
         }
         setScenarioStatuses(s)
+        // Bloccando, lo scenario selezionato può non essere più visibile.
+        setScenarioId(id => (id && !s[id] ? '' : id))
         setT4mspAreas(resp.t4msp_areas ?? [])
+
+        const acc   = resp.access ?? { locked: false, unlocked: true }
+        const tried = pendingTokenRef.current
+        pendingTokenRef.current = null
+        if (acc.locked && !acc.unlocked) {
+          // Token rifiutato (sbagliato, o cambiato sul server): si torna visitatori.
+          setAccessToken(null)
+          storeToken(null)
+          if (tried) setUnlockError(true)
+        } else if (tried) {
+          storeToken(tried)
+          setTokenInput('')
+          setUnlockError(false)
+        }
+        setAccess(acc)
       })
       .catch(() => {})
+      .finally(() => setUnlockPending(false))
   }, [runMode, refetchFlag])
+
+  function handleUnlock() {
+    const token = tokenInput.trim()
+    if (!token) return
+    pendingTokenRef.current = token
+    setAccessToken(token)
+    setUnlockPending(true)
+    setUnlockError(false)
+    setRefetchFlag(f => f + 1)
+  }
+
+  function handleLock() {
+    setAccessToken(null)
+    storeToken(null)
+    setRefetchFlag(f => f + 1)
+  }
+
+  const describePrecomputeError = msg => (msg === ACCESS_DENIED ? p.access.denied : msg)
 
   // Polled here instead of with waitForJob: a precompute runs for minutes, so this
   // loop deliberately shrugs off transient network errors and keeps tracking the job
@@ -255,6 +380,10 @@ export default function PmarPanel({
   }, [customJob, p.computeBusy])
 
   useEffect(() => { onT4mspPreview?.(null) }, [runMode])
+
+  // L'area della preview EMODnet in App segue il margine dell'analisi.
+  const marginValue = Math.max(0, Math.min(parseFloat(margin) || 0, 20))
+  useEffect(() => { onAnalysisMarginChange?.(marginValue) }, [marginValue])
 
   // Area della simulazione scelta, evidenziata sulla mappa. La geometria si
   // chiede solo alla selezione: la mappa di stato viene ripolled, e leggere
@@ -378,13 +507,11 @@ export default function PmarPanel({
   function handleSubmit(e) {
     e.preventDefault()
     if (runMode !== 'scenario') return
-    const gUrl = geotiffUrl.trim() || null
     onRun({
       scenario_id: scenarioId,
       res: parseFloat(res),
       margin: parseFloat(margin) || 0,
       geotiff_b64: useSource === 'geotiff' ? geotiffB64 : null,
-      geotiff_url: useSource === 'geotiff' ? gUrl        : null,
     })
   }
 
@@ -420,9 +547,15 @@ export default function PmarPanel({
     !!scenarioId && scenarioStatuses[scenarioId]?.status === 'ready' &&
     (connSource === 'shapefile' ? !!connShpB64 : !!connRes)
 
+  const emodnetState = {
+    windfarms:              { loading: windfarmsLoading, empty: windfarmsEmpty, emptyText: p.useWindfarmsEmpty },
+    offshore_installations: { loading: offshoreLoading,  empty: offshoreEmpty,  emptyText: p.useOffshoreEmpty },
+    msp_zones:              { loading: mspZonesLoading,  empty: mspZonesEmpty,  emptyText: p.useMspZonesEmpty },
+  }
+
   const canSubmit = !loading && runMode === 'scenario' &&
     !!scenarioId && scenarioStatuses[scenarioId]?.status === 'ready' &&
-    (useSource !== 'geotiff' || !!geotiffB64 || !!geotiffUrl.trim())
+    (useSource !== 'geotiff' || !!geotiffB64)
 
   const ncBytesPerStep  = pressure === 'oil' ? 160 : pressure === 'larvae' ? 120 : pressure === 'plastic' ? 60 : 40
   const stepsPerDay     = 24 / parseInt(timeStepHours || 1)
@@ -447,8 +580,111 @@ export default function PmarPanel({
 
   const isBlocked = stopping || precomputeStopping
 
+  // I bottoni di avvio stanno in una barra fissa in fondo al pannello (Panel.jsx),
+  // fuori dall'area che scorre: per lanciare non serve scorrere fino in fondo.
+  // Lo stato resta qui; il portal sposta solo dove vengono disegnati.
+  let actions = null
+  if (runMode === 'custom' && canSimulate) {
+    actions = (
+      <Stack gap={6}>
+        <Group grow gap="xs">
+          <Button
+            size="sm"
+            color="blue"
+            disabled={!canPrecompute}
+            onClick={handleCustomCompute}
+            type="button"
+          >
+            {customJob ? p.btnPrecomputing : p.btnPrecompute}
+          </Button>
+          {customJob && (
+            <Button
+              size="sm"
+              color="red"
+              variant="outline"
+              type="button"
+              loading={precomputeStopping}
+              disabled={precomputeStopping}
+              onClick={async () => {
+                setPrecomputeStopping(true)
+                await dismissJob(customJob.jobId)
+              }}
+            >
+              {precomputeStopping ? p.btnStopping : p.btnStop}
+            </Button>
+          )}
+        </Group>
+
+        {customPrecomputeError && (
+          <Text size="xs" c="red">{describePrecomputeError(customPrecomputeError)}</Text>
+        )}
+      </Stack>
+    )
+  } else if (runMode === 'scenario' && analysisMode === 'sources') {
+    actions = (
+      <Stack gap={6}>
+        {loading ? (
+          <Group grow gap="xs">
+            <Button size="sm" color="blue" disabled>
+              {stopping ? p.btnStopping : p.btnRunning}
+            </Button>
+            <Button size="sm" color="red" variant="outline" type="button"
+              loading={stopping}
+              disabled={stopping}
+              onClick={onStop}
+            >
+              {stopping ? p.btnStopping : p.btnStop}
+            </Button>
+          </Group>
+        ) : (
+          <Button size="sm" color="blue" fullWidth type="submit" form="pmar-form" disabled={!canSubmit}>
+            {p.btnRun}
+          </Button>
+        )}
+      </Stack>
+    )
+  } else if (runMode === 'scenario' && analysisMode === 'connectivity') {
+    actions = (
+      <Stack gap={6}>
+        {connectivityLoading ? (
+          <Group grow gap="xs">
+            <Button size="sm" color="blue" disabled type="button">
+              {connectivityStopping ? p.btnStopping : p.connectivity.btnRunning}
+            </Button>
+            <Button
+              size="sm"
+              color="red"
+              variant="outline"
+              type="button"
+              loading={connectivityStopping}
+              disabled={connectivityStopping}
+              onClick={onStopConnectivity}
+            >
+              {connectivityStopping ? p.btnStopping : p.btnStop}
+            </Button>
+          </Group>
+        ) : (
+          <Button
+            size="sm"
+            color="blue"
+            fullWidth
+            type="button"
+            disabled={!canRunConnectivity}
+            onClick={handleRunConnectivity}
+          >
+            {p.connectivity.btnRun}
+          </Button>
+        )}
+
+        {connSource === 'shapefile' && !connShpB64 && (
+          <Text size="xs" c="dimmed" ta="center">{p.connectivity.hintNoShapefile}</Text>
+        )}
+      </Stack>
+    )
+  }
+
   return (
-    <form onSubmit={handleSubmit}>
+    <form id="pmar-form" onSubmit={handleSubmit}>
       <div style={{ pointerEvents: isBlocked ? 'none' : 'auto', opacity: isBlocked ? 0.5 : 1, transition: 'opacity 0.2s' }}>
       <Stack gap="sm" p="md">
 
@@ -530,397 +766,390 @@ export default function PmarPanel({
                 </>
               )}
 
-              {/* ── Nuova simulazione ──────────────────────────── */}
-              <Text size="xs" fw={700} c="blue.4" tt="uppercase" style={{ letterSpacing: '0.05em', borderTop: '1px solid var(--modal-divider)', paddingTop: 8 }}>
-                {p.sectionNewScenario}
-              </Text>
-
-              <TextInput
-                size="xs"
-                label={p.labelTitle}
-                placeholder={p.labelTitleHint}
-                value={customLabel}
-                onChange={e => setCustomLabel(e.target.value)}
-                styles={LABEL_STYLES}
-              />
-
-              <Textarea
-                size="xs"
-                label={p.labelDesc}
-                placeholder={p.labelDescHint}
-                value={customDesc}
-                onChange={e => setCustomDesc(e.target.value)}
-                autosize
-                minRows={2}
-                styles={LABEL_STYLES}
-              />
-
-              {/* ── Multi-seeding ─────────────────────────────── */}
-              <Switch
-                size="xs"
-                label={lbl(p.multiSeedingToggle, p.tooltips.multiSeeding)}
-                checked={multiSeeding}
-                onChange={e => setMultiSeeding(e.currentTarget.checked)}
-                styles={{ label: { ...LABEL_STYLES.label, cursor: 'pointer' } }}
-              />
-              {multiSeeding && (
-                <Stack gap="xs">
-                  <Group grow gap="xs">
-                    <TextInput
-                      type="number"
-                      size="xs"
-                      label={lbl(p.seedingsLabel, p.tooltips.seedingsCount)}
-                      value={seedings}
-                      min="2"
-                      max="12"
-                      onChange={e => setSeedings(e.target.value)}
-                      styles={LABEL_STYLES}
-                    />
-                    <TextInput
-                      type="number"
-                      size="xs"
-                      label={lbl(p.tshiftLabel, p.tooltips.tshift)}
-                      value={tshift}
-                      min="1"
-                      max="365"
-                      onChange={e => setTshift(e.target.value)}
-                      styles={LABEL_STYLES}
-                    />
+              {canSimulate ? (
+                <>
+                  {/* ── Nuova simulazione ──────────────────────────── */}
+                  <Group justify="space-between" gap="xs" style={{ borderTop: '1px solid var(--modal-divider)', paddingTop: 8 }}>
+                    <Text size="xs" fw={700} c="blue.4" tt="uppercase" style={{ letterSpacing: '0.05em' }}>
+                      {p.sectionNewScenario}
+                    </Text>
+                    {access.locked && (
+                      <Button size="compact-xs" variant="subtle" color="gray" type="button"
+                              leftSection={<IconLockOpen size={12} />} onClick={handleLock}>
+                        {p.access.lock}
+                      </Button>
+                    )}
                   </Group>
-                  <Text size="10px" c="dimmed" ta="center">
-                    {computeDateRange(startDate, seedings, tshift, t.controls.locale)}
-                    {' · '}{seedings} run × {tshift} gg
-                  </Text>
-                </Stack>
-              )}
 
-
-              {/* ── Area di seeding ───────────────────────────── */}
-              <Text size="xs" fw={600} c="dimmed" tt="uppercase" style={{ letterSpacing: '0.05em' }}>
-                {p.seedAreaLabel}
-              </Text>
-              <SegmentedControl
-                size="xs"
-                fullWidth
-                value={seedAreaMode}
-                onChange={mode => {
-                  setSeedAreaMode(mode)
-                  if (mode !== 'draw') onClearSeedShape()
-                }}
-                data={[
-                  { value: 'draw',   label: p.seedAreaDraw },
-                  { value: 'upload', label: p.seedAreaUpload },
-                  { value: 't4msp',  label: p.seedAreaT4msp },
-                ]}
-                color="blue"
-              />
-
-              {seedAreaMode === 'draw' && (
-                <Stack gap="xs">
-                  <Group grow gap="xs">
-                    <Button
-                      size="xs"
-                      variant={drawMode === 'circle' ? 'filled' : 'light'}
-                      color="blue"
-                      px={4}
-                      fz={11}
-                      onClick={() => onStartDraw('circle')}
-                    >
-                      {p.btnCircle}
-                    </Button>
-                    <Button
-                      size="xs"
-                      variant={drawMode === 'rectangle' ? 'filled' : 'light'}
-                      color="blue"
-                      px={4}
-                      fz={11}
-                      onClick={() => onStartDraw('rectangle')}
-                    >
-                      {p.btnRect}
-                    </Button>
-                    <Button
-                      size="xs"
-                      variant={drawMode === 'polygon' ? 'filled' : 'light'}
-                      color="blue"
-                      px={4}
-                      fz={11}
-                      onClick={() => onStartDraw('polygon')}
-                    >
-                      {p.btnPolygon}
-                    </Button>
-                  </Group>
-                  {drawMode === 'circle'    && <Text size="xs" c="dimmed" ta="center">{p.hintCircle}</Text>}
-                  {drawMode === 'rectangle' && <Text size="xs" c="dimmed" ta="center">{p.hintRect}</Text>}
-                  {drawMode === 'polygon'   && (
-                    <PolygonDrawControls
-                      seedShape={seedShape}
-                      labels={p}
-                      onUndo={onUndoLastPolygon}
-                      onFinish={onFinishDraw}
-                    />
-                  )}
-                  {!drawMode && seedInfo && (
-                    <Group
-                      gap={4}
-                      align="center"
-                      px="xs"
-                      py={6}
-                      style={{ background: 'rgba(10,132,255,0.08)', borderRadius: 6, border: '1px solid rgba(10,132,255,0.20)' }}
-                    >
-                      <Text size="xs" c="blue.4" style={{ flex: 1, textAlign: 'center' }}>
-                        {seedInfo}
-                      </Text>
-                      <ActionIcon
-                        size={16}
-                        variant="subtle"
-                        color="blue"
-                        onClick={onClearSeedShape}
-                        style={{ flexShrink: 0, opacity: 0.7 }}
-                      >
-                        <IconX size={10} />
-                      </ActionIcon>
-                    </Group>
-                  )}
-                  {!drawMode && !seedShape && <Text size="xs" c="dimmed" ta="center">{p.hintNoShape}</Text>}
                   <TextInput
                     size="xs"
-                    label={p.labelSeedName}
-                    placeholder={p.labelSeedNameHint}
-                    value={seedAreaName}
-                    onChange={e => setSeedAreaName(e.target.value)}
+                    label={p.labelTitle}
+                    placeholder={p.labelTitleHint}
+                    value={customLabel}
+                    onChange={e => setCustomLabel(e.target.value)}
                     styles={LABEL_STYLES}
                   />
-                </Stack>
-              )}
 
-              {seedAreaMode === 'upload' && (
-                <Button
-                  size="xs"
-                  variant="light"
-                  color="blue"
-                  fullWidth
-                  onClick={() => fileRef.current?.click()}
-                  style={{ height: 'auto', padding: '12px 8px' }}
-                >
-                  <input ref={fileRef} type="file" accept=".zip" style={{ display: 'none' }} onChange={handleFileChange} />
-                  {shapefileB64
-                    ? <Text size="xs">{shapefileName}</Text>
-                    : <Text size="xs" c="dimmed">{p.uploadHint}</Text>}
-                </Button>
-              )}
+                  <Textarea
+                    size="xs"
+                    label={p.labelDesc}
+                    placeholder={p.labelDescHint}
+                    value={customDesc}
+                    onChange={e => setCustomDesc(e.target.value)}
+                    autosize
+                    minRows={2}
+                    styles={LABEL_STYLES}
+                  />
 
-              {seedAreaMode === 'upload' && (
-                <>
+                  {/* ── Multi-seeding ─────────────────────────────── */}
                   <Switch
                     size="xs"
-                    label={lbl(p.connSeedingToggle, p.tooltips.connSeeding)}
-                    checked={connSeeding}
-                    onChange={e => setConnSeeding(e.currentTarget.checked)}
+                    label={lbl(p.multiSeedingToggle, p.tooltips.multiSeeding)}
+                    checked={multiSeeding}
+                    onChange={e => setMultiSeeding(e.currentTarget.checked)}
                     styles={{ label: { ...LABEL_STYLES.label, cursor: 'pointer' } }}
                   />
-                  {connSeeding && (
-                    <Stack gap={4}>
+                  {multiSeeding && (
+                    <Stack gap="xs">
+                      <Group grow gap="xs">
+                        <TextInput
+                          type="number"
+                          size="xs"
+                          label={lbl(p.seedingsLabel, p.tooltips.seedingsCount)}
+                          value={seedings}
+                          min="2"
+                          max="12"
+                          onChange={e => setSeedings(e.target.value)}
+                          styles={LABEL_STYLES}
+                        />
+                        <TextInput
+                          type="number"
+                          size="xs"
+                          label={lbl(p.tshiftLabel, p.tooltips.tshift)}
+                          value={tshift}
+                          min="1"
+                          max="365"
+                          onChange={e => setTshift(e.target.value)}
+                          styles={LABEL_STYLES}
+                        />
+                      </Group>
+                      <Text size="10px" c="dimmed" ta="center">
+                        {computeDateRange(startDate, seedings, tshift, t.controls.locale)}
+                        {' · '}{seedings} run × {tshift} gg
+                      </Text>
+                    </Stack>
+                  )}
+
+
+                  {/* ── Area di seeding ───────────────────────────── */}
+                  <Text size="xs" fw={600} c="dimmed" tt="uppercase" style={{ letterSpacing: '0.05em' }}>
+                    {p.seedAreaLabel}
+                  </Text>
+                  <SegmentedControl
+                    size="xs"
+                    fullWidth
+                    value={seedAreaMode}
+                    onChange={mode => {
+                      setSeedAreaMode(mode)
+                      if (mode !== 'draw') onClearSeedShape()
+                    }}
+                    data={[
+                      { value: 'draw',   label: p.seedAreaDraw },
+                      { value: 'upload', label: p.seedAreaUpload },
+                      { value: 't4msp',  label: p.seedAreaT4msp },
+                    ]}
+                    color="blue"
+                  />
+
+                  {seedAreaMode === 'draw' && (
+                    <Stack gap="xs">
+                      <Group grow gap="xs">
+                        <Button
+                          size="xs"
+                          variant={drawMode === 'circle' ? 'filled' : 'light'}
+                          color="blue"
+                          px={4}
+                          fz={11}
+                          onClick={() => onStartDraw('circle')}
+                        >
+                          {p.btnCircle}
+                        </Button>
+                        <Button
+                          size="xs"
+                          variant={drawMode === 'rectangle' ? 'filled' : 'light'}
+                          color="blue"
+                          px={4}
+                          fz={11}
+                          onClick={() => onStartDraw('rectangle')}
+                        >
+                          {p.btnRect}
+                        </Button>
+                        <Button
+                          size="xs"
+                          variant={drawMode === 'polygon' ? 'filled' : 'light'}
+                          color="blue"
+                          px={4}
+                          fz={11}
+                          onClick={() => onStartDraw('polygon')}
+                        >
+                          {p.btnPolygon}
+                        </Button>
+                      </Group>
+                      {drawMode === 'circle'    && <Text size="xs" c="dimmed" ta="center">{p.hintCircle}</Text>}
+                      {drawMode === 'rectangle' && <Text size="xs" c="dimmed" ta="center">{p.hintRect}</Text>}
+                      {drawMode === 'polygon'   && (
+                        <PolygonDrawControls
+                          seedShape={seedShape}
+                          labels={p}
+                          onUndo={onUndoLastPolygon}
+                          onFinish={onFinishDraw}
+                        />
+                      )}
+                      {!drawMode && seedInfo && (
+                        <Group
+                          gap={4}
+                          align="center"
+                          px="xs"
+                          py={6}
+                          style={{ background: 'rgba(10,132,255,0.08)', borderRadius: 6, border: '1px solid rgba(10,132,255,0.20)' }}
+                        >
+                          <Text size="xs" c="blue.4" style={{ flex: 1, textAlign: 'center' }}>
+                            {seedInfo}
+                          </Text>
+                          <ActionIcon
+                            size={16}
+                            variant="subtle"
+                            color="blue"
+                            onClick={onClearSeedShape}
+                            style={{ flexShrink: 0, opacity: 0.7 }}
+                          >
+                            <IconX size={10} />
+                          </ActionIcon>
+                        </Group>
+                      )}
+                      {!drawMode && !seedShape && <Text size="xs" c="dimmed" ta="center">{p.hintNoShape}</Text>}
+                      <TextInput
+                        size="xs"
+                        label={p.labelSeedName}
+                        placeholder={p.labelSeedNameHint}
+                        value={seedAreaName}
+                        onChange={e => setSeedAreaName(e.target.value)}
+                        styles={LABEL_STYLES}
+                      />
+                    </Stack>
+                  )}
+
+                  {seedAreaMode === 'upload' && (
+                    <Button
+                      size="xs"
+                      variant="light"
+                      color="blue"
+                      fullWidth
+                      onClick={() => fileRef.current?.click()}
+                      style={{ height: 'auto', padding: '12px 8px' }}
+                    >
+                      <input ref={fileRef} type="file" accept=".zip" style={{ display: 'none' }} onChange={handleFileChange} />
+                      {shapefileB64
+                        ? <Text size="xs">{shapefileName}</Text>
+                        : <Text size="xs" c="dimmed">{p.uploadHint}</Text>}
+                    </Button>
+                  )}
+
+                  {seedAreaMode === 'upload' && (
+                    <>
+                      <Switch
+                        size="xs"
+                        label={lbl(p.connSeedingToggle, p.tooltips.connSeeding)}
+                        checked={connSeeding}
+                        onChange={e => setConnSeeding(e.currentTarget.checked)}
+                        styles={{ label: { ...LABEL_STYLES.label, cursor: 'pointer' } }}
+                      />
+                      {connSeeding && (
+                        <Stack gap={4}>
+                          <TextInput
+                            type="number"
+                            size="xs"
+                            label={lbl(p.connSeedingLabel, p.tooltips.connSeedingNum)}
+                            value={pnumPerPolygon}
+                            min="10"
+                            max="20000"
+                            onChange={e => setPnumPerPolygon(e.target.value)}
+                            styles={LABEL_STYLES}
+                          />
+                          <Text size="10px" c="dimmed">{p.connSeedingHint}</Text>
+                        </Stack>
+                      )}
+                    </>
+                  )}
+
+                  {seedAreaMode === 't4msp' && (
+                    <Stack gap="xs">
+                      <TextInput
+                        size="xs"
+                        placeholder={p.t4mspSearchHint}
+                        value={t4mspSearch}
+                        onChange={e => { setT4mspSearch(e.target.value); setSelectedT4mspArea(null); onT4mspPreview?.(null) }}
+                      />
+                      <ScrollArea h={140} style={{ border: '1px solid var(--modal-border)', borderRadius: 6 }}>
+                        <Stack gap={0}>
+                          {filteredAreas.map(area => (
+                            <button
+                              key={area.id}
+                              type="button"
+                              onClick={async () => {
+                                const next = selectedT4mspArea === area.id ? null : area.id
+                                setSelectedT4mspArea(next)
+                                if (!next) { onT4mspPreview?.(null); return }
+                                if (geoCache.current[area.id]) {
+                                  onT4mspPreview?.({ type: 'FeatureCollection', features: [{ type: 'Feature', geometry: geoCache.current[area.id], properties: {} }] })
+                                  return
+                                }
+                                try {
+                                  const { geo } = await executeSync(Process.SCENARIO_STATUS, { area_id: area.id })
+                                  if (geo) {
+                                    geoCache.current[area.id] = geo
+                                    onT4mspPreview?.({ type: 'FeatureCollection', features: [{ type: 'Feature', geometry: geo, properties: {} }] })
+                                  }
+                                } catch {}
+                              }}
+                              style={{
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                                padding: '6px 10px',
+                                border: 'none',
+                                borderBottom: '1px solid var(--modal-divider)',
+                                background: selectedT4mspArea === area.id ? 'rgba(10,132,255,0.14)' : 'transparent',
+                                color: selectedT4mspArea === area.id ? '#64d2ff' : 'var(--text-secondary)',
+                                fontSize: 12,
+                                cursor: 'pointer',
+                                textAlign: 'left',
+                                width: '100%',
+                              }}
+                            >
+                              <span>{area.label}</span>
+                              {selectedT4mspArea === area.id && <span style={{ fontSize: 10 }}>✓</span>}
+                            </button>
+                          ))}
+                          {filteredAreas.length === 0 && (
+                            <Text size="xs" c="dimmed" ta="center" p="sm">···</Text>
+                          )}
+                        </Stack>
+                      </ScrollArea>
+                    </Stack>
+                  )}
+
+                  {/* ── Tipo di pressione ─────────────────────────── */}
+                  <Group gap={4} align="center">
+                    <Text size="xs" fw={600} c="dimmed" tt="uppercase" style={{ letterSpacing: '0.05em' }}>
+                      {p.sectionPressure}
+                    </Text>
+                    <InfoTooltip text={p.tooltips.sectionPressure} />
+                  </Group>
+                  <SimpleGrid cols={2} spacing="xs">
+                    {PRESSURES.map(pr => (
+                      <Button
+                        key={pr.key}
+                        size="xs"
+                        variant={pressure === pr.key ? 'filled' : 'light'}
+                        color="blue"
+                        onClick={() => setPressure(pr.key)}
+                      >
+                        {p.pressures[pr.key]}
+                      </Button>
+                    ))}
+                  </SimpleGrid>
+
+                  {/* ── Parametri ──────────────────────────────────── */}
+                  <TextInput
+                    type="date"
+                    size="xs"
+                    label={lbl(p.labelStart, p.tooltips.labelStart)}
+                    value={startDate}
+                    onChange={e => setStartDate(e.target.value)}
+                    styles={LABEL_STYLES}
+                  />
+                  <Group grow gap="xs">
+                    <TextInput
+                      type="number"
+                      size="xs"
+                      label={lbl(p.labelDuration, p.tooltips.labelDuration)}
+                      value={durationDays}
+                      min="1"
+                      max="730"
+                      onChange={e => setDurationDays(e.target.value)}
+                      styles={LABEL_STYLES}
+                    />
+                    <TextInput
+                      type="number"
+                      size="xs"
+                      label={lbl(p.labelParticles, p.tooltips.labelParticles)}
+                      value={usesPerPolygon ? '' : pnum}
+                      placeholder={usesPerPolygon ? p.connSeedingOverride : undefined}
+                      disabled={usesPerPolygon}
+                      min="10"
+                      max="100000"
+                      onChange={e => setPnum(e.target.value)}
+                      styles={LABEL_STYLES}
+                    />
+                  </Group>
+                  <Group
+                    gap={4}
+                    align="center"
+                    style={{ cursor: 'pointer', userSelect: 'none' }}
+                    onClick={() => setShowAdvanced(v => !v)}
+                  >
+                    <Text size="xs" fw={600} c="dimmed" tt="uppercase" style={{ letterSpacing: '0.05em', flex: 1 }}>
+                      {p.advancedLabel}
+                    </Text>
+                    {showAdvanced
+                      ? <IconChevronUp size={12} style={{ color: 'var(--text-secondary)' }} />
+                      : <IconChevronDown size={12} style={{ color: 'var(--text-secondary)' }} />}
+                  </Group>
+                  <Collapse expanded={showAdvanced}>
+                    <Stack gap="xs">
+                      <NativeSelect
+                        size="xs"
+                        label={lbl(p.labelTimeStep, p.tooltips.labelTimeStep)}
+                        value={timeStepHours}
+                        onChange={e => setTimeStepHours(e.target.value)}
+                        data={TIME_STEPS}
+                        styles={LABEL_STYLES}
+                      />
                       <TextInput
                         type="number"
                         size="xs"
-                        label={lbl(p.connSeedingLabel, p.tooltips.connSeedingNum)}
-                        value={pnumPerPolygon}
-                        min="10"
-                        max="20000"
-                        onChange={e => setPnumPerPolygon(e.target.value)}
+                        label={lbl(p.labelCmemsMargin, p.tooltips.labelCmemsMargin)}
+                        value={cmemsMargin}
+                        min="0"
+                        max="20"
+                        step="any"
+                        onChange={e => setCmemsMargin(e.target.value)}
                         styles={LABEL_STYLES}
                       />
-                      <Text size="10px" c="dimmed">{p.connSeedingHint}</Text>
                     </Stack>
-                  )}
+                  </Collapse>
+
+                  <Text
+                    size="10px"
+                    c={ncColor}
+                    p="xs"
+                    style={{ background: ncBg, borderRadius: 6, borderLeft: `2px solid ${ncBorder}`, lineHeight: 1.4 }}
+                  >
+                    {p.ncSizeHint.replace('{size}', formatNcSize(ncEstimateBytes))}
+                    {usesPerPolygon && ` ${p.ncSizePerPolygon}`}
+                  </Text>
                 </>
-              )}
-
-              {seedAreaMode === 't4msp' && (
-                <Stack gap="xs">
-                  <TextInput
-                    size="xs"
-                    placeholder={p.t4mspSearchHint}
-                    value={t4mspSearch}
-                    onChange={e => { setT4mspSearch(e.target.value); setSelectedT4mspArea(null); onT4mspPreview?.(null) }}
-                  />
-                  <ScrollArea h={140} style={{ border: '1px solid var(--modal-border)', borderRadius: 6 }}>
-                    <Stack gap={0}>
-                      {filteredAreas.map(area => (
-                        <button
-                          key={area.id}
-                          type="button"
-                          onClick={async () => {
-                            const next = selectedT4mspArea === area.id ? null : area.id
-                            setSelectedT4mspArea(next)
-                            if (!next) { onT4mspPreview?.(null); return }
-                            if (geoCache.current[area.id]) {
-                              onT4mspPreview?.({ type: 'FeatureCollection', features: [{ type: 'Feature', geometry: geoCache.current[area.id], properties: {} }] })
-                              return
-                            }
-                            try {
-                              const { geo } = await executeSync(Process.SCENARIO_STATUS, { area_id: area.id })
-                              if (geo) {
-                                geoCache.current[area.id] = geo
-                                onT4mspPreview?.({ type: 'FeatureCollection', features: [{ type: 'Feature', geometry: geo, properties: {} }] })
-                              }
-                            } catch {}
-                          }}
-                          style={{
-                            display: 'flex',
-                            justifyContent: 'space-between',
-                            alignItems: 'center',
-                            padding: '6px 10px',
-                            border: 'none',
-                            borderBottom: '1px solid var(--modal-divider)',
-                            background: selectedT4mspArea === area.id ? 'rgba(10,132,255,0.14)' : 'transparent',
-                            color: selectedT4mspArea === area.id ? '#64d2ff' : 'var(--text-secondary)',
-                            fontSize: 12,
-                            cursor: 'pointer',
-                            textAlign: 'left',
-                            width: '100%',
-                          }}
-                        >
-                          <span>{area.label}</span>
-                          {selectedT4mspArea === area.id && <span style={{ fontSize: 10 }}>✓</span>}
-                        </button>
-                      ))}
-                      {filteredAreas.length === 0 && (
-                        <Text size="xs" c="dimmed" ta="center" p="sm">···</Text>
-                      )}
-                    </Stack>
-                  </ScrollArea>
-                </Stack>
-              )}
-
-              {/* ── Tipo di pressione ─────────────────────────── */}
-              <Group gap={4} align="center">
-                <Text size="xs" fw={600} c="dimmed" tt="uppercase" style={{ letterSpacing: '0.05em' }}>
-                  {p.sectionPressure}
-                </Text>
-                <InfoTooltip text={p.tooltips.sectionPressure} />
-              </Group>
-              <SimpleGrid cols={2} spacing="xs">
-                {PRESSURES.map(pr => (
-                  <Button
-                    key={pr.key}
-                    size="xs"
-                    variant={pressure === pr.key ? 'filled' : 'light'}
-                    color="blue"
-                    onClick={() => setPressure(pr.key)}
-                  >
-                    {p.pressures[pr.key]}
-                  </Button>
-                ))}
-              </SimpleGrid>
-
-              {/* ── Parametri ──────────────────────────────────── */}
-              <TextInput
-                type="date"
-                size="xs"
-                label={lbl(p.labelStart, p.tooltips.labelStart)}
-                value={startDate}
-                onChange={e => setStartDate(e.target.value)}
-                styles={LABEL_STYLES}
-              />
-              <Group grow gap="xs">
-                <TextInput
-                  type="number"
-                  size="xs"
-                  label={lbl(p.labelDuration, p.tooltips.labelDuration)}
-                  value={durationDays}
-                  min="1"
-                  max="730"
-                  onChange={e => setDurationDays(e.target.value)}
-                  styles={LABEL_STYLES}
+              ) : (
+                <SimulationLock
+                  a={p.access}
+                  value={tokenInput}
+                  onChange={setTokenInput}
+                  onUnlock={handleUnlock}
+                  pending={unlockPending}
+                  error={unlockError}
                 />
-                <TextInput
-                  type="number"
-                  size="xs"
-                  label={lbl(p.labelParticles, p.tooltips.labelParticles)}
-                  value={usesPerPolygon ? '' : pnum}
-                  placeholder={usesPerPolygon ? p.connSeedingOverride : undefined}
-                  disabled={usesPerPolygon}
-                  min="10"
-                  max="100000"
-                  onChange={e => setPnum(e.target.value)}
-                  styles={LABEL_STYLES}
-                />
-              </Group>
-              <Group
-                gap={4}
-                align="center"
-                style={{ cursor: 'pointer', userSelect: 'none' }}
-                onClick={() => setShowAdvanced(v => !v)}
-              >
-                <Text size="xs" fw={600} c="dimmed" tt="uppercase" style={{ letterSpacing: '0.05em', flex: 1 }}>
-                  {p.advancedLabel}
-                </Text>
-                {showAdvanced
-                  ? <IconChevronUp size={12} style={{ color: 'var(--text-secondary)' }} />
-                  : <IconChevronDown size={12} style={{ color: 'var(--text-secondary)' }} />}
-              </Group>
-              <Collapse expanded={showAdvanced}>
-                <Stack gap="xs">
-                  <NativeSelect
-                    size="xs"
-                    label={lbl(p.labelTimeStep, p.tooltips.labelTimeStep)}
-                    value={timeStepHours}
-                    onChange={e => setTimeStepHours(e.target.value)}
-                    data={TIME_STEPS}
-                    styles={LABEL_STYLES}
-                  />
-                  <TextInput
-                    type="number"
-                    size="xs"
-                    label={lbl(p.labelCmemsMargin, p.tooltips.labelCmemsMargin)}
-                    value={cmemsMargin}
-                    min="0"
-                    max="20"
-                    step="any"
-                    onChange={e => setCmemsMargin(e.target.value)}
-                    styles={LABEL_STYLES}
-                  />
-                </Stack>
-              </Collapse>
-
-              <Text
-                size="10px"
-                c={ncColor}
-                p="xs"
-                style={{ background: ncBg, borderRadius: 6, borderLeft: `2px solid ${ncBorder}`, lineHeight: 1.4 }}
-              >
-                {p.ncSizeHint.replace('{size}', formatNcSize(ncEstimateBytes))}
-                {usesPerPolygon && ` ${p.ncSizePerPolygon}`}
-              </Text>
-
-              <Group grow gap="xs">
-                <Button
-                  size="sm"
-                  color="blue"
-                  disabled={!canPrecompute}
-                  onClick={handleCustomCompute}
-                  type="button"
-                >
-                  {customJob ? p.btnPrecomputing : p.btnPrecompute}
-                </Button>
-                {customJob && (
-                  <Button
-                    size="sm"
-                    color="red"
-                    variant="outline"
-                    type="button"
-                    loading={precomputeStopping}
-                    disabled={precomputeStopping}
-                    onClick={async () => {
-                      setPrecomputeStopping(true)
-                      await dismissJob(customJob.jobId)
-                    }}
-                  >
-                    {precomputeStopping ? p.btnStopping : p.btnStop}
-                  </Button>
-                )}
-              </Group>
+              )}
 
             </Stack>
           </Tabs.Panel>
@@ -997,63 +1226,41 @@ export default function PmarPanel({
                 </Text>
                 <InfoTooltip text={p.tooltips.sectionUse} />
               </Group>
-              <SimpleGrid cols={2} spacing="xs">
-                {USE_SOURCES.map(u => (
-                  <Button
-                    key={u.key}
-                    size="xs"
-                    variant={useSource === u.key ? 'filled' : 'light'}
-                    color="blue"
-                    onClick={() => onUseSourceChange(u.key)}
-                  >
-                    {u.key === 'windfarms' && windfarmsLoading ? '...'
-                      : u.key === 'offshore_installations' && offshoreLoading ? '...'
-                      : u.key === 'msp_zones' && mspZonesLoading ? '...'
-                      : p.useSources[u.key]}
-                  </Button>
+              <SourceGroup title={p.useGroups.uniform} hint={p.useGroups.uniformHint}>
+                <SourceButton active={useSource === 'none'} Icon={IconGridDots}
+                              onClick={() => onUseSourceChange('none')}>
+                  {p.useSources.none}
+                </SourceButton>
+              </SourceGroup>
+
+              <SourceGroup title={p.useGroups.emodnet} hint={p.useGroups.emodnetHint}>
+                {EMODNET_SOURCES.map(({ key, Icon }) => (
+                  <SourceButton key={key} active={useSource === key} Icon={Icon}
+                                loading={emodnetState[key].loading}
+                                onClick={() => onUseSourceChange(key)}>
+                    {p.useSources[key]}
+                  </SourceButton>
                 ))}
-              </SimpleGrid>
+                {/* Solo l'avviso di area senza dati: cosa fa il layer lo dice già il titolo. */}
+                {EMODNET_SOURCES.some(({ key }) => key === useSource) && emodnetState[useSource].empty && (
+                  <Text size="xs" p="xs" c="red.4" style={NOTE_WARN}>
+                    {emodnetState[useSource].emptyText}
+                  </Text>
+                )}
+              </SourceGroup>
 
-              {useSource === 'windfarms' && !windfarmsEmpty && (
-                <Text size="xs" c="blue.4" p="xs" style={{ background: 'rgba(10,132,255,0.07)', borderRadius: 6, borderLeft: '2px solid rgba(10,132,255,0.45)' }}>
-                  {p.useWindfarmsInfo}
-                </Text>
-              )}
-              {useSource === 'windfarms' && windfarmsEmpty && (
-                <Text size="xs" c="red.4" p="xs" style={{ background: 'rgba(239,68,68,0.07)', borderRadius: 6, borderLeft: '2px solid rgba(239,68,68,0.4)' }}>
-                  {p.useWindfarmsEmpty}
-                </Text>
-              )}
-              {useSource === 'offshore_installations' && !offshoreEmpty && (
-                <Text size="xs" c="blue.4" p="xs" style={{ background: 'rgba(10,132,255,0.07)', borderRadius: 6, borderLeft: '2px solid rgba(10,132,255,0.45)' }}>
-                  {p.useOffshoreInfo}
-                </Text>
-              )}
-              {useSource === 'offshore_installations' && offshoreEmpty && (
-                <Text size="xs" c="red.4" p="xs" style={{ background: 'rgba(239,68,68,0.07)', borderRadius: 6, borderLeft: '2px solid rgba(239,68,68,0.4)' }}>
-                  {p.useOffshoreEmpty}
-                </Text>
-              )}
-              {useSource === 'msp_zones' && !mspZonesEmpty && (
-                <Text size="xs" c="blue.4" p="xs" style={{ background: 'rgba(10,132,255,0.07)', borderRadius: 6, borderLeft: '2px solid rgba(10,132,255,0.45)' }}>
-                  {p.useMspZonesInfo}
-                </Text>
-              )}
-              {useSource === 'msp_zones' && mspZonesEmpty && (
-                <Text size="xs" c="red.4" p="xs" style={{ background: 'rgba(239,68,68,0.07)', borderRadius: 6, borderLeft: '2px solid rgba(239,68,68,0.4)' }}>
-                  {p.useMspZonesEmpty}
-                </Text>
-              )}
-
-              {useSource === 'geotiff' && (
-                <Stack gap="xs">
+              <SourceGroup title={p.useGroups.custom} hint={p.useGroups.customHint}>
+                <SourceButton active={useSource === 'geotiff'} Icon={IconFileUpload}
+                              onClick={() => onUseSourceChange('geotiff')}>
+                  {p.useSources.geotiff}
+                </SourceButton>
+                {useSource === 'geotiff' && (
                   <Button
                     size="xs"
-                    variant="light"
-                    color="blue"
+                    variant="default"
                     fullWidth
                     onClick={() => geotiffRef.current?.click()}
-                    style={{ height: 'auto', padding: '12px 8px' }}
+                    style={{ height: 'auto', padding: '10px 8px', borderStyle: 'dashed' }}
                     type="button"
                   >
                     <input ref={geotiffRef} type="file" accept=".tif,.tiff" style={{ display: 'none' }} onChange={handleGeotiffChange} />
@@ -1061,16 +1268,8 @@ export default function PmarPanel({
                       ? <Text size="xs">{geotiffName}</Text>
                       : <Text size="xs" c="dimmed">{p.geotiffUploadHint}</Text>}
                   </Button>
-                  <Text size="xs" c="dimmed" ta="center">{p.geotiffOrLabel}</Text>
-                  <TextInput
-                    type="url"
-                    size="xs"
-                    placeholder={p.geotiffUrlHint}
-                    value={geotiffUrl}
-                    onChange={e => setGeotiffUrl(e.target.value)}
-                  />
-                </Stack>
-              )}
+                )}
+              </SourceGroup>
 
               {/* ── Risoluzione + Margine ─────────────────────── */}
               <NativeSelect
@@ -1092,26 +1291,6 @@ export default function PmarPanel({
                 onChange={e => setMargin(e.target.value)}
                 styles={LABEL_STYLES}
               />
-
-              {loading ? (
-                <Group grow gap="xs">
-                  <Button size="sm" color="blue" disabled>
-                    {stopping ? p.btnStopping : p.btnRunning}
-                  </Button>
-                  <Button size="sm" color="red" variant="outline" type="button"
-                    loading={stopping}
-                    disabled={stopping}
-                    onClick={onStop}
-                  >
-                    {stopping ? p.btnStopping : p.btnStop}
-                  </Button>
-                </Group>
-              ) : (
-                <Button size="sm" color="blue" fullWidth type="submit" disabled={!canSubmit}>
-                  {p.btnRun}
-                </Button>
-              )}
-
                   </Stack>
                 </Tabs.Panel>
 
@@ -1230,40 +1409,6 @@ export default function PmarPanel({
                       <Text size="xs" c="dimmed">{p.connectivity.selfLoopsLabel}</Text>
                       <InfoTooltip text={p.tooltips.connSelfLoops} />
                     </Group>
-
-                    {connectivityLoading ? (
-                      <Group grow gap="xs">
-                        <Button size="sm" color="blue" disabled type="button">
-                          {connectivityStopping ? p.btnStopping : p.connectivity.btnRunning}
-                        </Button>
-                        <Button
-                          size="sm"
-                          color="red"
-                          variant="outline"
-                          type="button"
-                          loading={connectivityStopping}
-                          disabled={connectivityStopping}
-                          onClick={onStopConnectivity}
-                        >
-                          {connectivityStopping ? p.btnStopping : p.btnStop}
-                        </Button>
-                      </Group>
-                    ) : (
-                      <Button
-                        size="sm"
-                        color="blue"
-                        fullWidth
-                        type="button"
-                        disabled={!canRunConnectivity}
-                        onClick={handleRunConnectivity}
-                      >
-                        {p.connectivity.btnRun}
-                      </Button>
-                    )}
-
-                    {connSource === 'shapefile' && !connShpB64 && (
-                      <Text size="xs" c="dimmed" ta="center">{p.connectivity.hintNoShapefile}</Text>
-                    )}
                   </Stack>
                 </Tabs.Panel>
               </Tabs>
@@ -1316,6 +1461,7 @@ export default function PmarPanel({
         </Tabs>
       </Stack>
       </div>
+      {actionsTarget && createPortal(actions, actionsTarget)}
     </form>
   )
 }

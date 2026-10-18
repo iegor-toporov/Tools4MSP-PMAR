@@ -6,7 +6,7 @@ import { IconSun, IconMoon, IconCircleCheck } from '@tabler/icons-react'
 import { notifications } from '@mantine/notifications'
 import { MODEL_STYLES } from './constants'
 import { useLang } from './LanguageContext'
-import { Process, ErrorCode, JobOutcome, OgcError,
+import { Process, ErrorCode, JobOutcome, OgcError, ACCESS_DENIED,
          executeAsync, waitForJob, fetchJobResults, dismissJob,
          fetchFeatureLayer } from './api/ogcProcesses'
 import { usePreviewLayer } from './hooks/usePreviewLayer'
@@ -22,55 +22,14 @@ import { PmarThresholdModal } from './components/PmarThreshold'
 import { PmarComparisonModal } from './components/PmarComparison'
 import { sampleProfile, PmarProfileModal } from './components/PmarProfile'
 import { seedShapeToGeoJSON, seedShapeBounds } from './geometry/seedShape'
+import { spectralR, logNorm, linNorm, logClasses, linearClasses, classIndex,
+         PROBABILITY_BANDS, redsColor, formatBound, formatPercent } from './legend/classes'
 import { PmarConnectivityMatrix } from './components/PmarConnectivityMatrix'
+import MapLegend from './components/MapLegend'
 import 'leaflet/dist/leaflet.css'
 import './App.css'
 
 const STRANDED_STYLE = { color: '#ef4444', fillColor: '#fca5a5', weight: 2 }
-
-// ── PMAR colormap helpers (replica di Spectral_r + LogNorm di matplotlib) ──────
-const SPECTRAL_R = [
-  [94,  79,  162], // 0.0  #5e4fa2
-  [50,  136, 189], // 0.1  #3288bd
-  [102, 194, 165], // 0.2  #66c2a5
-  [171, 221, 164], // 0.3  #abdda4
-  [230, 245, 152], // 0.4  #e6f598
-  [255, 255, 191], // 0.5  #ffffbf
-  [254, 224, 139], // 0.6  #fee08b
-  [253, 174, 97],  // 0.7  #fdae61
-  [244, 109, 67],  // 0.8  #f46d43
-  [213, 62,  79],  // 0.9  #d53e4f
-  [158, 1,   66],  // 1.0  #9e0142
-]
-
-function spectralR(t) {
-  const n = SPECTRAL_R.length - 1
-  const i = Math.min(Math.floor(t * n), n - 1)
-  const f = t * n - i
-  const c0 = SPECTRAL_R[i], c1 = SPECTRAL_R[i + 1]
-  return [
-    Math.round(c0[0] + f * (c1[0] - c0[0])),
-    Math.round(c0[1] + f * (c1[1] - c0[1])),
-    Math.round(c0[2] + f * (c1[2] - c0[2])),
-  ]
-}
-
-function logNorm(val, vmin, vmax) {
-  if (val <= 0 || !isFinite(val)) return null
-  const logMin = Math.log10(Math.max(vmin, 1e-12))
-  const logMax = Math.log10(vmax)
-  return Math.max(0, Math.min(1, (Math.log10(val) - logMin) / (logMax - logMin)))
-}
-
-/**
- * Linear [0,1] normalisation, for metrics that are linear and may legitimately be 0.
- * logNorm() cannot serve them: it returns null for any value <= 0.
- */
-function linNorm(val, vmin, vmax) {
-  if (!isFinite(val)) return null
-  if (vmax <= vmin) return 0
-  return Math.max(0, Math.min(1, (val - vmin) / (vmax - vmin)))
-}
 
 // ── Standard map-pin icon (reusable for all anthropogenic layers) ──────────────
 function createPinIcon(fillColor, strokeColor) {
@@ -394,7 +353,8 @@ function Natura2000Layer({ geojson, visible }) {
  * Unmounts on !visible rather than calling setStyle(): setStyle() applies one style
  * to the whole group and would flatten the per-feature colours.
  */
-function ConnectivityLayer({ data, metric, visible, labels, selectedNode, onSelectNode }) {
+function ConnectivityLayer({ data, metric, visible, labels, selectedNode, onSelectNode,
+                            classes, highlight }) {
   const map      = useMap()
   const layerRef = useRef(null)
 
@@ -415,10 +375,14 @@ function ConnectivityLayer({ data, metric, visible, labels, selectedNode, onSele
           return { color: '#64748b', fillColor: '#94a3b8', fillOpacity: 0.15,
                    weight: 1, opacity: 0.6, dashArray: '3 3' }
         }
-        const [r, g, b] = spectralR(linNorm(pr[metric], vmin, vmax) ?? 0)
         // Il selezionato si distingue solo per il bordo: cambiare anche il
         // riempimento lo toglierebbe dalla scala di colore della metrica.
         const picked = pr.node_id === selectedNode
+        if (highlight?.size && !highlight.has(classIndex(pr[metric], classes))) {
+          return { color: picked ? '#ffffff' : DIMMED_LINE, fillColor: DIMMED_LINE,
+                   fillOpacity: 0.12, weight: picked ? 3 : 1, opacity: picked ? 1 : 0.5 }
+        }
+        const [r, g, b] = spectralR(linNorm(pr[metric], vmin, vmax) ?? 0)
         return { color: picked ? '#ffffff' : '#1e293b', fillColor: `rgb(${r},${g},${b})`,
                  fillOpacity: 0.72, weight: picked ? 3 : 1, opacity: picked ? 1 : 0.9 }
       },
@@ -447,7 +411,7 @@ function ConnectivityLayer({ data, metric, visible, labels, selectedNode, onSele
     }).addTo(map)
 
     return () => { layerRef.current?.remove(); layerRef.current = null }
-  }, [data, metric, visible, map, labels, selectedNode, onSelectNode])
+  }, [data, metric, visible, map, labels, selectedNode, onSelectNode, classes, highlight])
 
   return null
 }
@@ -467,7 +431,7 @@ function ConnectivityLayer({ data, metric, visible, labels, selectedNode, onSele
  * with their 72% fill.
  */
 const EDGES_PANE = 'connectivityEdges'
-function ConnectivityEdgesLayer({ geojson, visible, selectedNode, direction }) {
+function ConnectivityEdgesLayer({ geojson, visible, selectedNode, direction, highlight }) {
   const map      = useMap()
   const layerRef = useRef(null)
 
@@ -488,6 +452,11 @@ function ConnectivityEdgesLayer({ geojson, visible, selectedNode, direction }) {
       pane: EDGES_PANE,
       style: f => {
         const pr = f.properties ?? {}
+        // Fuori dalle fasce di probabilità scelte in legenda: attenuato, non tolto.
+        if (highlight?.size && !highlight.has(classIndex(pr.p, PROBABILITY_BANDS))) {
+          return { color: DIMMED_LINE, weight: 1, opacity: 0.15,
+                   fillColor: DIMMED_LINE, fillOpacity: 0.15 }
+        }
         return {
           color:       pr.stroke ?? '#0f172a',
           weight:      pr['stroke-width'] ?? 1.5,
@@ -509,7 +478,7 @@ function ConnectivityEdgesLayer({ geojson, visible, selectedNode, direction }) {
     }).addTo(map)
 
     return () => { layerRef.current?.remove(); layerRef.current = null }
-  }, [geojson, visible, map, selectedNode, direction])
+  }, [geojson, visible, map, selectedNode, direction, highlight])
 
   return null
 }
@@ -544,14 +513,25 @@ function SeedingAreaLayer({ geojson, visible }) {
 }
 
 // ── PMAR raster overlay (canvas layer con hover per cella) ───────────────────
-function PmarLayer({ pmarData, visible, passagesLabel }) {
+// Colore delle celle, poligoni e frecce attenuati dalla legenda interattiva.
+const DIMMED_FILL = 'rgba(148,163,184,0.18)'
+const DIMMED_LINE = '#94a3b8'
+
+function PmarLayer({ pmarData, visible, passagesLabel, classes, highlight }) {
   const map          = useMap()
   const canvasRef    = useRef(null)
   const tooltipRef   = useRef(null)
+  const drawRef      = useRef(null)
   const labelRef     = useRef(passagesLabel)
   labelRef.current   = passagesLabel
   const visibleRef   = useRef(visible)
   visibleRef.current = visible
+  // Lette da draw(), registrato una volta sola: le ref evitano di ricreare il canvas
+  // a ogni clic sulla legenda.
+  const highlightRef = useRef(highlight)
+  highlightRef.current = highlight
+  const classesRef   = useRef(classes)
+  classesRef.current = classes
 
   useEffect(() => {
     if (!pmarData?.raster_values || !pmarData.bounds) return
@@ -603,8 +583,13 @@ function PmarLayer({ pmarData, visible, passagesLabel }) {
 
           const t = logNorm(val, vmin, vmax)
           if (t === null) continue
-          const [r, g, b] = spectralR(t)
-          ctx.fillStyle = `rgba(${r},${g},${b},0.82)`
+          const hl = highlightRef.current
+          if (hl?.size && !hl.has(classIndex(val, classesRef.current))) {
+            ctx.fillStyle = DIMMED_FILL
+          } else {
+            const [r, g, b] = spectralR(t)
+            ctx.fillStyle = `rgba(${r},${g},${b},0.82)`
+          }
           ctx.fillRect(x, y, w, h)
         }
       }
@@ -651,6 +636,7 @@ function PmarLayer({ pmarData, visible, passagesLabel }) {
 
     const onMouseOut = () => { tooltip.style.display = 'none' }
 
+    drawRef.current = draw
     map.on('moveend zoomend resize', draw)
     map.on('mousemove', onMouseMove)
     map.on('mouseout',  onMouseOut)
@@ -665,8 +651,12 @@ function PmarLayer({ pmarData, visible, passagesLabel }) {
       map.off('mouseout',  onMouseOut)
       canvasRef.current  = null
       tooltipRef.current = null
+      drawRef.current    = null
     }
   }, [pmarData, map])
+
+  // Clic sulla legenda: si ridisegna lo stesso canvas con le nuove classi accese.
+  useEffect(() => { drawRef.current?.() }, [highlight, classes])
 
   useEffect(() => {
     if (canvasRef.current)
@@ -686,11 +676,29 @@ function PmarLayer({ pmarData, visible, passagesLabel }) {
  * explained); choosing the wording, and the language, belongs here.
  */
 function describeError(err, t) {
+  if (err instanceof OgcError && err.detail === ACCESS_DENIED) return t.pmar.access.denied
   if (err instanceof OgcError) {
     if (err.code === ErrorCode.HTTP)       return err.detail ?? t.status.httpError(err.httpStatus)
     if (err.code === ErrorCode.JOB_FAILED) return err.detail ?? t.status.badResponse
   }
   return err.message
+}
+
+/**
+ * Testo di un avviso del backend nella lingua corrente. Il backend manda `code` e
+ * numeri, non frasi: altrimenti l'avviso arriverebbe in una lingua sola. Un codice
+ * sconosciuto ricade sul `message` inglese del backend.
+ */
+function describeWarning(w, t) {
+  if (typeof w === 'string') return w
+  const c = t.pmar.connectivity
+  const fill = (s, vars) => Object.entries(vars).reduce((acc, [k, v]) => acc.replaceAll(`{${k}}`, v), s)
+  if (w.code === 'edges_trimmed')
+    return fill(c.warnEdgesTrimmed, { drawn: w.drawn, total: w.total })
+  if (w.code === 'weak_polygons')
+    return fill(w.count === 1 ? c.warnWeakPolygonsOne : c.warnWeakPolygons,
+                { count: w.count, total: w.total, n: w.min_particles })
+  return w.message ?? ''
 }
 
 function HistogramEntry({ histogram, mapRef, mapTheme, onClose, stackIndex }) {
@@ -798,6 +806,45 @@ function getActivePmarData(data, indicator) {
   }
 }
 
+// ── Legenda interattiva ──────────────────────────────────────────────────────
+const INDICATOR_LABEL_KEYS = {
+  ppi: 'indicatorDensity', sum: 'indicatorSum', max: 'indicatorMax', q90: 'indicatorQ90', std: 'indicatorStd',
+}
+const METRIC_LABEL_KEYS = {
+  in_strength: 'metricInStrength', out_strength: 'metricOutStrength', betweenness: 'metricBetweenness',
+}
+
+/** Etichetta di una classe: estremi aperti in basso e in alto, intervallo in mezzo. */
+function classLabel(c, i, n, fmt) {
+  if (i === 0)     return `< ${fmt(c.to)}`
+  if (i === n - 1) return `≥ ${fmt(c.from)}`
+  return `${fmt(c.from)} – ${fmt(c.to)}`
+}
+
+/** Conta quanti valori cadono in ogni classe (null = senza classe, ignorati). */
+function countByClass(values, classes) {
+  const counts = new Array(classes.length).fill(0)
+  for (const v of values) {
+    const i = classIndex(v, classes)
+    if (i !== null) counts[i]++
+  }
+  return counts
+}
+
+/** Righe di legenda dall'alto (valori alti) in basso, come la vecchia colorbar. */
+function legendRows(classes, counts, fmt, swatch) {
+  return classes
+    .map((c, i) => ({ index: i, count: counts[i], swatch: swatch(c),
+                      label: classLabel(c, i, classes.length, fmt) }))
+    .reverse()
+}
+
+const toggleIn = setter => i => setter(prev => {
+  const next = new Set(prev)
+  if (next.has(i)) next.delete(i); else next.add(i)
+  return next
+})
+
 // ── App ───────────────────────────────────────────────────────────────────────
 export default function App() {
   const { t, lang, toggle } = useLang()
@@ -876,19 +923,51 @@ export default function App() {
   // Memoized so the preview effects key on the seeding area, not on every render.
   const seedBounds = useMemo(() => seedShapeBounds(seedShape), [seedShape])
 
+  // Margine dell'analisi, comunicato da PmarPanel: la preview copre la stessa area
+  // di studio che il backend userà per pesare (area dello scenario ± margine).
+  const [analysisMargin, setAnalysisMargin] = useState(1)
+
+  // Area della preview EMODnet: lo scenario selezionato se c'è (in Analisi l'area
+  // disegnata di solito non esiste), altrimenti l'area di seeding disegnata.
+  const previewBounds = useMemo(() => {
+    if (!scenarioAreaGeoJSON) return seedBounds
+    try {
+      const b = L.geoJSON(scenarioAreaGeoJSON).getBounds()
+      const m = analysisMargin
+      return { lon_min: b.getWest() - m, lat_min: b.getSouth() - m,
+               lon_max: b.getEast() + m, lat_max: b.getNorth() + m }
+    } catch {
+      return seedBounds
+    }
+  }, [scenarioAreaGeoJSON, analysisMargin, seedBounds])
+
   const windfarms = usePreviewLayer(Process.WINDFARMS, {
-    enabled: useSource === 'windfarms', bounds: seedBounds,
+    enabled: useSource === 'windfarms', bounds: previewBounds,
   })
   const offshore = usePreviewLayer(Process.OFFSHORE_INSTALLATIONS, {
-    enabled: useSource === 'offshore_installations', bounds: seedBounds,
+    enabled: useSource === 'offshore_installations', bounds: previewBounds,
   })
   const mspZones = usePreviewLayer(Process.MSP_ZONES, {
-    enabled: useSource === 'msp_zones', bounds: seedBounds,
+    enabled: useSource === 'msp_zones', bounds: previewBounds,
   })
 
-  const windfarmsGeoJSON = pmarData?.windfarms_geojson ?? windfarms.data
-  const offshoreGeoJSON  = pmarData?.offshore_geojson  ?? offshore.data
-  const mspZonesGeoJSON  = pmarData?.msp_zones_geojson ?? mspZones.data
+  // Sulla mappa c'è solo il layer della sorgente selezionata: cambiando bottone il
+  // precedente sparisce, anche se era arrivato col risultato di un'analisi. Quello
+  // del risultato fa da riserva finché la preview non è pronta.
+  const windfarmsGeoJSON = useSource === 'windfarms'
+    ? (windfarms.data ?? pmarData?.windfarms_geojson ?? null) : null
+  const offshoreGeoJSON  = useSource === 'offshore_installations'
+    ? (offshore.data  ?? pmarData?.offshore_geojson  ?? null) : null
+  const mspZonesGeoJSON  = useSource === 'msp_zones'
+    ? (mspZones.data  ?? pmarData?.msp_zones_geojson ?? null) : null
+
+  /** Scegliere una sorgente la mostra, anche se il suo layer era stato nascosto. */
+  function handleUseSourceChange(source) {
+    setUseSource(source)
+    if (source === 'windfarms')              setShowWindFarms(true)
+    if (source === 'offshore_installations') setShowOffshoreInstallations(true)
+    if (source === 'msp_zones')              setShowMspZones(true)
+  }
 
   const timerRef = useRef(null)
 
@@ -1019,13 +1098,12 @@ export default function App() {
     }
   }
 
-  async function handleRunPmar({ scenario_id, pressure, start_time, duration_days, pnum, res, margin, time_step_hours, shapefile_b64, geotiff_b64, geotiff_url }) {
+  async function handleRunPmar({ scenario_id, pressure, start_time, duration_days, pnum, res, margin, time_step_hours, shapefile_b64, geotiff_b64 }) {
     let inputs
 
     if (scenario_id) {
       inputs = { scenario_id, use_source: useSource, res, margin,
         ...(useSource === 'geotiff' && geotiff_b64  ? { geotiff_b64 }  : {}),
-        ...(useSource === 'geotiff' && geotiff_url  ? { geotiff_url }  : {}),
       }
     } else {
       const geojson = shapefile_b64 ? null : seedShapeToGeoJSON(seedShape)
@@ -1045,7 +1123,6 @@ export default function App() {
         ...(geojson       ? { geojson: JSON.stringify(geojson) } : {}),
         ...(shapefile_b64 ? { shapefile_b64 }                    : {}),
         ...(useSource === 'geotiff' && geotiff_b64  ? { geotiff_b64 }  : {}),
-        ...(useSource === 'geotiff' && geotiff_url  ? { geotiff_url }  : {}),
       }
     }
 
@@ -1129,12 +1206,17 @@ export default function App() {
       if (data.bounds && mapRef.current)
         mapRef.current.fitBounds(L.latLngBounds(data.bounds), { padding: [50, 50] })
 
+      const warnings = (data.warnings ?? []).map(w => describeWarning(w, t)).filter(Boolean)
       notifications.show({
         title:     t.pmar.analysisReadyTitle,
-        message:   (data.warnings?.length
-                     ? data.warnings[0]
-                     : t.pmar.analysisReadyBody),
-        color:     data.warnings?.length ? 'yellow' : 'green',
+        message:   warnings.length === 0 ? t.pmar.analysisReadyBody
+                 : warnings.length === 1 ? warnings[0]
+                 : (
+                   <ul style={{ margin: 0, paddingLeft: 18 }}>
+                     {warnings.map((w, i) => <li key={i}>{w}</li>)}
+                   </ul>
+                 ),
+        color:     warnings.length ? 'yellow' : 'green',
         icon:      <IconCircleCheck size={18} />,
         autoClose: 20000,
       })
@@ -1167,6 +1249,79 @@ export default function App() {
     () => getActivePmarData(pmarData, activeIndicator),
     [pmarData, activeIndicator],
   )
+
+  // ── Legenda interattiva: classi, conteggi e classi accese per ogni layer ──
+  // Pannello strumenti: chiuso all'avvio; la sua altezza limita quella della legenda.
+  const [toolsExpanded, setToolsExpanded] = useState(false)
+  const [toolsBottom,   setToolsBottom]   = useState(60)
+
+  const [ppiHighlight,    setPpiHighlight]    = useState(() => new Set())
+  const [metricHighlight, setMetricHighlight] = useState(() => new Set())
+  const [edgeHighlight,   setEdgeHighlight]   = useState(() => new Set())
+  // Una selezione vale per i dati su cui è stata fatta: nuovo risultato, nuovo
+  // indicatore o nuova metrica la azzerano.
+  useEffect(() => { setPpiHighlight(new Set()) }, [activePmarData])
+  useEffect(() => { setMetricHighlight(new Set()) }, [connectivityData, connectivityMetric])
+  useEffect(() => { setEdgeHighlight(new Set()) }, [connectivityData])
+
+  const ppiClasses = useMemo(
+    () => (activePmarData?.vmax > 0 ? logClasses(activePmarData.vmin, activePmarData.vmax) : null),
+    [activePmarData],
+  )
+  const metricClasses = useMemo(() => {
+    const range = connectivityData?.metric_ranges?.[connectivityMetric]
+    return range ? linearClasses(range[0], range[1]) : null
+  }, [connectivityData, connectivityMetric])
+
+  const legendSections = useMemo(() => {
+    const out = []
+    const L = t.legend
+    if (pmarData && showPmarRaster && ppiClasses) {
+      const counts = countByClass(activePmarData.raster_values.flat(), ppiClasses)
+      const ind = INDICATOR_LABEL_KEYS[activeIndicator]
+      out.push({
+        key: 'ppi',
+        title: `${t.pmarControls.colorbarLabel}${ind && activeIndicator !== 'ppi' ? ` · ${t.pmarControls[ind]}` : ''}`,
+        rows: legendRows(ppiClasses, counts, formatBound, c => {
+          const [r, g, b] = spectralR(c.t); return { color: `rgb(${r},${g},${b})` }
+        }),
+        selected: ppiHighlight, onToggle: toggleIn(setPpiHighlight), onReset: () => setPpiHighlight(new Set()),
+      })
+    }
+    if (connectivityData && showConnectivity && metricClasses) {
+      const feats = connectivityData.polygons_geojson?.features ?? []
+      const reliable = feats.filter(f => f.properties?.reliable)
+      const counts = countByClass(reliable.map(f => f.properties[connectivityMetric]), metricClasses)
+      const rows = legendRows(metricClasses, counts, formatBound, c => {
+        const [r, g, b] = spectralR(c.t); return { color: `rgb(${r},${g},${b})` }
+      })
+      const weak = feats.length - reliable.length
+      if (weak > 0) rows.push({ label: L.unreliable, count: weak, swatch: { color: '#94a3b8', dashed: true } })
+      out.push({
+        key: 'metric',
+        title: t.pmarControls[METRIC_LABEL_KEYS[connectivityMetric]],
+        rows,
+        selected: metricHighlight, onToggle: toggleIn(setMetricHighlight), onReset: () => setMetricHighlight(new Set()),
+      })
+    }
+    const edgeFeats = connectivityData?.edges_geojson?.features ?? []
+    if (connectivityData && showConnEdges && edgeFeats.length) {
+      // Solo le curve: ogni connessione ha anche una punta di freccia, che non va contata.
+      const ps = edgeFeats.filter(f => f.geometry?.type === 'LineString').map(f => f.properties?.p)
+      const counts = countByClass(ps, PROBABILITY_BANDS)
+      out.push({
+        key: 'edges',
+        title: L.edgesTitle,
+        // Spessore come in PMAR (1–8 px lineare su p), ridotto per stare in legenda.
+        rows: legendRows(PROBABILITY_BANDS, counts, formatPercent,
+                         c => ({ line: true, color: redsColor(c.t), width: 1 + c.t * 5 })),
+        selected: edgeHighlight, onToggle: toggleIn(setEdgeHighlight), onReset: () => setEdgeHighlight(new Set()),
+      })
+    }
+    return out
+  }, [t, pmarData, showPmarRaster, ppiClasses, activePmarData, activeIndicator, ppiHighlight,
+      connectivityData, showConnectivity, metricClasses, connectivityMetric, metricHighlight,
+      showConnEdges, edgeHighlight])
 
   function handleStatsResult(snap, layer, rd) {
     if (!rd) { layer?.remove(); return }
@@ -1291,7 +1446,8 @@ export default function App() {
           maxZoom={19}
         />
         <SimLayer simData={simData} currentStep={currentStep} />
-        <PmarLayer pmarData={activePmarData} visible={showPmarRaster} passagesLabel={t.pmarControls.tooltipPassages} />
+        <PmarLayer pmarData={activePmarData} visible={showPmarRaster} passagesLabel={t.pmarControls.tooltipPassages}
+                   classes={ppiClasses} highlight={ppiHighlight} />
         {/* Due sorgenti per la stessa area: quella che accompagna un risultato PMAR
             e quella della simulazione scelta nel pannello. Quando c'è la seconda è
             la stessa identica area, quindi se ne disegna una sola. Entrambe
@@ -1314,6 +1470,7 @@ export default function App() {
           visible={showConnEdges}
           selectedNode={selectedNode}
           direction={edgeDirection}
+          highlight={edgeHighlight}
         />
         <ConnectivityLayer
           data={connectivityData}
@@ -1322,6 +1479,8 @@ export default function App() {
           labels={connectivityLabels}
           selectedNode={selectedNode}
           onSelectNode={handleSelectNode}
+          classes={metricClasses}
+          highlight={metricHighlight}
         />
         <SeedDrawer
           drawMode={drawMode}
@@ -1363,17 +1522,8 @@ export default function App() {
         <MapRefSetter mapRef={mapRef} />
       </MapContainer>
 
-      <div style={{
-        position: 'absolute', top: 16, right: 16, zIndex: 1000,
-        display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 2,
-        background: 'var(--panel-bg)',
-        border: '1px solid var(--panel-border)',
-        backdropFilter: 'blur(20px) saturate(180%)',
-        WebkitBackdropFilter: 'blur(20px) saturate(180%)',
-        borderRadius: 10,
-        padding: 4,
-        boxShadow: '0 2px 16px rgba(0,0,0,0.12)',
-      }}>
+      {/* Tema e lingua: in alto a sinistra, accanto al pannello principale. */}
+      <div className="map-toolbar">
         <ActionIcon
           size={36} radius="md" variant="subtle"
           title={mapTheme === 'dark' ? 'Switch to light map' : 'Switch to dark map'}
@@ -1413,7 +1563,8 @@ export default function App() {
         activeTool={activeTool}
         onToolChange={handleToolChange}
         useSource={useSource}
-        onUseSourceChange={setUseSource}
+        onUseSourceChange={handleUseSourceChange}
+        onAnalysisMarginChange={setAnalysisMargin}
         windfarmsLoading={windfarms.loading}
         windfarmsEmpty={windfarms.isEmpty}
         offshoreLoading={offshore.loading}
@@ -1437,18 +1588,9 @@ export default function App() {
         }}
       />
 
-      {pmarData && showPmarRaster && (() => {
-        const active = activePmarData
-        const cb = mapTheme === 'light'
-          ? (active?.colorbar_light_b64 ?? active?.colorbar_b64)
-          : active?.colorbar_b64
-        return (
-          <div className="pmar-colorbar">
-            <span className="pmar-colorbar-label">{t.pmarControls.colorbarLabel}</span>
-            <img src={`data:image/png;base64,${cb}`} alt="colorbar" className="pmar-colorbar-img" />
-          </div>
-        )
-      })()}
+      {/* Dal fondo della finestra (20 px) fino a 12 px sotto il pannello strumenti. */}
+      <MapLegend sections={legendSections} labels={t.legend}
+                 maxHeight={`calc(100vh - ${Math.round(toolsBottom) + 32}px)`} />
 
       {(pmarData || connectivityData) && (
         <PmarControls
@@ -1503,6 +1645,9 @@ export default function App() {
         }}
         openWindowCount={histograms.length + statsEntries.length + profileEntries.length + thresholdEntries.length + comparisonAreas.length + (showConnMatrix ? 1 : 0)}
         onCloseAll={handleCloseAll}
+        expanded={toolsExpanded}
+        onToggleExpanded={() => setToolsExpanded(v => !v)}
+        onBottomChange={setToolsBottom}
       />
 
       {showConnMatrix && connectivityData && (

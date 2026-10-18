@@ -85,6 +85,22 @@ async function requestJson(url, init = {}) {
   return response.json()
 }
 
+/** Message the backend sends when the demo token is missing or wrong (processes/access.py). */
+export const ACCESS_DENIED = 'ACCESS_DENIED'
+
+/**
+ * Token of the demo mode (see processes/access.py). Held here, not passed by each
+ * caller: every execution must carry it, and one place cannot forget a call site.
+ */
+let accessToken = null
+
+/** Sets (or clears, with null) the token sent as `access_token` with every execution. */
+export function setAccessToken(token) {
+  accessToken = token || null
+}
+
+const withToken = (inputs) => (accessToken ? { ...inputs, access_token: accessToken } : inputs)
+
 function delay(ms, signal) {
   return new Promise((resolve, reject) => {
     const abort = () => { clearTimeout(timer); reject(signal.reason) }
@@ -102,7 +118,7 @@ export function executeSync(processId, inputs = {}, { signal } = {}) {
   return requestJson(`/processes/${processId}/execution`, {
     method:  'POST',
     headers: JSON_HEADERS,
-    body:    JSON.stringify({ inputs }),
+    body:    JSON.stringify({ inputs: withToken(inputs) }),
     signal,
   }).then(unwrapResult)
 }
@@ -115,7 +131,7 @@ export function executeAsync(processId, inputs = {}, { signal } = {}) {
   return requestJson(`/processes/${processId}/execution`, {
     method:  'POST',
     headers: ASYNC_HEADERS,
-    body:    JSON.stringify({ inputs }),
+    body:    JSON.stringify({ inputs: withToken(inputs) }),
     signal,
   }).then(job => job.jobID)
 }

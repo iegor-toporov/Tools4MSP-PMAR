@@ -48,10 +48,12 @@ export default function Panel({
   showNatura2000, onFetchNatura2000, onToggleNatura2000,
   hasSeedShape,
   onT4mspPreview,
-  onScenarioArea,
+  onScenarioArea, onAnalysisMarginChange,
   onRunConnectivity, connectivityLoading, connectivityStopping, onStopConnectivity,
 }) {
   const { t } = useLang()
+  // Nodo della barra di azioni fissa: PmarPanel ci disegna i bottoni di avvio.
+  const [actionsEl, setActionsEl] = useState(null)
   const [selectedModel, setSelectedModel] = useState('OceanDrift')
   const [startTime, setStartTime]         = useState(defaultStartTime())
   const [number,    setNumber]            = useState('100')
@@ -259,6 +261,9 @@ export default function Panel({
 
         {/* ── PMAR tab ──────────────────────────────────────────────── */}
         <Tabs.Panel value="pmar">
+          {/* Colonna a tutta altezza: intestazione, contenuto che scorre, barra di
+              azioni fissa in fondo — i bottoni di avvio restano sempre a portata. */}
+          <Box style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 34px)' }}>
           <Box
             px="md"
             py="sm"
@@ -268,7 +273,7 @@ export default function Panel({
             <Text size="xs" c="dimmed">Marine pressure assessment tool</Text>
           </Box>
           <ScrollArea
-            h="calc(100vh - 130px)"
+            style={{ flex: 1, minHeight: 0 }}
             scrollbarSize={5}
             type="hover"
             styles={SCROLLBAR_STYLES}
@@ -303,12 +308,16 @@ export default function Panel({
               hasSeedShape={hasSeedShape}
               onT4mspPreview={onT4mspPreview}
               onScenarioArea={onScenarioArea}
+              onAnalysisMarginChange={onAnalysisMarginChange}
               onRunConnectivity={onRunConnectivity}
               connectivityLoading={connectivityLoading}
               connectivityStopping={connectivityStopping}
               onStopConnectivity={onStopConnectivity}
+              actionsTarget={actionsEl}
             />
           </ScrollArea>
+          <Box ref={setActionsEl} className="pmar-actions" />
+          </Box>
         </Tabs.Panel>
       </Tabs>
     </Paper>

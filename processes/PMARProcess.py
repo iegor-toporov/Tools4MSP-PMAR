@@ -113,6 +113,7 @@ def ensure_t4msp_shapefile(area_id: int) -> str:
 
 
 from processes.logging_utils import setup_logger
+from processes.access import is_unlocked, require_unlocked, require_scenario
 logger = setup_logger('pmar_process', 'pmar', 'pmar.log')
 
 
@@ -224,12 +225,6 @@ PROCESS_METADATA = {
             'schema': {'type': 'string'},
             'minOccurs': 0, 'maxOccurs': 1,
         },
-        'geotiff_url': {
-            'title': 'Source layer GeoTIFF (URL)',
-            'description': 'URL of a GeoTIFF to download and use as weight raster when use_source="geotiff". Ignored if geotiff_b64 is also provided.',
-            'schema': {'type': 'string'},
-            'minOccurs': 0, 'maxOccurs': 1,
-        },
         'scenario_id': {
             'title': 'Pre-computed scenario ID',
             'description': 'If set, skip simulation and use the cached trajectory NC file.',
@@ -318,10 +313,17 @@ class PMARProcessor(BaseProcessor):
         scenario_id  = data.get('scenario_id')
         use_source   = data.get('use_source', 'none')
         geotiff_b64  = data.get('geotiff_b64')
-        geotiff_url  = data.get('geotiff_url')
         margin       = float(data.get('margin', 1.0))
 
         margin       = max(0.0, min(margin, 20.0))
+
+        # Analisi su scenario: libera se lo scenario è pubblico. Senza scenario si
+        # simula al volo con OpenDrift, e serve il token.
+        unlocked = is_unlocked(data)
+        if scenario_id:
+            require_scenario(scenario_id, unlocked)
+        else:
+            require_unlocked(unlocked)
 
         with tempfile.TemporaryDirectory() as tmpdir:
 
@@ -542,19 +544,9 @@ class PMARProcessor(BaseProcessor):
                         logger.warning("Nessuna zona MSP trovata nell'area di studio")
 
                 elif use_source == 'geotiff':
-                    if not geotiff_b64 and geotiff_url:
-                        import urllib.request
-                        logger.info(f'Download GeoTIFF da URL: {geotiff_url}')
-                        try:
-                            with urllib.request.urlopen(geotiff_url, timeout=60) as resp:
-                                geotiff_b64 = base64.b64encode(resp.read()).decode('utf-8')
-                        except Exception as e:
-                            raise ProcessorExecuteError(
-                                f'Impossibile scaricare il GeoTIFF dall\'URL: {e}'
-                            )
                     if not geotiff_b64:
                         raise ProcessorExecuteError(
-                            'use_source="geotiff" richiede geotiff_b64 oppure geotiff_url.'
+                            'use_source="geotiff" richiede geotiff_b64.'
                         )
                     logger.info('Caricamento GeoTIFF come layer sorgente...')
                     use_raster = _geotiff_to_use_raster(geotiff_b64, p.grid)
@@ -919,6 +911,7 @@ def _geotiff_to_use_raster(geotiff_b64, grid):
     from rasterio.warp import reproject, Resampling
     from rasterio.transform import from_bounds
     import xarray as xr
+    import rioxarray  # noqa: F401 — registra l'accessor .rio
 
     tif_bytes = base64.b64decode(geotiff_b64)
 
@@ -953,7 +946,9 @@ def _geotiff_to_use_raster(geotiff_b64, grid):
 
     # rasterio è north-up (riga 0 = nord); PMAR vuole y crescente verso nord → flipud
     arr = np.flipud(dst_arr)
-    return xr.DataArray(arr, coords={'y': y_vals, 'x': x_vals}, dims=['y', 'x'])
+    # CRS dichiarato per harmonize_use (vedi _gdf_to_use_raster).
+    return (xr.DataArray(arr, coords={'y': y_vals, 'x': x_vals}, dims=['y', 'x'])
+              .rio.write_crs('EPSG:4326'))
 
 
 def _gdf_to_use_raster(gdf, grid):
@@ -963,6 +958,7 @@ def _gdf_to_use_raster(gdf, grid):
     wind farm areas, 0.0 elsewhere.
     """
     import xarray as xr
+    import rioxarray  # noqa: F401 — registra l'accessor .rio
     from rasterio.transform import from_bounds
     from rasterio.features import rasterize
     from shapely.geometry import mapping
@@ -995,13 +991,19 @@ def _gdf_to_use_raster(gdf, grid):
     ]
 
     if shapes:
+        # all_touched: ogni cella toccata da un elemento ne riceve il peso. Senza, una
+        # cella conta solo se l'elemento ne copre il centro, e su celle da 0.1° si
+        # perdevano metà dei parchi eolici e un impianto offshore su cinque.
         arr = rasterize(
             shapes, out_shape=(ny, nx),
-            transform=transform, fill=0.0, dtype=np.float32,
+            transform=transform, fill=0.0, dtype=np.float32, all_touched=True,
         )
     else:
         arr = np.zeros((ny, nx), dtype=np.float32)
 
     # rasterio uses north-up (row 0 = north); PMAR y-axis increases southward → flip
     arr = np.flipud(arr)
-    return xr.DataArray(arr, coords={'y': y_vals, 'x': x_vals}, dims=['y', 'x'])
+    # Il CRS va dichiarato: PMAR.set_weights passa il raster a harmonize_use, che lo
+    # riproietta con rio.reproject e senza CRS fallisce ("CRS not found").
+    return (xr.DataArray(arr, coords={'y': y_vals, 'x': x_vals}, dims=['y', 'x'])
+              .rio.write_crs('EPSG:4326'))

@@ -17,6 +17,7 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 os.makedirs(_LOG_DIR,  exist_ok=True)
 
 from processes.logging_utils import setup_logger
+from processes.access import is_unlocked, require_unlocked
 logger = setup_logger('opendrift_process', 'opendrift', 'opendrift.log')
 
 from data.cmems_datasets import (
@@ -188,6 +189,8 @@ class OpenDriftProcessor(BaseProcessor):
             ProcessorExecuteError: On invalid inputs, CMEMS download failure, or if the
                 seeding area falls entirely on land or outside the CMEMS domain.
         """
+        require_unlocked(is_unlocked(data))
+
         seeding_type   = data.get('seeding_type', 'circle')
         model_name     = data.get('model', 'OceanDrift')
         number         = min(int(data.get('number', 100)), 10000)

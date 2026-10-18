@@ -1,27 +1,42 @@
-import { Tooltip, Button, Badge } from '@mantine/core'
+import { useEffect, useRef } from 'react'
+import { Button, Badge, Text } from '@mantine/core'
 import {
-  IconChartBar, IconChartAreaLine, IconWaveSine,
-  IconBolt, IconFileTypeCsv, IconStack2, IconTable, IconX,
+  IconChartBar, IconChartAreaLine, IconWaveSine, IconBolt, IconFileTypeCsv, IconStack2,
+  IconTable, IconX, IconTool, IconChevronDown, IconChevronUp,
 } from '@tabler/icons-react'
 import { useLang } from '../LanguageContext'
 
 /**
- * `needs` names the result a tool operates on, because the two analyses produce
- * different results: every raster tool is useless without a PPI raster, and the
- * connectivity matrix is useless without a connectivity run. A single
- * `hasRaster` gate would have disabled the matrix on a connectivity-only session.
+ * Strumenti divisi per il risultato su cui lavorano: quelli della heatmap PMAR non
+ * servono a niente senza un raster PPI, la matrice senza una connettività. Un unico
+ * gate su `hasRaster` disabiliterebbe la matrice in una sessione di sola connettività.
  */
-const TOOLS = [
-  { key: 'histogram',    Icon: IconChartBar,      labelKey: 'histogramBtn',    needs: 'raster' },
-  { key: 'stats',        Icon: IconChartAreaLine, labelKey: 'statsBtn',        needs: 'raster' },
-  { key: 'profile',      Icon: IconWaveSine,      labelKey: 'profileBtn',      needs: 'raster' },
-  { key: 'threshold',    Icon: IconBolt,          labelKey: 'thresholdBtn',    needs: 'raster' },
-  { key: 'csv',          Icon: IconFileTypeCsv,   labelKey: 'csvBtn',          needs: 'raster' },
-  { key: 'comparison',   Icon: IconStack2,        labelKey: 'comparisonBtn',   needs: 'raster' },
-  { key: 'connectivity', Icon: IconTable,         labelKey: 'connectivityBtn', needs: 'connectivity' },
+const GROUPS = [
+  {
+    key: 'pmar', titleKey: 'groupPmar', hintKey: 'hintPmar', needs: 'raster',
+    tools: [
+      { key: 'histogram',  Icon: IconChartBar,      labelKey: 'histogramBtn'  },
+      { key: 'stats',      Icon: IconChartAreaLine, labelKey: 'statsBtn'      },
+      { key: 'profile',    Icon: IconWaveSine,      labelKey: 'profileBtn'    },
+      { key: 'threshold',  Icon: IconBolt,          labelKey: 'thresholdBtn'  },
+      { key: 'csv',        Icon: IconFileTypeCsv,   labelKey: 'csvBtn'        },
+      { key: 'comparison', Icon: IconStack2,        labelKey: 'comparisonBtn' },
+    ],
+  },
+  {
+    key: 'connectivity', titleKey: 'groupConnectivity', hintKey: 'hintConnectivity', needs: 'connectivity',
+    tools: [
+      { key: 'connectivity', Icon: IconTable, labelKey: 'connectivityTitle' },
+    ],
+  },
 ]
 
-const BTN_WIDTH = 152
+export const TOOLS_WIDTH = 216
+
+const COUNT_BADGE = {
+  position: 'absolute', top: -4, right: -4, fontSize: 8, minWidth: 14, height: 14,
+  padding: 0, pointerEvents: 'none', zIndex: 1,
+}
 
 export default function ToolsPanel({
   activeMapTool,
@@ -31,116 +46,97 @@ export default function ToolsPanel({
   windowCounts = {},
   openWindowCount = 0,
   onCloseAll,
+  expanded,
+  onToggleExpanded,
+  onBottomChange,
 }) {
   const { t } = useLang()
   const c = t.toolsPanel
 
-  return (
-    <div style={{
-      position: 'absolute',
-      top: '50%',
-      transform: 'translateY(-50%)',
-      right: 16,
-      zIndex: 9999,
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 6,
-      alignItems: 'stretch',
-      width: BTN_WIDTH,
-    }}>
-      {TOOLS.map(({ key, Icon, labelKey, needs }) => {
-        const enabled  = needs === 'connectivity' ? hasConnectivity : hasRaster
-        const isActive = activeMapTool === key
-        const count    = windowCounts[key] ?? 0
-        return (
-          <div key={key} style={{ position: 'relative' }}>
-            <Button
-              fullWidth
-              size="sm"
-              radius="md"
-              variant={isActive ? 'filled' : 'default'}
-              color={isActive ? 'blue' : undefined}
-              disabled={!enabled}
-              leftSection={<Icon size={15} />}
-              onClick={enabled ? () => onSetTool(key) : undefined}
-              styles={{ inner: { justifyContent: 'flex-start' } }}
-              style={{
-                backdropFilter: 'blur(20px) saturate(180%)',
-                background: isActive ? undefined : 'var(--panel-bg)',
-                border: isActive ? undefined : '1px solid var(--panel-border)',
-              }}
-            >
-              {c[labelKey]}
-            </Button>
-            {count > 0 && (
-              <Badge
-                size="xs"
-                color="red"
-                circle
-                style={{
-                  position: 'absolute',
-                  top: -4,
-                  right: -4,
-                  fontSize: 8,
-                  minWidth: 14,
-                  height: 14,
-                  padding: 0,
-                  pointerEvents: 'none',
-                  zIndex: 1,
-                }}
-              >
-                {count}
-              </Badge>
-            )}
-          </div>
-        )
-      })}
+  // Dove finisce il pannello: la legenda, sotto, si ferma lì. Cambia aprendo e
+  // chiudendo il pannello e con i suggerimenti dei gruppi.
+  const ref = useRef(null)
+  useEffect(() => {
+    const el = ref.current
+    if (!el || !onBottomChange) return
+    const report = () => onBottomChange(el.getBoundingClientRect().bottom)
+    const ro = new ResizeObserver(report)
+    ro.observe(el)
+    report()
+    return () => ro.disconnect()
+  }, [onBottomChange])
 
-      {openWindowCount > 0 && (
-        <>
-          <div style={{
-            height: 1,
-            background: 'var(--panel-border)',
-            margin: '2px 0',
-          }} />
-          <div style={{ position: 'relative' }}>
+  return (
+    <div ref={ref} className="tools-panel" style={{ width: TOOLS_WIDTH }}>
+      <button
+        type="button"
+        className="tools-panel-head"
+        onClick={onToggleExpanded}
+        aria-expanded={expanded}
+      >
+        <IconTool size={15} />
+        <span className="tools-panel-title">{c.title}</span>
+        {openWindowCount > 0 && (
+          <Badge size="xs" color="red" circle style={{ fontSize: 8, minWidth: 16, height: 16, padding: 0 }}>
+            {openWindowCount}
+          </Badge>
+        )}
+        {expanded ? <IconChevronUp size={14} /> : <IconChevronDown size={14} />}
+      </button>
+
+      {expanded && (
+        <div className="tools-panel-body">
+          {GROUPS.map(group => {
+            const enabled = group.needs === 'connectivity' ? hasConnectivity : hasRaster
+            return (
+              <section key={group.key} className="tools-panel-group">
+                <Text size="10px" fw={600} c="dimmed" tt="uppercase" style={{ letterSpacing: '0.05em' }}>
+                  {c[group.titleKey]}
+                </Text>
+                {!enabled && <Text size="10px" c="dimmed" lh={1.3}>{c[group.hintKey]}</Text>}
+                {group.tools.map(({ key, Icon, labelKey }) => {
+                  const isActive = activeMapTool === key
+                  const count    = windowCounts[key] ?? 0
+                  return (
+                    <div key={key} style={{ position: 'relative' }}>
+                      <Button
+                        fullWidth
+                        size="xs"
+                        radius="md"
+                        variant={isActive ? 'filled' : 'light'}
+                        color="blue"
+                        disabled={!enabled}
+                        justify="flex-start"
+                        leftSection={<Icon size={14} />}
+                        onClick={enabled ? () => onSetTool(key) : undefined}
+                      >
+                        {c[labelKey]}
+                      </Button>
+                      {count > 0 && (
+                        <Badge size="xs" color="red" circle style={COUNT_BADGE}>{count}</Badge>
+                      )}
+                    </div>
+                  )
+                })}
+              </section>
+            )
+          })}
+
+          {openWindowCount > 0 && (
             <Button
               fullWidth
-              size="sm"
+              size="xs"
               radius="md"
-              variant="default"
+              variant="subtle"
               color="red"
-              leftSection={<IconX size={15} />}
+              justify="flex-start"
+              leftSection={<IconX size={14} />}
               onClick={onCloseAll}
-              styles={{ inner: { justifyContent: 'flex-start' } }}
-              style={{
-                backdropFilter: 'blur(20px) saturate(180%)',
-                background: 'var(--panel-bg)',
-                border: '1px solid var(--panel-border)',
-              }}
             >
               {c.closeAllBtn}
             </Button>
-            <Badge
-              size="xs"
-              color="red"
-              circle
-              style={{
-                position: 'absolute',
-                top: -4,
-                right: -4,
-                fontSize: 8,
-                minWidth: 14,
-                height: 14,
-                padding: 0,
-                pointerEvents: 'none',
-                zIndex: 1,
-              }}
-            >
-              {openWindowCount}
-            </Badge>
-          </div>
-        </>
+          )}
+        </div>
       )}
     </div>
   )

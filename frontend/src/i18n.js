@@ -60,6 +60,14 @@ export const translations = {
       labelTimeStep: 'Time step',
       labelMargin:   'Margine study area (°)',
       sectionUse:    'Layer sorgente',
+      useGroups: {
+        uniform:     'Nessun peso',
+        uniformHint: 'Tutte le particelle contano allo stesso modo.',
+        emodnet:     'Attività umane — EMODnet',
+        emodnetHint: "Scaricate da EMODnet per l'area di studio: pesano le particelle dove sono presenti.",
+        custom:      'Layer personalizzato',
+        customHint:  'Un tuo raster GeoTIFF con i pesi.',
+      },
       useSources: {
         none:                    'Uniforme',
         windfarms:               'Parchi eolici',
@@ -68,14 +76,9 @@ export const translations = {
         geotiff:                 'GeoTIFF personalizzato',
       },
       geotiffUploadHint: 'Clicca per caricare un file .tif / .tiff',
-      geotiffOrLabel:    'oppure',
-      geotiffUrlHint:    'Incolla un URL che punta a un .tif / .tiff',
       geotiffNoValue:    "Il GeoTIFF non ha valori positivi nell'area di seeding.",
-      useWindfarmsInfo:   'Pesa le particelle per i parchi eolici marini (fonte: EMODnet)',
       useWindfarmsEmpty:  "Nessun parco eolico trovato nell'area. Prova nel Mar del Nord.",
-      useOffshoreInfo:    'Pesa le particelle per gli impianti offshore (fonte: EMODnet)',
       useOffshoreEmpty:   'Nessun impianto offshore trovato nell\'area.',
-      useMspZonesInfo:    'Pesa le particelle per le zone MSP di acquacoltura italiane (fonte: EMODnet)',
       useMspZonesEmpty:   'Nessuna zona MSP di acquacoltura trovata nell\'area.',
       btnRun:        'Avvia analisi PMAR',
       btnRunning:    'Analisi in corso…',
@@ -149,6 +152,18 @@ export const translations = {
         btnRunning:            'Analisi in corso…',
         hintNoShapefile:       'Carica uno shapefile di poligoni per avviare l\'analisi.',
         weakWarning:           'Alcuni poligoni contengono meno di {n} particelle al tempo 0: sono mostrati in grigio perché statisticamente poco affidabili.',
+        warnEdgesTrimmed:      'Rete troppo fitta per la mappa: disegnate {drawn} connessioni su {total}, le più probabili di ogni cella. La matrice resta completa.',
+        warnWeakPolygons:      '{count} poligoni su {total} contengono meno di {n} particelle al tempo 0: le loro righe non sono statisticamente affidabili.',
+        warnWeakPolygonsOne:   '1 poligono su {total} contiene meno di {n} particelle al tempo 0: la sua riga non è statisticamente affidabile.',
+      },
+      access: {
+        title:       'Simulazioni riservate',
+        body:        'In questa demo si possono analizzare le simulazioni già pronte. Per lanciarne di nuove serve il token del team.',
+        placeholder: 'Token di accesso',
+        unlock:      'Sblocca',
+        wrongToken:  'Token non valido.',
+        lock:        'Blocca',
+        denied:      'Accesso negato: questa operazione richiede il token di accesso.',
       },
       tooltips: {
         labelStart:       'Data di inizio della simulazione OpenDrift. Per il multi-seeding, le run successive partono da questa data + scarto × n.',
@@ -183,7 +198,11 @@ export const translations = {
     },
 
     toolsPanel: {
-      title:           'Strumenti',
+      title:           'Strumenti di analisi',
+      groupPmar:         'Heatmap PMAR',
+      groupConnectivity: 'Connettività',
+      hintPmar:          "Disponibili dopo un'analisi PMAR.",
+      hintConnectivity:  "Disponibile dopo un'analisi di connettività.",
       histogramBtn:    'Istogramma',
       statsBtn:        'Statistiche',
       statsTitle:      'Statistiche area',
@@ -226,7 +245,7 @@ export const translations = {
     },
 
     layersPanel: {
-      title:           'Layer aggiuntivi',
+      title:           'Layer di visualizzazione aggiuntivi',
       natura2000Btn:   'Natura 2000 Sites',
       natura2000Info:  'Visualizzato nell\'area di studio (fonte: EMODnet)',
       natura2000Empty: 'Nessun sito Natura 2000 trovato nell\'area',
@@ -235,6 +254,12 @@ export const translations = {
       toggleOff:       'Nascosto',
     },
 
+    legend: {
+      showAll:    'Mostra tutto',
+      edgesTitle: 'Frecce · probabilità',
+      unreliable: 'Inaffidabile',
+      hint:       'Clicca una classe per evidenziarla',
+    },
     pmarControls: {
       showRaster:          'Mostra heatmap',
       hideRaster:          'Nascondi heatmap',
@@ -361,6 +386,14 @@ export const translations = {
       labelTimeStep: 'Time step',
       labelMargin:   'Study area margin (°)',
       sectionUse:    'Source layer',
+      useGroups: {
+        uniform:     'No weighting',
+        uniformHint: 'Every particle counts the same.',
+        emodnet:     'Human activities — EMODnet',
+        emodnetHint: 'Downloaded from EMODnet for the study area: they weight particles where present.',
+        custom:      'Custom layer',
+        customHint:  'Your own GeoTIFF raster of weights.',
+      },
       useSources: {
         none:                    'Uniform',
         windfarms:               'Wind farms',
@@ -369,14 +402,9 @@ export const translations = {
         geotiff:                 'Custom GeoTIFF',
       },
       geotiffUploadHint: 'Click to upload a .tif / .tiff file',
-      geotiffOrLabel:    'or',
-      geotiffUrlHint:    'Paste a URL pointing to a .tif / .tiff',
       geotiffNoValue:    'The GeoTIFF has no positive values in the seeding area.',
-      useWindfarmsInfo:   'Weights particles by offshore wind farm presence (source: EMODnet)',
       useWindfarmsEmpty:  'No wind farms found in this area. Try the North Sea.',
-      useOffshoreInfo:    'Weights particles by offshore installation presence (source: EMODnet)',
       useOffshoreEmpty:   'No offshore installations found in this area.',
-      useMspZonesInfo:    'Weights particles by Italian aquaculture MSP zones (source: EMODnet)',
       useMspZonesEmpty:   'No aquaculture MSP zones found in this area.',
       btnRun:        'Run PMAR analysis',
       btnRunning:    'Analysis running…',
@@ -450,6 +478,18 @@ export const translations = {
         btnRunning:            'Analysis running…',
         hintNoShapefile:       'Upload a polygon shapefile to run the analysis.',
         weakWarning:           'Some polygons hold fewer than {n} particles at time 0: they are greyed out as statistically unreliable.',
+        warnEdgesTrimmed:      'Network too dense for the map: drawing {drawn} of {total} connections, the most probable ones of each cell. The matrix is complete.',
+        warnWeakPolygons:      '{count} of {total} polygons hold fewer than {n} particles at time 0: their rows are not statistically reliable.',
+        warnWeakPolygonsOne:   '1 of {total} polygons holds fewer than {n} particles at time 0: its row is not statistically reliable.',
+      },
+      access: {
+        title:       'Simulations restricted',
+        body:        'In this demo you can analyse the simulations already available. Running new ones requires the team token.',
+        placeholder: 'Access token',
+        unlock:      'Unlock',
+        wrongToken:  'Invalid token.',
+        lock:        'Lock',
+        denied:      'Access denied: this operation requires the access token.',
       },
       tooltips: {
         labelStart:       'Start date of the OpenDrift simulation. For multi-seeding, subsequent runs start at this date + shift × n.',
@@ -484,7 +524,11 @@ export const translations = {
     },
 
     toolsPanel: {
-      title:           'Tools',
+      title:           'Analysis tools',
+      groupPmar:         'PMAR heatmap',
+      groupConnectivity: 'Connectivity',
+      hintPmar:          'Available after a PMAR analysis.',
+      hintConnectivity:  'Available after a connectivity analysis.',
       histogramBtn:    'Histogram',
       statsBtn:        'Statistics',
       statsTitle:      'Area statistics',
@@ -527,7 +571,7 @@ export const translations = {
     },
 
     layersPanel: {
-      title:           'Additional layers',
+      title:           'Additional visualization layers',
       natura2000Btn:   'Natura 2000 Sites',
       natura2000Info:  'Shown for the study area (source: EMODnet)',
       natura2000Empty: 'No Natura 2000 sites found in this area',
@@ -536,6 +580,12 @@ export const translations = {
       toggleOff:       'Hidden',
     },
 
+    legend: {
+      showAll:    'Show all',
+      edgesTitle: 'Arrows · probability',
+      unreliable: 'Unreliable',
+      hint:       'Click a class to highlight it',
+    },
     pmarControls: {
       showRaster:          'Show heatmap',
       hideRaster:          'Hide heatmap',

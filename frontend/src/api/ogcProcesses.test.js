@@ -3,7 +3,7 @@ import { afterEach, describe, it } from 'node:test'
 
 import {
   ErrorCode, JobOutcome, OgcError, Process,
-  dismissJob, executeAsync, executeSync, fetchFeatureLayer, waitForJob,
+  dismissJob, executeAsync, executeSync, fetchFeatureLayer, setAccessToken, waitForJob,
 } from './ogcProcesses.js'
 
 /** Installs a fetch stub and records the calls made through it. */
@@ -28,7 +28,7 @@ const rawResponse = (body, { ok = false, status = 500 } = {}) => ({
   text: async () => body,
 })
 
-afterEach(() => { delete globalThis.fetch })
+afterEach(() => { delete globalThis.fetch; setAccessToken(null) })
 
 describe('executeSync', () => {
   it('unwraps the pygeoapi "result" envelope', async () => {
@@ -47,6 +47,34 @@ describe('executeSync', () => {
     assert.equal(calls[0].url, '/processes/msp_zones/execution')
     assert.equal(calls[0].init.method, 'POST')
     assert.deepEqual(JSON.parse(calls[0].init.body), { inputs: { lon_min: 12 } })
+  })
+})
+
+describe('access token', () => {
+  it('is not sent when none is set', async () => {
+    const calls = stubFetch(() => jsonResponse({}))
+    await executeSync(Process.SCENARIO_STATUS, { a: 1 })
+    assert.deepEqual(JSON.parse(calls[0].init.body), { inputs: { a: 1 } })
+  })
+
+  it('is added to the inputs of sync and async executions', async () => {
+    const calls = stubFetch(() => jsonResponse({ jobID: 'j' }))
+    setAccessToken('s3cret')
+    await executeSync(Process.SCENARIO_STATUS, { a: 1 })
+    await executeAsync(Process.PRECOMPUTE, { b: 2 })
+    assert.deepEqual(JSON.parse(calls[0].init.body), { inputs: { a: 1, access_token: 's3cret' } })
+    assert.deepEqual(JSON.parse(calls[1].init.body), { inputs: { b: 2, access_token: 's3cret' } })
+  })
+
+  it('does not mutate the caller inputs, and stops once cleared', async () => {
+    const calls = stubFetch(() => jsonResponse({}))
+    const inputs = { a: 1 }
+    setAccessToken('s3cret')
+    await executeSync(Process.SCENARIO_STATUS, inputs)
+    setAccessToken(null)
+    await executeSync(Process.SCENARIO_STATUS, inputs)
+    assert.deepEqual(inputs, { a: 1 })
+    assert.deepEqual(JSON.parse(calls[1].init.body), { inputs: { a: 1 } })
   })
 })
 
