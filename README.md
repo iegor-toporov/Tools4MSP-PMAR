@@ -946,7 +946,7 @@ read back (`storage/persistedState.test.js`).
 
 - Header *PMAR — Particle-based Modelling and Analysis for MARine Decision Support*; the book icon
   opens **About PMAR**: credits (CNR-ISMAR, University of Padova, University of Venice Ca'
-  Foscari), how to cite (the PMAR article, doi 10.1016/j.envsoft.2025.106822), data and software
+  Foscari), how to cite, data and software
   links (OpenDrift, CMEMS, EMODnet, PMAR, this interface)
 - Two tabs, **Simulation** and **Analysis**; the font is IBM Plex Sans, as in the mock-up
 
