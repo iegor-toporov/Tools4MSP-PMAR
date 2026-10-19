@@ -23,6 +23,7 @@ DTO-PMAR/
 │   ├── ConnectivityProcess.py           # OGC API process: connectivity matrix + graph metrics between areas
 │   ├── PrecomputeProcess.py             # OGC API process: precomputes and stores a trajectory NC file
 │   ├── ScenarioStatusProcess.py         # OGC API process: lists saved scenarios + Tools4MSP areas
+│   ├── scenario_state.py                # Scenario lifecycle: state in the JSON, reconciliation with Redis jobs
 │   ├── WindfarmsProcess.py              # OGC API process: EMODnet wind farm preview (bbox query)
 │   ├── OffshoreInstallationsProcess.py  # OGC API process: EMODnet offshore installations preview
 │   ├── Natura2000Process.py             # OGC API process: Natura 2000 protected areas (EmodNet)
@@ -32,9 +33,9 @@ DTO-PMAR/
 │   ├── cmems_datasets.py                # CMEMS dataset constants (dataset IDs, variables)
 │   └── emodnet_fetch.py                 # Shared EMODnet WFS fetch functions with 7-day pickle cache
 ├── worker/
-│   ├── app.py                           # Celery application instance
-│   ├── manager.py                       # Job lifecycle helpers
-│   └── tasks.py                         # Celery tasks (async precompute)
+│   ├── app.py                           # Celery application: queues, time limits, visibility timeout
+│   ├── manager.py                       # pygeoapi job manager on Redis: prepare hook, queue routing, Stop
+│   └── tasks.py                         # Celery tasks (analyses, simulations) and simulation-worker recovery
 ├── frontend/
 │   ├── src/
 │   │   ├── api/
@@ -44,6 +45,11 @@ DTO-PMAR/
 │   │   │   └── seedShape.js             # Seeding-area conversions (GeoJSON, bbox, label): no React, no i18n
 │   │   ├── hooks/
 │   │   │   └── usePreviewLayer.js       # React adapter: keeps one EMODnet overlay in sync with the seeding area
+│   │   ├── scenarios/
+│   │   │   └── lifecycle.js             # Simulation states, transitions and labels (pure, tested)
+│   │   ├── storage/
+│   │   │   ├── persistedState.js        # What the analyses panel saves, and how it is read back (pure, tested)
+│   │   │   └── analysesStore.js         # IndexedDB read/write, failure-tolerant
 │   │   ├── components/                  # Panels, map overlays, analysis windows (Mantine v9, react-leaflet)
 │   │   ├── App.jsx                      # Root: map, panels, application state
 │   │   └── i18n.js                      # IT/EN strings
@@ -69,13 +75,13 @@ DTO-PMAR/
 │       └── t4msp_<area_id>.shp          # Cached Tools4MSP area geometries
 ├── out/                                 # Temporary simulation outputs (cleaned on startup)
 ├── Dockerfile                           # Backend image (pygeoapi + processes + data/)
-├── docker-compose.yml                   # Orchestrates backend, celery-worker, redis, frontend
+├── docker-compose.yml                   # Orchestrates backend, celery-worker, simulation-worker, redis, frontend
 ├── pygeoapi-config.yml                  # OGC API config: process registrations, server metadata
 ├── .env.example                         # Template for required environment variables
 └── .env                                 # Runtime secrets: CMEMS credentials (not committed)
 ```
 
-**Backend:** [pygeoapi](https://pygeoapi.io) (port 5001) exposes all processes via the OGC API - Processes standard. Long-running precomputations are offloaded to a **Celery** worker backed by **Redis**. Shared data utilities (CMEMS dataset definitions, EMODnet WFS fetch functions) live in `data/` and are imported by the process modules.
+**Backend:** [pygeoapi](https://pygeoapi.io) (port 5001) exposes all processes via the OGC API - Processes standard. Long-running work is offloaded to **Celery** workers backed by **Redis**, on two queues: analyses (PMAR, connectivity) run in parallel on `celery-worker`, simulations run one at a time on `simulation-worker` (see [Simulation queue and lifecycle](#simulation-queue-and-lifecycle)). Shared data utilities (CMEMS dataset definitions, EMODnet WFS fetch functions) live in `data/` and are imported by the process modules.
 
 **Frontend:** React 19 + Vite SPA with Mantine v9 and react-leaflet. In production it is built into a static bundle and served by **nginx**, which also proxies `/processes/*` to the backend. The proxy raises `client_max_body_size` to 64 MB: shapefiles and GeoTIFFs travel base64-encoded inside the JSON body, which inflates them by a third, and nginx's 1 MB default rejected any real file with an opaque `413` before it ever reached the backend.
 
@@ -118,7 +124,7 @@ The PMAR library is installed from the public [CNR-ISMAR/pmar](https://github.co
 repository, pinned to a commit in the `Dockerfile`: no token is needed, and the build stays
 reproducible. To move to a newer PMAR, change the SHA there and rebuild.
 
-The backend runs on port 5001 and the frontend on port 80, both **inside the Docker network only**: in production the Traefik reverse proxy routes traffic to the frontend container, so no port is published to the host. The Celery worker and Redis are started automatically.
+The backend runs on port 5001 and the frontend on port 80, both **inside the Docker network only**: in production the Traefik reverse proxy routes traffic to the frontend container, so no port is published to the host. The two Celery workers and Redis are started automatically.
 
 To reach the frontend from your browser while developing, publish port 80 with a local override file — `docker compose` picks it up automatically and it leaves the production configuration untouched:
 
@@ -245,7 +251,14 @@ Starting a new drawing clears the selection, so exactly one area is shown at any
 proportion to their area*, so a small polygon gets very few. A connectivity matrix compares its
 rows with one another, and a row estimated from a handful of particles is not comparable with the
 others. Switching on *Connectivity seeding* releases the same number of particles in every polygon
-instead. Measured on three polygons of very different size:
+instead. It works with every way of defining the seeding area. Below the field the panel shows the
+resulting total when it can count the polygons — drawn areas (a circle or a rectangle is one
+polygon, each free polygon one more) and Tools4MSP areas (from the preview geometry, counting the
+parts of a MultiPolygon as the backend does) — and disables *Pre-compute* above 100 000 particles.
+With a single polygon it is the same as normal seeding. For an uploaded shapefile the browser does
+not read the polygons: the backend computes the total and refuses the request at once if it is too
+large. Values per polygon outside 1–20 000 are brought into that range, in the UI as in the
+backend. Measured on three polygons of very different size:
 
 ```
 seed_from_shapefile (proportional):  {0: 272, 1: 25, 2: 3}
@@ -257,7 +270,7 @@ at 100 000, and is what the scenario card then reports.
 
 A live estimate of the temporary NetCDF file size is shown below the form, colour-coded by severity (normal / caution >500 MB / warning >2 GB).
 
-Once submitted, the precomputation runs asynchronously. The job is polled every 5 seconds and the new scenario appears automatically in the list when ready.
+Once submitted, the simulation appears in the list straight away as queued or running and the list refreshes every 5 seconds until it is ready; only one simulation runs at a time, the others wait in a queue (see [Simulation queue and lifecycle](#simulation-queue-and-lifecycle)).
 
 Existing simulations are listed in a dropdown at the top of the tab. Selecting one shows a summary: area name, pressure type, start date, duration, particles, time step, CMEMS margin, and description.
 
@@ -289,7 +302,7 @@ The nodes of the network come from one of two sources:
 
 | Parameter | Options | Default |
 |---|---|---|
-| Probability | `Transit` (passes through j at least once within the horizon — structural connectivity) or `Transition` (is in j exactly after the horizon, e.g. a known larval duration) | `Transit` |
+| Probability | `Passage` (passes through j at least once within the horizon — structural connectivity) or `Transition` (is in j exactly after the horizon, e.g. a known larval duration) | `Transit` |
 | Horizon | Days | Full scenario duration |
 | Label column | Shapefile attribute used to name the nodes | — |
 | Self-loops | Whether a polygon's return to itself counts toward its metrics | off (matches the reference work) |
@@ -320,6 +333,12 @@ formats grow with the number of links rather than with n².
 **Execution mode:** asynchronous (`Prefer: respond-async`)
 
 Runs an OpenDrift simulation, saves the trajectory as `scenarios/custom_<id>.nc`, and writes metadata to `scenarios/custom_<id>.json`.
+
+The request is validated **when it is submitted**, not when the worker picks it up: access token,
+geometry and Tools4MSP area are checked and the scenario JSON is written right away with
+`state: "queued"`. Invalid input or a missing token therefore comes back immediately as an HTTP
+400 with a readable `description`, and an accepted simulation is listed at once, even while it
+waits for another one to finish. See [Simulation queue and lifecycle](#simulation-queue-and-lifecycle).
 
 ### Inputs
 
@@ -356,6 +375,43 @@ The scenario metadata also records `seeding_mode` (`total` or `per_polygon`), `p
 `n_polygons`, and `bounds` (the seeding area's bounding box), all of which the frontend reads back
 through the scenario status process.
 
+## Simulation queue and lifecycle
+
+Simulations need several GB of memory and can run for hours, so **only one runs at a time**:
+
+- `precompute` and `opendrift` jobs go to the Celery queue `simulations`
+  (`worker/manager.py`, `SIMULATION_PROCESSES`), served by the `simulation-worker` service with
+  `--concurrency=1`. A second simulation is **queued**, not rejected.
+- PMAR and connectivity analyses go to the default queue, served by `celery-worker` with
+  `--concurrency=3`: an analysis never waits for a simulation.
+
+Each scenario carries its state in its JSON (`processes/scenario_state.py`), so the list looks the
+same after a page reload, from another tab or from another device:
+
+| `state` | Meaning |
+|---|---|
+| `queued` | Accepted, waiting for the running simulation to finish. `queue_position` 1 = next |
+| `running` | Being computed; `progress = {done, total}` counts the finished seedings |
+| `ready` | All NetCDF files written: usable in the Analysis tab |
+| `failed` | Did not complete; `error` says why. Partial NetCDF files are deleted, the JSON and shapefile stay so the user sees what happened, until removed with `remove_scenario` |
+
+What happens when things go wrong:
+
+| Event | Result |
+|---|---|
+| OpenDrift / CMEMS error, or the 12 h soft time limit | `failed` with the error message |
+| **Stop** on a queued or running simulation (`DELETE /jobs/<id>`) | Cancelled, not failed: JSON, NetCDF and shapefile are deleted. A revoked job that was still in the queue is skipped even after a worker restart, because the task checks the job status in Redis before starting |
+| `simulation-worker` restarted or killed mid-run | At startup the worker marks every `running` scenario as `failed` (*interrupted by a server restart*) and sets its job to `failed`. The simulation is **not** re-run automatically: the user decides whether to launch it again |
+| Worker killed while holding the next queued simulation (prefetch) | At startup it puts that message back at the head of the queue instead of leaving it to Redis' visibility timeout (hours) |
+| Job record expired or lost from Redis | The status process marks the scenario `failed` (*job lost*) |
+| Scenarios created before this tracking existed | `ready` if all their NetCDF files exist, otherwise `failed` (*incomplete*) and removable |
+
+Celery settings (`worker/app.py`): `task_time_limit` 12 h with a soft limit 5 minutes earlier;
+`broker_transport_options.visibility_timeout` 13 h. With `task_acks_late` Redis re-delivers a
+message not acknowledged within the visibility timeout, and the 1 h default made any analysis
+longer than an hour run twice; it must stay above the longest task. Simulation tasks are
+acknowledged when they start (`acks_late=False`), so a crash never silently re-runs one.
+
 ## Scenario status process
 
 **Endpoint:** `POST /processes/scenario_status/execution`
@@ -369,9 +425,13 @@ without the listing paying for it:
 |---|---|
 | `area_id` | `{ "geo": … }` — geometry of that Tools4MSP area, fetched once and cached in memory |
 | `scenario_id` | `{ "geo": … }` — seeding geometry of that scenario, read from its shapefile and merged with `union_all()` so a multi-polygon area stays a single geometry |
+| `remove_scenario` | `{ "removed": … }` — deletes a **failed** scenario (JSON, shapefile). Requires full access; ready, queued and running scenarios are refused (a running one is stopped with Stop) |
 
-The listing is polled every 5 seconds while a precomputation runs, which is why reading shapefiles
-belongs in these branches and not in the listing itself.
+The listing is polled every 5 seconds while a simulation is queued or running, which is why
+reading shapefiles belongs in these branches and not in the listing itself. Each listing also
+reconciles the queued and running scenarios with their jobs in Redis (see
+[Simulation queue and lifecycle](#simulation-queue-and-lifecycle)). Scenarios are sorted newest
+first by `created_at` (file modification time for older ones).
 
 ### Output
 
@@ -397,7 +457,15 @@ belongs in these branches and not in the listing itself.
       "pnum_per_polygon": 500,
       "n_polygons": 9,
       "bounds": [11.89, 42.49, 16.42, 45.68],
-      "source": "custom"
+      "source": "custom",
+      "state": "running",
+      "progress": { "done": 1, "total": 3 },
+      "queue_position": null,
+      "error": null,
+      "created_at": "2026-10-19T09:51:20+00:00",
+      "started_at": "2026-10-19T09:51:21+00:00",
+      "finished_at": null,
+      "job_id": "a30a7c4c-…"
     }
   },
   "t4msp_areas": [
@@ -406,6 +474,9 @@ belongs in these branches and not in the listing itself.
   ]
 }
 ```
+
+`computed` is true only for `ready` scenarios. `job_id` is returned only with full access and only
+for queued or running scenarios: it is what the Stop button sends.
 
 ## PMAR process
 
@@ -519,7 +590,7 @@ output it packages for the map.
 | `geojson` | Polygons as GeoJSON (alternative to the shapefile) |
 | `grid_res` | Builds the nodes as a regular grid of ocean cells instead: 1.0 or 0.5 degrees |
 | `bbox` | `[lon_min, lat_min, lon_max, lat_max]` for the grid; defaults to the scenario's seeding area |
-| `mode` | `transit` (default) or `transition` |
+| `mode` | `passage` (default) or `transition`; `transit`, the former name of `passage`, is still accepted |
 | `t_days` | Time horizon in days; defaults to the scenario duration |
 | `node_label_field` | Shapefile attribute used to label the nodes |
 | `self_loops` | Whether i→i counts toward the metrics (default `false`) |
@@ -533,7 +604,7 @@ are given.
 ```json
 {
   "type": "connectivity",
-  "mode": "transit",
+  "mode": "passage",
   "node_source": "grid",
   "grid_res": 0.5,
   "grid_bbox": [11.89, 42.49, 16.42, 45.68],
@@ -570,7 +641,7 @@ know the codes.
 |---|---|---|
 | `MAX_POLYGONS` | 300 | The matrix is dense and travels whole through Redis and into the browser |
 | `MIN_PARTICLES` | 30 | Below this a row is reported as unreliable rather than shown as a result |
-| `MAX_TIME_PASSES` | 180 | Transit repeats a point-in-polygon pass per timestep; beyond this the time axis is subsampled |
+| `MAX_TIME_PASSES` | 180 | Passage repeats a point-in-polygon pass per timestep; beyond this the time axis is subsampled |
 | `MAX_EDGE_FEATURES` | 1500 | Drawing limit only — the matrix stays complete |
 
 When the network exceeds the drawing limit it is thinned **fairly**, in rounds: each round every
@@ -580,7 +651,7 @@ at all despite a matrix full of values.
 
 ### Notes
 
-- The *transit* matrix is built by `_transit_matrix()` in this process: it reproduces
+- The *passage* matrix (formerly called *transit*) is built by `_passage_matrix()` in this process: it reproduces
   `get_cm_within_range`, which the public PMAR removed as unused, on top of
   `get_particles_by_cell`. Unlike `get_cm` it does not set `self.cm`, while
   `connectivity_analysis()` requires it — the process assigns it explicitly.
@@ -700,7 +771,9 @@ npm test        # node:test — no browser, no backend, no extra dependencies
 ```
 
 The suite covers response unwrapping, the three HTTP error shapes, job success / dismissal /
-failure, cancellation, and empty overlays.
+failure, cancellation, tolerance to network errors and 5xx while polling, empty overlays, the
+simulation states and transitions (`scenarios/lifecycle.test.js`), and how saved analyses are
+read back (`storage/persistedState.test.js`).
 
 ## Frontend features
 
@@ -717,9 +790,10 @@ failure, cancellation, and empty overlays.
 - Set simulation metadata: title, description
 - Set simulation parameters: pressure type, start date, duration, particles, time step, CMEMS margin
 - Live NetCDF size estimate, colour-coded by severity
-- Precompute button runs the simulation asynchronously; status is polled automatically
-- Saved simulations listed in a dropdown; selecting one shows a full summary (area, pressure, dates, particles, time step, CMEMS margin, description) and highlights that simulation's seeding area on the map
-- *Connectivity seeding* releases the same number of particles in every polygon of an uploaded shapefile
+- Precompute button submits the simulation; if one is already running the new one is queued (the panel says so). Invalid input or a missing token is reported at once
+- **Simulations in progress** box below the list: running (⏳, seeding n/N, minutes since start, progress bar), queued (⏸, position) and failed (✗, reason) simulations, with **Stop** and **Remove** for users with full access. The state comes from the server, so it survives reloads and is the same on every device; the list refreshes every 5 s while something is queued or running, and a notification announces each simulation that becomes ready or fails, also after a reload
+- Saved simulations listed in a dropdown, each with its state; selecting one shows a full summary (area, pressure, dates, particles, time step, CMEMS margin, description) and highlights that simulation's seeding area on the map
+- *Connectivity seeding* releases the same number of particles in every polygon of the seeding area — drawn, uploaded or pre-defined — and shows the resulting total when the number of polygons is known
 
 ### PMAR tab — Analysis
 
@@ -733,7 +807,13 @@ Two sub-tabs, **Sources** and **Connectivity**, sharing the selected simulation.
 - Hovering a polygon or a raster cell shows a tooltip; the two are placed on opposite sides of the
   cursor so that they never overlap
 
-Every analysis is **saved for the session** (in memory: a page reload clears them), up to **10**.
+Every analysis is **saved in this browser** (IndexedDB), up to **10**: a page reload restores the
+panel as it was — titles, visibility, view settings, active analysis. An analysis still running
+when the page is reloaded is **resumed**: its *Analysis running…* button and Stop come back, and
+the result is added when it is ready (a job expired on the backend is reported instead). **Clear
+all**, with confirmation, empties the panel, e.g. on a shared laptop at a conference stand. The
+analyses are not sent to the server: another browser or device does not see them. If IndexedDB is
+unavailable (private window, blocked site data) the app works in memory as before.
 At 10 the Run buttons are disabled with a message until one is deleted. Before running, the
 *Analysis title* field names it; left empty, a title is generated (e.g. `PPI · Wind farms ·
 Black Sea 2019`).
@@ -778,4 +858,4 @@ tooltip and the analysis tools follow it. Deleting the active one activates the 
 
 ## Logging
 
-All processes write to **stdout**, which Docker captures via `docker logs`. Use `docker logs dto-pmar-backend-1` (or `dto-pmar-celery-worker-1`) to stream logs in real time.
+All processes write to **stdout**, which Docker captures via `docker logs`. Use `docker logs dto-pmar-backend-1` (or `dto-pmar-celery-worker-1` for analyses, `dto-pmar-simulation-worker-1` for simulations) to stream logs in real time.

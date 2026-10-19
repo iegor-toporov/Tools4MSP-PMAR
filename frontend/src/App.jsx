@@ -7,13 +7,15 @@ import { notifications } from '@mantine/notifications'
 import { MODEL_STYLES } from './constants'
 import { useLang } from './LanguageContext'
 import { Process, ErrorCode, JobOutcome, OgcError, ACCESS_DENIED,
-         executeAsync, waitForJob, fetchJobResults, dismissJob,
+         executeAsync, waitForJob, fetchJobResults, dismissJob, isTransientError,
          fetchFeatureLayer } from './api/ogcProcesses'
 import { usePreviewLayer } from './hooks/usePreviewLayer'
 import Panel from './components/Panel'
 import SeedDrawer from './components/SeedDrawer'
 import AnimationControls from './components/AnimationControls'
 import AnalysesPanel, { MAX_ANALYSES } from './components/AnalysesPanel'
+import { loadState, saveState } from './storage/analysesStore'
+import { fromStored, mergeAnalyses, toStored } from './storage/persistedState'
 import { HistogramDrawLayer, PmarHistogramModal, MapRefSetter, ConnectorLine,
          RectSelectionLayer, LineSelectionLayer, computeHistogramFromSnap } from './components/PmarHistogram'
 import { computeStats, PmarStatsModal } from './components/PmarStats'
@@ -927,9 +929,13 @@ export default function App() {
   const [status,             setStatus]             = useState('')
   const [statusType,         setStatusType]         = useState('')
 
-  // ── Analisi salvate in sessione (pannello di destra), la più recente in testa ──
+  // ── Analisi (pannello di destra), la più recente in testa ──
+  // Salvate in questo browser (IndexedDB) insieme alle analisi ancora in corso, che
+  // dopo una ricarica vengono riprese: vedi storage/persistedState.js.
   const [analyses,         setAnalyses]         = useState([])
   const [activeAnalysisId, setActiveAnalysisId] = useState(null)
+  const [pendingJobs,      setPendingJobs]      = useState([])
+  const [storeLoaded,      setStoreLoaded]      = useState(false)
   // Scenario selezionato a sinistra: la sua area non si disegna se un'analisi dello
   // stesso scenario mostra già la propria (sarebbe la stessa area due volte).
   const [selectedScenarioId, setSelectedScenarioId] = useState(null)
@@ -1185,54 +1191,15 @@ export default function App() {
     setPmarLoading(true)
     setPmarStatus(t.pmar.btnRunning)
     setPmarStatusType('')
-
+    let jobId
     try {
-
-      const jobId = await executeAsync(Process.PMAR, inputs)
-      setPmarJobId(jobId)
-
-      const { outcome } = await waitForJob(jobId)
-      if (outcome === JobOutcome.DISMISSED) return
-
-      const raw  = await fetchJobResults(jobId)
-      const data = raw.result ?? raw
-
-      if (!data.raster_values || !data.bounds) throw new Error(t.status.badResponse)
-
-      addAnalysis({
-        kind: 'pmar',
-        title: title || (lang === 'it' ? data.label_it : data.label_en) || 'PMAR',
-        info, data, areaGeoJSON: data.seeding_geojson ?? null,
-      })
-      if (data.bounds && mapRef.current)
-        mapRef.current.fitBounds(L.latLngBounds(data.bounds), FIT_PADDING)
-      // Le finestre degli strumenti già aperte restano: sono istantanee dell'analisi
-      // su cui sono state fatte, e "Chiudi tutto" le toglie.
-      setActiveMapTool(null)
-      setPmarStatus('')
-      setPmarStatusType('')
-      notifications.show({
-        title:     t.pmar.analysisReadyTitle,
-        message:   t.pmar.analysisReadyBody,
-        color:     'green',
-        icon:      <IconCircleCheck size={18} />,
-        autoClose: 20000,
-      })
-
+      jobId = await executeAsync(Process.PMAR, inputs)
     } catch (err) {
-      const clean = describeError(err, t)
-        .replace(/^Error executing process:\s*/i, '')
-        .replace(/^Errore:\s*/i, '')
-        .replace(/^Error:\s*/i, '')
-        .trim()
-      setPmarErrorMsg(clean)
-      setPmarStatus('')
-      setPmarStatusType('error')
-    } finally {
+      showPmarError(err)
       setPmarLoading(false)
-      setPmarJobId(null)
-      setPmarStopping(false)
+      return
     }
+    await trackJob({ jobId, kind: 'pmar', title, info, areaGeoJSON: null, submittedAt: Date.now() })
   }
 
   async function handleRunConnectivity(inputs, { title, info } = {}) {
@@ -1242,51 +1209,165 @@ export default function App() {
     const areaAtStart = selectedScenarioId && selectedScenarioId === info?.scenario?.id
       ? scenarioAreaGeoJSON : null
     setConnectivityLoading(true)
-
+    let jobId
     try {
-      const jobId = await executeAsync(Process.CONNECTIVITY, inputs)
-      setConnectivityJobId(jobId)
-
-      const { outcome } = await waitForJob(jobId)
-      if (outcome === JobOutcome.DISMISSED) return
-
-      const raw  = await fetchJobResults(jobId)
-      const data = raw.result ?? raw
-      if (!data.polygons_geojson) throw new Error(t.status.badResponse)
-
-      // Ogni analisi ha la sua selezione di nodo: gli indici di un'altra rete non
-      // significherebbero niente qui.
-      addAnalysis({
-        kind: 'connectivity',
-        title: title || (lang === 'it' ? data.label_it : data.label_en) || 'Connectivity',
-        info, data, areaGeoJSON: areaAtStart,
-      })
-      if (data.bounds && mapRef.current)
-        mapRef.current.fitBounds(L.latLngBounds(data.bounds), FIT_PADDING)
-
-      const warnings = (data.warnings ?? []).map(w => describeWarning(w, t)).filter(Boolean)
-      notifications.show({
-        title:     t.pmar.analysisReadyTitle,
-        message:   warnings.length === 0 ? t.pmar.analysisReadyBody
-                 : warnings.length === 1 ? warnings[0]
-                 : (
-                   <ul style={{ margin: 0, paddingLeft: 18 }}>
-                     {warnings.map((w, i) => <li key={i}>{w}</li>)}
-                   </ul>
-                 ),
-        color:     warnings.length ? 'yellow' : 'green',
-        icon:      <IconCircleCheck size={18} />,
-        autoClose: 20000,
-      })
-
+      jobId = await executeAsync(Process.CONNECTIVITY, inputs)
     } catch (err) {
       setPmarErrorMsg(describeError(err, t))
-    } finally {
       setConnectivityLoading(false)
-      setConnectivityJobId(null)
-      setConnectivityStopping(false)
+      return
+    }
+    await trackJob({ jobId, kind: 'connectivity', title, info, areaGeoJSON: areaAtStart,
+                     submittedAt: Date.now() })
+  }
+
+  function showPmarError(err) {
+    const clean = describeError(err, t)
+      .replace(/^Error executing process:\s*/i, '')
+      .replace(/^Errore:\s*/i, '')
+      .replace(/^Error:\s*/i, '')
+      .trim()
+    setPmarErrorMsg(clean)
+    setPmarStatus('')
+    setPmarStatusType('error')
+  }
+
+  /**
+   * Segue un'analisi inviata fino al risultato e la aggiunge al pannello.
+   *
+   * Il job resta in `pendingJobs` (salvato nel browser) finché non finisce: se la
+   * pagina si ricarica nel frattempo, all'avvio lo si riprende da qui con
+   * `resumed`, col suo "in corso…" e il suo Stop. Errori di rete e riavvii del
+   * backend non lo fanno perdere: si riprova, e se la rete resta giù il job resta
+   * pendente per la prossima ricarica.
+   */
+  async function trackJob(job, { resumed = false } = {}) {
+    const pmar = job.kind === 'pmar'
+    setPendingJobs(prev => [...prev.filter(j => j.jobId !== job.jobId), job])
+    if (pmar) {
+      setPmarLoading(true); setPmarJobId(job.jobId)
+      setPmarStatus(t.pmar.btnRunning); setPmarStatusType('')
+    } else {
+      setConnectivityLoading(true); setConnectivityJobId(job.jobId)
+    }
+    let keepPending = false
+    try {
+      // ~1 minuto di errori consecutivi (intervallo di 3 s): il tempo di un riavvio.
+      const { outcome } = await waitForJob(job.jobId, { maxTransientErrors: 20 })
+      if (outcome === JobOutcome.DISMISSED) return
+
+      const raw  = await fetchJobResults(job.jobId)
+      const data = raw.result ?? raw
+      if (pmar) finishPmar(job, data)
+      else finishConnectivity(job, data)
+
+    } catch (err) {
+      keepPending = isTransientError(err)
+      if (resumed && err instanceof OgcError && err.httpStatus === 404) {
+        // Job scaduto o sparito dal backend: non c'è più niente da recuperare.
+        notifications.show({
+          title:   t.analyses.resumeLostTitle,
+          message: t.analyses.resumeLostBody.replace('{title}', job.title ?? ''),
+          color:   'orange',
+        })
+        if (pmar) setPmarStatus('')
+      } else if (pmar) {
+        showPmarError(err)
+      } else {
+        setPmarErrorMsg(describeError(err, t))
+      }
+    } finally {
+      if (!keepPending) setPendingJobs(prev => prev.filter(j => j.jobId !== job.jobId))
+      if (pmar) { setPmarLoading(false); setPmarJobId(null); setPmarStopping(false) }
+      else { setConnectivityLoading(false); setConnectivityJobId(null); setConnectivityStopping(false) }
     }
   }
+
+  function finishPmar(job, data) {
+    if (!data.raster_values || !data.bounds) throw new Error(t.status.badResponse)
+
+    addAnalysis({
+      kind: 'pmar',
+      title: job.title || (lang === 'it' ? data.label_it : data.label_en) || 'PMAR',
+      info: job.info, data, areaGeoJSON: data.seeding_geojson ?? null,
+    })
+    if (data.bounds && mapRef.current)
+      mapRef.current.fitBounds(L.latLngBounds(data.bounds), FIT_PADDING)
+    // Le finestre degli strumenti già aperte restano: sono istantanee dell'analisi
+    // su cui sono state fatte, e "Chiudi tutto" le toglie.
+    setActiveMapTool(null)
+    setPmarStatus('')
+    setPmarStatusType('')
+    notifications.show({
+      title:     t.pmar.analysisReadyTitle,
+      message:   t.pmar.analysisReadyBody,
+      color:     'green',
+      icon:      <IconCircleCheck size={18} />,
+      autoClose: 20000,
+    })
+  }
+
+  function finishConnectivity(job, data) {
+    if (!data.polygons_geojson) throw new Error(t.status.badResponse)
+
+    // Ogni analisi ha la sua selezione di nodo: gli indici di un'altra rete non
+    // significherebbero niente qui.
+    addAnalysis({
+      kind: 'connectivity',
+      title: job.title || (lang === 'it' ? data.label_it : data.label_en) || 'Connectivity',
+      info: job.info, data, areaGeoJSON: job.areaGeoJSON ?? null,
+    })
+    if (data.bounds && mapRef.current)
+      mapRef.current.fitBounds(L.latLngBounds(data.bounds), FIT_PADDING)
+
+    const warnings = (data.warnings ?? []).map(w => describeWarning(w, t)).filter(Boolean)
+    notifications.show({
+      title:     t.pmar.analysisReadyTitle,
+      message:   warnings.length === 0 ? t.pmar.analysisReadyBody
+               : warnings.length === 1 ? warnings[0]
+               : (
+                 <ul style={{ margin: 0, paddingLeft: 18 }}>
+                   {warnings.map((w, i) => <li key={i}>{w}</li>)}
+                 </ul>
+               ),
+      color:     warnings.length ? 'yellow' : 'green',
+      icon:      <IconCircleCheck size={18} />,
+      autoClose: 20000,
+    })
+  }
+
+  // ── Persistenza nel browser ─────────────────────────────────────────────
+  // All'avvio: analisi salvate e ripresa dei job rimasti in corso.
+  useEffect(() => {
+    let cancelled = false
+    loadState().then(raw => {
+      if (cancelled) return
+      const stored = fromStored(raw, { max: MAX_ANALYSES, defaultView: DEFAULT_VIEW })
+      if (stored.analyses.length) {
+        setAnalyses(prev => mergeAnalyses(prev, stored.analyses, MAX_ANALYSES))
+        setActiveAnalysisId(id => id ?? stored.activeAnalysisId)
+      }
+      setStoreLoaded(true)
+      // Uno per tipo: la pagina ne segue uno alla volta (un solo "in corso…" e Stop).
+      const seen = new Set()
+      for (const job of stored.pendingJobs) {
+        if (seen.has(job.kind)) continue
+        seen.add(job.kind)
+        trackJob(job, { resumed: true })
+      }
+    })
+    return () => { cancelled = true }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Salvataggio a ogni modifica, raggruppato; mai prima di aver letto lo stato salvato,
+  // che altrimenti verrebbe sovrascritto dal pannello vuoto dell'avvio.
+  useEffect(() => {
+    if (!storeLoaded) return
+    const timer = setTimeout(() => {
+      saveState(toStored({ analyses, activeAnalysisId, pendingJobs }, { max: MAX_ANALYSES }))
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [storeLoaded, analyses, activeAnalysisId, pendingJobs])
 
   // ── Gestione delle analisi salvate ──────────────────────────────────────
   /**
@@ -1309,6 +1390,12 @@ export default function App() {
 
   function renameAnalysis(id, title) {
     setAnalyses(prev => prev.map(a => (a.id === id ? { ...a, title } : a)))
+  }
+
+  function clearAnalyses() {
+    setAnalyses([])
+    setActiveAnalysisId(null)
+    setShowConnMatrix(null)
   }
 
   /** Eliminando l'attiva diventa attiva la più recente rimasta. */
@@ -1718,6 +1805,7 @@ export default function App() {
           activeId={activeAnalysisId}
           onActivate={setActiveAnalysisId}
           onDelete={deleteAnalysis}
+          onClearAll={clearAnalyses}
           onRename={renameAnalysis}
           onUpdateView={updateView}
           onDownload={handleDownloadPmar}

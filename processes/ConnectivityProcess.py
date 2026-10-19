@@ -29,7 +29,7 @@ MAX_POLYGONS = 300
 # statisticamente debole: la segnaliamo invece di presentarla come valida.
 MIN_PARTICLES = 30
 
-# Tetto al numero di passate di point-in-polygon per la probabilità di transito,
+# Tetto al numero di passate di point-in-polygon per la probabilità di passaggio,
 # che altrimenti itera su ogni singolo timestep fino all'orizzonte richiesto.
 MAX_TIME_PASSES = 180
 
@@ -79,11 +79,12 @@ PROCESS_METADATA = {
         },
         'mode': {
             'title': 'Probability type',
-            'description': '"transit": probability of passing through j at least once '
+            'description': '"passage": probability of passing through j at least once '
                            'within the horizon (structural connectivity). '
                            '"transition": probability of being in j exactly after the '
-                           'horizon (e.g. pelagic larval duration).',
-            'schema': {'type': 'string', 'default': 'transit'},
+                           'horizon (e.g. pelagic larval duration). '
+                           '"transit" is still accepted as an alias of "passage".',
+            'schema': {'type': 'string', 'default': 'passage'},
             'minOccurs': 0, 'maxOccurs': 1,
         },
         't_days': {
@@ -333,8 +334,8 @@ def _indicator(ll, n_cells, n_traj):
     return csr_array((np.ones(len(rows)), (rows, cols)), shape=(n_cells, n_traj))
 
 
-def _transit_matrix(pm, t_max, cm_grid):
-    """Probabilità di passare dal poligono i al poligono j almeno una volta entro *t_max* timestep.
+def _passage_matrix(pm, t_max, cm_grid):
+    """Probabilità di passaggio: passare dal poligono i al poligono j almeno una volta entro *t_max* timestep.
 
     È la connettività strutturale della tesi di Bosi. Riproduce
     ``PMAR.get_cm_within_range`` del fork, rimosso dalla libreria pubblica
@@ -376,10 +377,10 @@ def _time_window(ds, sc, t_days, mode):
         steps = int(round(horizon * 24.0 / step_h))
     steps = max(1, min(steps, n_time - 1))
 
-    # Il transito ripete il point-in-polygon su ogni timestep: sotto-campioniamo
+    # Il passaggio ripete il point-in-polygon su ogni timestep: sotto-campioniamo
     # per tenere il costo sotto controllo (la tesi lavora a passi di 4 ore).
     stride = 1
-    if mode == 'transit' and steps > MAX_TIME_PASSES:
+    if mode == 'passage' and steps > MAX_TIME_PASSES:
         stride = int(math.ceil(steps / MAX_TIME_PASSES))
     return steps, stride, step_h
 
@@ -412,15 +413,18 @@ class ConnectivityProcessor(BaseProcessor):
 
         scenario_id = data.get('scenario_id')
         require_scenario(scenario_id, is_unlocked(data))
-        mode        = str(data.get('mode') or 'transit').lower()
+        mode        = str(data.get('mode') or 'passage').lower()
+        # "passage" si chiamava "transit": il vecchio nome resta accettato.
+        if mode == 'transit':
+            mode = 'passage'
         label_field = data.get('node_label_field') or None
         self_loops  = bool(data.get('self_loops', False))
         margin      = max(0.0, min(float(data.get('margin', 1.0)), 20.0))
         t_days      = data.get('t_days')
 
-        if mode not in ('transit', 'transition'):
+        if mode not in ('passage', 'transition'):
             raise ProcessorExecuteError(
-                f'mode non valido: {mode!r}. Usare "transit" o "transition".'
+                f'mode non valido: {mode!r}. Usare "passage" o "transition".'
             )
 
         sc, nc_list = _load_scenario(scenario_id)
@@ -478,9 +482,9 @@ class ConnectivityProcessor(BaseProcessor):
                     pm.ds = ds
                     pm.study_area = study_area
 
-                    if mode == 'transit':
-                        # a differenza di get_cm, il transito non assegna pm.cm
-                        cm = _transit_matrix(pm, t_max=int(ds.sizes['time']), cm_grid=gdf)
+                    if mode == 'passage':
+                        # a differenza di get_cm, il passaggio non assegna pm.cm
+                        cm = _passage_matrix(pm, t_max=int(ds.sizes['time']), cm_grid=gdf)
                         pm.cm = cm
                     else:
                         cm = pm.get_cm(t=-1, cm_grid=gdf)

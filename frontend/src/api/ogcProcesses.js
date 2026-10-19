@@ -142,15 +142,34 @@ export function fetchJobStatus(jobId, { signal } = {}) {
 }
 
 /**
+ * Whether a polling failure is worth retrying: no answer at all (network down, page
+ * offline) or a 5xx while the backend restarts. A 4xx — the job no longer exists —
+ * is final.
+ */
+export const isTransientError = (err) =>
+  err?.name !== 'AbortError' && (!(err instanceof OgcError) || (err.httpStatus ?? 0) >= 500)
+
+/**
  * Polls a job until it reaches a terminal state.
  *
+ * @param {number} options.maxTransientErrors consecutive transient failures
+ *   (see {@link isTransientError}) tolerated before giving up; 0 = fail on the first
  * @returns {Promise<{outcome: string, job: object}>} resolves on success or dismissal
  * @throws  {OgcError} with code JOB_FAILED when the job itself failed
  */
-export async function waitForJob(jobId, { intervalMs = DEFAULT_POLL_INTERVAL_MS, signal } = {}) {
+export async function waitForJob(jobId, { intervalMs = DEFAULT_POLL_INTERVAL_MS, signal,
+                                          maxTransientErrors = 0 } = {}) {
+  let transient = 0
   for (;;) {
     await delay(intervalMs, signal)
-    const job = await fetchJobStatus(jobId, { signal })
+    let job
+    try {
+      job = await fetchJobStatus(jobId, { signal })
+      transient = 0
+    } catch (err) {
+      if (signal?.aborted || !isTransientError(err) || ++transient > maxTransientErrors) throw err
+      continue
+    }
 
     if (job.status === JobOutcome.SUCCESS)   return { outcome: JobOutcome.SUCCESS,   job }
     if (job.status === JobOutcome.DISMISSED) return { outcome: JobOutcome.DISMISSED, job }

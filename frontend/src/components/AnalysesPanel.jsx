@@ -43,11 +43,14 @@ const SOURCE_LAYERS = [
  * per analisi, la più recente in alto. Solo presentazione: lo stato vive in App.
  */
 export default function AnalysesPanel({
-  analyses, activeId, onActivate, onDelete, onRename, onUpdateView, onDownload, tools,
+  analyses, activeId, onActivate, onDelete, onClearAll, onRename, onUpdateView, onDownload, tools,
 }) {
   const { t } = useLang()
   const a = t.analyses
   const active = analyses.find(x => x.id === activeId)
+  // Le analisi restano salvate nel browser: su un portatile condiviso (lo stand di
+  // una conferenza) serve un modo rapido per ripartire da zero. Con conferma.
+  const [confirmClear, setConfirmClear] = useState(false)
 
   return (
     <Paper
@@ -68,10 +71,30 @@ export default function AnalysesPanel({
       <Box px="md" py="sm" style={{ borderBottom: '1px solid var(--modal-divider)', flexShrink: 0 }}>
         <Group justify="space-between" align="baseline">
           <Text fw={700} size="md">{a.title}</Text>
-          <Text size="xs" c={analyses.length >= MAX_ANALYSES ? 'orange.6' : 'dimmed'} fw={600}>
-            {analyses.length}/{MAX_ANALYSES}
-          </Text>
+          <Group gap={8} align="baseline">
+            <Button size="compact-xs" variant="subtle" color="gray" type="button"
+                    leftSection={<IconTrash size={12} />} onClick={() => setConfirmClear(v => !v)}>
+              {a.clearAll}
+            </Button>
+            <Text size="xs" c={analyses.length >= MAX_ANALYSES ? 'orange.6' : 'dimmed'} fw={600}>
+              {analyses.length}/{MAX_ANALYSES}
+            </Text>
+          </Group>
         </Group>
+        {confirmClear && (
+          <Stack gap={6} mt={8}>
+            <Text size="xs">{a.clearConfirm}</Text>
+            <Group gap={6} justify="flex-end">
+              <Button size="compact-xs" variant="default" type="button" onClick={() => setConfirmClear(false)}>
+                {a.cancel}
+              </Button>
+              <Button size="compact-xs" color="red" type="button"
+                      onClick={() => { setConfirmClear(false); onClearAll() }}>
+                {a.clearYes}
+              </Button>
+            </Group>
+          </Stack>
+        )}
       </Box>
 
       <Box style={{ flexShrink: 0 }}>
@@ -318,7 +341,7 @@ function Description({ an }) {
         [a.margin,      pr.margin != null ? `${pr.margin}°` : null],
       ]
     : [
-        [a.mode,      pr.mode === 'transition' ? p.connectivity.modeTransition : p.connectivity.modeTransit],
+        [a.mode,      pr.mode === 'transition' ? p.connectivity.modeTransition : p.connectivity.modePassage],
         [a.horizon,   pr.t_days != null ? `${pr.t_days} d` : null],
         [a.nodes,     pr.node_source === 'grid'
                         ? `${p.connectivity.sourceGrid} ${pr.grid_res}°`

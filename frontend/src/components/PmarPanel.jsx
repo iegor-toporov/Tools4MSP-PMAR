@@ -10,10 +10,14 @@ import { IconInfoCircle, IconX, IconChevronDown, IconChevronUp, IconCircleCheck,
          IconFish, IconFileUpload } from '@tabler/icons-react'
 import { notifications } from '@mantine/notifications'
 import { useLang } from '../LanguageContext'
-import { Process, JobOutcome, ACCESS_DENIED, executeSync, executeAsync,
-         fetchJobStatus, fetchJobResults, dismissJob, setAccessToken } from '../api/ogcProcesses'
-import { formatSeedShape, seedShapeToGeoJSON } from '../geometry/seedShape'
+import { Process, ACCESS_DENIED, executeSync, executeAsync,
+         dismissJob, setAccessToken } from '../api/ogcProcesses'
+import { formatSeedShape, geometryPolygonCount, seedShapePolygonCount,
+         seedShapeToGeoJSON } from '../geometry/seedShape'
 import PolygonDrawControls from './PolygonDrawControls'
+import SimulationJobs from './SimulationJobs'
+import { POLL_INTERVAL_MS, STATUS_ICON, anyActive, errorText, isActive, statusOf, statusText,
+         transitions } from '../scenarios/lifecycle'
 
 function InfoTooltip({ text }) {
   const [anchor, setAnchor] = useState(null)
@@ -131,6 +135,11 @@ const TIME_STEPS = [
   { value: '24', label: '24 h' },
 ]
 
+// Limite di particelle per scenario del backend (PrecomputeProcess).
+const MAX_PARTICLES = 100000
+// Particelle per poligono: il backend porta i valori fuori da [1, 20000] dentro l'intervallo.
+const MAX_PER_POLYGON = 20000
+
 const LABEL_STYLES = {
   label: {
     color: 'var(--mantine-color-dimmed)',
@@ -229,6 +238,9 @@ export default function PmarPanel({
 
   const [t4mspAreas,        setT4mspAreas]        = useState([])
   const [selectedT4mspArea, setSelectedT4mspArea] = useState(null)
+  // Poligoni dell'area Tools4MSP scelta, dalla geometria della preview: servono al
+  // totale della semina per connettività. null finché la geometria non è arrivata.
+  const [t4mspPolygons,     setT4mspPolygons]     = useState(null)
   const [t4mspSearch,       setT4mspSearch]       = useState('')
 
   const [customLabel,   setCustomLabel]   = useState('')
@@ -258,10 +270,10 @@ export default function PmarPanel({
   const [connShpName,    setConnShpName]    = useState('')
   // Titolo dell'analisi che si sta per lanciare; vuoto = titolo automatico.
   const [analysisTitle,  setAnalysisTitle]  = useState('')
-  const [connMode,       setConnMode]       = useState('transit')
+  const [connMode,       setConnMode]       = useState('transition')
   const [connDays,       setConnDays]       = useState('')
   const [connLabelField, setConnLabelField] = useState('')
-  const [connSelfLoops,  setConnSelfLoops]  = useState(false)
+  const [connSelfLoops,  setConnSelfLoops]  = useState(true)
   // Nodi della rete: i poligoni di uno shapefile, oppure una griglia regolare
   // di celle di mare su un riquadro (la terraferma la esclude il backend).
   const [connSource,     setConnSource]     = useState('shapefile')
@@ -272,10 +284,14 @@ export default function PmarPanel({
   const [scenarioStatuses, setScenarioStatuses] = useState({})
   const [scenarioId,       setScenarioId]       = useState('')
 
-  const [customJob,             setCustomJob]             = useState(null)
   const [customPrecomputeError, setCustomPrecomputeError] = useState(null)
-  const [precomputeStopping,    setPrecomputeStopping]    = useState(false)
   const [refetchFlag,           setRefetchFlag]           = useState(0)
+  // Scenari di cui è in corso uno Stop o una rimozione (bottone in attesa).
+  const [busyScenarioIds,       setBusyScenarioIds]       = useState(() => new Set())
+  // Lettura precedente dell'elenco, per notificare i cambi di stato (pronta, fallita).
+  const prevStatusesRef  = useRef(null)
+  // Job lanciati da questa pagina: quando finiscono, la simulazione si seleziona da sola.
+  const submittedJobsRef = useRef(new Set())
 
   // Modalità demo: finché il backend non risponde si assume l'accesso pieno, che è
   // anche il comportamento senza token configurato.
@@ -295,9 +311,16 @@ export default function PmarPanel({
         const resp    = (data.scenarios !== undefined) ? data : { scenarios: data, t4msp_areas: [] }
         const s = {}
         for (const [id, info] of Object.entries(resp.scenarios)) {
-          s[id] = { ...info, status: info.computed ? 'ready' : 'not_computed' }
+          s[id] = { ...info, status: statusOf(info) }
         }
+        notifyTransitions(prevStatusesRef.current, s)
+        prevStatusesRef.current = s
         setScenarioStatuses(s)
+        // Stop o rimozione conclusi: lo scenario non c'è più, o non è più attivo.
+        setBusyScenarioIds(ids => {
+          const keep = [...ids].filter(id => s[id] && (isActive(s[id].status) || s[id].status === 'failed'))
+          return keep.length === ids.size ? ids : new Set(keep)
+        })
         // Bloccando, lo scenario selezionato può non essere più visibile.
         setScenarioId(id => (id && !s[id] ? '' : id))
         setT4mspAreas(resp.t4msp_areas ?? [])
@@ -337,43 +360,70 @@ export default function PmarPanel({
     setRefetchFlag(f => f + 1)
   }
 
-  const describePrecomputeError = msg => (msg === ACCESS_DENIED ? p.access.denied : msg)
+  // I processi sincroni arrivano col prefisso di pygeoapi ("Error executing process: …").
+  const describePrecomputeError = msg => {
+    const clean = msg?.replace(/^Error executing process:\s*/i, '')
+    return clean === ACCESS_DENIED ? p.access.denied : clean
+  }
 
-  // Polled here instead of with waitForJob: a precompute runs for minutes, so this
-  // loop deliberately shrugs off transient network errors and keeps tracking the job
-  // in the background while the user works elsewhere in the panel.
+  // Finché qualcosa è in coda o in calcolo l'elenco si rilegge da solo: stato,
+  // avanzamento e notifiche vengono dal server, quindi sopravvivono a una ricarica.
+  const hasActive = anyActive(scenarioStatuses)
   useEffect(() => {
-    if (!customJob) return
-    const iv = setInterval(async () => {
-      try {
-        const job = await fetchJobStatus(customJob.jobId)
-        if (job.status === JobOutcome.SUCCESS) {
-          try {
-            const results = await fetchJobResults(customJob.jobId)
-            if (results.scenario_id) setScenarioId(results.scenario_id)
-          } catch {}
-          notifications.show({
-            title:     p.simReadyTitle,
-            message:   p.simReadyBody.replace('{label}', customJob.label ?? ''),
-            color:     'teal',
-            icon:      <IconCircleCheck size={18} />,
-            autoClose: 20000,
-          })
-          setCustomJob(null)
-          setRefetchFlag(f => f + 1)
-        } else if (job.status === 'failed') {
-          setCustomJob(null)
-          setCustomPrecomputeError(job.message || p.computeError)
-          setRefetchFlag(f => f + 1)
-        } else if (job.status === JobOutcome.DISMISSED) {
-          setCustomJob(null)
-          setPrecomputeStopping(false)
-          setRefetchFlag(f => f + 1)
-        }
-      } catch {}
-    }, 5000)
+    if (!hasActive) return
+    const iv = setInterval(() => setRefetchFlag(f => f + 1), POLL_INTERVAL_MS)
     return () => clearInterval(iv)
-  }, [customJob, p.computeBusy])
+  }, [hasActive])
+
+  function notifyTransitions(prev, next) {
+    for (const { id, to } of transitions(prev, next)) {
+      const sc    = next[id] ?? prev[id]
+      const label = (lang === 'it' ? sc.label_it : sc.label_en) ?? ''
+      if (to === 'ready') {
+        notifications.show({
+          title:     p.simReadyTitle,
+          message:   p.simReadyBody.replace('{label}', label),
+          color:     'teal',
+          icon:      <IconCircleCheck size={18} />,
+          autoClose: 20000,
+        })
+        if (submittedJobsRef.current.has(prev[id]?.job_id)) setScenarioId(id)
+      } else if (to === 'failed') {
+        notifications.show({
+          title:     p.simFailedTitle,
+          message:   p.simFailedBody.replace('{label}', label).replace('{error}', errorText(sc.error, p.errors)),
+          color:     'red',
+          autoClose: false,
+        })
+      }
+    }
+  }
+
+  const setBusy = (id, on) => setBusyScenarioIds(ids => {
+    const next = new Set(ids)
+    if (on) next.add(id); else next.delete(id)
+    return next
+  })
+
+  async function handleStopSimulation(id, jobId) {
+    setBusy(id, true)
+    if (!(await dismissJob(jobId))) {
+      setBusy(id, false)
+      notifications.show({ message: p.stopError, color: 'red' })
+    }
+    setRefetchFlag(f => f + 1)
+  }
+
+  async function handleRemoveSimulation(id) {
+    setBusy(id, true)
+    try {
+      await executeSync(Process.SCENARIO_STATUS, { remove_scenario: id })
+    } catch (err) {
+      setBusy(id, false)
+      notifications.show({ message: describePrecomputeError(err.detail) || p.removeError, color: 'red' })
+    }
+    setRefetchFlag(f => f + 1)
+  }
 
   useEffect(() => { onT4mspPreview?.(null) }, [runMode])
 
@@ -443,10 +493,20 @@ export default function PmarPanel({
       ...(usesPerPolygon ? { pnum_per_polygon: parseInt(pnumPerPolygon) || 500 } : {}),
     }
     try {
+      // Il backend registra subito lo scenario come `queued`: compare nell'elenco
+      // alla prossima lettura, e da lì in poi lo stato lo dà il server.
       const jobId = await executeAsync(Process.PRECOMPUTE, inputs)
-      setCustomJob({ jobId, label })
-    } catch {
-      setCustomPrecomputeError(p.computeStartError)
+      submittedJobsRef.current.add(jobId)
+      notifications.show({
+        title:     p.simSubmittedTitle,
+        message:   p.simSubmittedBody.replace('{label}', label),
+        color:     'blue',
+        autoClose: 8000,
+      })
+      setRefetchFlag(f => f + 1)
+    } catch (err) {
+      // Input non validi o accesso negato arrivano subito, come errore HTTP.
+      setCustomPrecomputeError(err?.detail || p.computeStartError)
     }
   }
 
@@ -557,11 +617,20 @@ export default function PmarPanel({
     ? formatSeedShape(seedShape, { polygons: p.seedPolygons, polygonsOne: p.seedPolygonOne })
     : null
 
-  // La semina per poligono ha senso solo su uno shapefile caricato e, quando è
-  // attiva, è lei a determinare il numero di particelle: pnum viene ignorato.
-  const usesPerPolygon = connSeeding && seedAreaMode === 'upload'
+  // Semina per connettività: vale per ogni modo di definire l'area e, quando è
+  // attiva, è lei a determinare il numero di particelle (pnum viene ignorato).
+  // Il totale si conosce prima dell'invio per le aree disegnate e per quelle
+  // Tools4MSP; per uno shapefile lo calcola il backend, che rifiuta subito la
+  // richiesta oltre il limite.
+  const usesPerPolygon  = connSeeding
+  const seedPolygons    = seedAreaMode === 'draw'  ? (seedShapePolygonCount(seedShape) || null)
+                        : seedAreaMode === 't4msp' ? (selectedT4mspArea ? t4mspPolygons : null)
+                        : null
+  const perPolygon      = Math.max(1, Math.min(parseInt(pnumPerPolygon) || 0, MAX_PER_POLYGON))
+  const perPolygonTotal = usesPerPolygon && seedPolygons ? perPolygon * seedPolygons : null
+  const perPolygonTooMany = perPolygonTotal != null && perPolygonTotal > MAX_PARTICLES
 
-  const canPrecompute = !customJob && !loading && (
+  const canPrecompute = !perPolygonTooMany && (
     (seedAreaMode === 'draw'   && !!seedShape) ||
     (seedAreaMode === 'upload' && !!shapefileB64) ||
     (seedAreaMode === 't4msp'  && !!selectedT4mspArea)
@@ -614,7 +683,7 @@ export default function PmarPanel({
   const ncBytesPerStep  = pressure === 'oil' ? 160 : pressure === 'larvae' ? 120 : pressure === 'plastic' ? 60 : 40
   const stepsPerDay     = 24 / parseInt(timeStepHours || 1)
   const ncSeedingsCount = multiSeeding ? (parseInt(seedings) || 1) : 1
-  const ncParticles     = usesPerPolygon ? parseInt(pnumPerPolygon || 0) : parseInt(pnum || 0)
+  const ncParticles     = usesPerPolygon ? (perPolygonTotal ?? perPolygon) : parseInt(pnum || 0)
   const ncEstimateBytes = ncParticles * parseInt(durationDays || 0) * stepsPerDay * ncBytesPerStep * ncSeedingsCount
   function formatNcSize(bytes) {
     if (bytes >= 1e9) return (bytes / 1e9).toFixed(1) + ' GB'
@@ -632,7 +701,7 @@ export default function PmarPanel({
     ? t4mspAreas.filter(a => a.label.toLowerCase().includes(searchLow))
     : t4mspAreas
 
-  const isBlocked = stopping || precomputeStopping
+  const isBlocked = stopping
 
   // I bottoni di avvio stanno in una barra fissa in fondo al pannello (Panel.jsx),
   // fuori dall'area che scorre: per lanciare non serve scorrere fino in fondo.
@@ -641,34 +710,17 @@ export default function PmarPanel({
   if (runMode === 'custom' && canSimulate) {
     actions = (
       <Stack gap={6}>
-        <Group grow gap="xs">
-          <Button
-            size="sm"
-            color="blue"
-            disabled={!canPrecompute}
-            onClick={handleCustomCompute}
-            type="button"
-          >
-            {customJob ? p.btnPrecomputing : p.btnPrecompute}
-          </Button>
-          {customJob && (
-            <Button
-              size="sm"
-              color="red"
-              variant="outline"
-              type="button"
-              loading={precomputeStopping}
-              disabled={precomputeStopping}
-              onClick={async () => {
-                setPrecomputeStopping(true)
-                await dismissJob(customJob.jobId)
-              }}
-            >
-              {precomputeStopping ? p.btnStopping : p.btnStop}
-            </Button>
-          )}
-        </Group>
-
+        <Button
+          size="sm"
+          color="blue"
+          fullWidth
+          disabled={!canPrecompute}
+          onClick={handleCustomCompute}
+          type="button"
+        >
+          {p.btnPrecompute}
+        </Button>
+        {hasActive && <Text size="xs" c="dimmed" ta="center">{p.queueHint}</Text>}
         {customPrecomputeError && (
           <Text size="xs" c="red">{describePrecomputeError(customPrecomputeError)}</Text>
         )}
@@ -772,9 +824,9 @@ export default function PmarPanel({
                       { value: '', label: p.scenarioNone },
                       ...customEntries.map(([sid, sc]) => {
                         const label   = lang === 'it' ? sc.label_it : sc.label_en
-                        const icon    = sc.status === 'ready' ? '✓' : sc.status === 'not_computed' ? '○' : '✗'
                         const multi   = sc.seedings > 1 ? ` [${sc.seedings}×]` : ''
-                        return { value: sid, label: `${icon} ${label}${multi}` }
+                        const state   = sc.status === 'ready' ? '' : ` — ${statusText(sc, p)}`
+                        return { value: sid, label: `${STATUS_ICON[sc.status] ?? '?'} ${label}${multi}${state}` }
                       })
                     ]}
                   />
@@ -795,7 +847,6 @@ export default function PmarPanel({
                               [p.labelDuration,       `${sc.duration_days} d`],
                               [p.labelParticles,      sc.pnum?.toLocaleString()],
                               [p.labelTimeStep,       `${sc.time_step_hours} h`],
-                              [p.labelCmemsMarginShort, `${sc.cmems_margin ?? 5} °`],
                             ].map(([label, val]) => (
                               <Group key={label} justify="space-between" gap="xs">
                                 <Text size="10px" c="dimmed">{label}</Text>
@@ -821,6 +872,16 @@ export default function PmarPanel({
                   })()}
                 </>
               )}
+
+              <SimulationJobs
+                entries={customEntries}
+                lang={lang}
+                p={p}
+                canManage={canSimulate}
+                busyIds={busyScenarioIds}
+                onStop={handleStopSimulation}
+                onRemove={handleRemoveSimulation}
+              />
 
               {canSimulate ? (
                 <>
@@ -1011,40 +1072,13 @@ export default function PmarPanel({
                     </Button>
                   )}
 
-                  {seedAreaMode === 'upload' && (
-                    <>
-                      <Switch
-                        size="xs"
-                        label={lbl(p.connSeedingToggle, p.tooltips.connSeeding)}
-                        checked={connSeeding}
-                        onChange={e => setConnSeeding(e.currentTarget.checked)}
-                        styles={{ label: { ...LABEL_STYLES.label, cursor: 'pointer' } }}
-                      />
-                      {connSeeding && (
-                        <Stack gap={4}>
-                          <TextInput
-                            type="number"
-                            size="xs"
-                            label={lbl(p.connSeedingLabel, p.tooltips.connSeedingNum)}
-                            value={pnumPerPolygon}
-                            min="10"
-                            max="20000"
-                            onChange={e => setPnumPerPolygon(e.target.value)}
-                            styles={LABEL_STYLES}
-                          />
-                          <Text size="10px" c="dimmed">{p.connSeedingHint}</Text>
-                        </Stack>
-                      )}
-                    </>
-                  )}
-
                   {seedAreaMode === 't4msp' && (
                     <Stack gap="xs">
                       <TextInput
                         size="xs"
                         placeholder={p.t4mspSearchHint}
                         value={t4mspSearch}
-                        onChange={e => { setT4mspSearch(e.target.value); setSelectedT4mspArea(null); onT4mspPreview?.(null) }}
+                        onChange={e => { setT4mspSearch(e.target.value); setSelectedT4mspArea(null); setT4mspPolygons(null); onT4mspPreview?.(null) }}
                       />
                       <ScrollArea h={140} style={{ border: '1px solid var(--modal-border)', borderRadius: 6 }}>
                         <Stack gap={0}>
@@ -1055,6 +1089,8 @@ export default function PmarPanel({
                               onClick={async () => {
                                 const next = selectedT4mspArea === area.id ? null : area.id
                                 setSelectedT4mspArea(next)
+                                setT4mspPolygons(next && geoCache.current[area.id]
+                                  ? geometryPolygonCount(geoCache.current[area.id]) : null)
                                 if (!next) { onT4mspPreview?.(null); return }
                                 if (geoCache.current[area.id]) {
                                   onT4mspPreview?.({ type: 'FeatureCollection', features: [{ type: 'Feature', geometry: geoCache.current[area.id], properties: {} }] })
@@ -1064,6 +1100,7 @@ export default function PmarPanel({
                                   const { geo } = await executeSync(Process.SCENARIO_STATUS, { area_id: area.id })
                                   if (geo) {
                                     geoCache.current[area.id] = geo
+                                    setT4mspPolygons(geometryPolygonCount(geo))
                                     onT4mspPreview?.({ type: 'FeatureCollection', features: [{ type: 'Feature', geometry: geo, properties: {} }] })
                                   }
                                 } catch {}
@@ -1092,6 +1129,40 @@ export default function PmarPanel({
                           )}
                         </Stack>
                       </ScrollArea>
+                    </Stack>
+                  )}
+
+                  {/* ── Semina per connettività (ogni modo di definire l'area) ── */}
+                  <Switch
+                    size="xs"
+                    label={lbl(p.connSeedingToggle, p.tooltips.connSeeding)}
+                    checked={connSeeding}
+                    onChange={e => setConnSeeding(e.currentTarget.checked)}
+                    styles={{ label: { ...LABEL_STYLES.label, cursor: 'pointer' } }}
+                  />
+                  {connSeeding && (
+                    <Stack gap={4}>
+                      <TextInput
+                        type="number"
+                        size="xs"
+                        label={lbl(p.connSeedingLabel, p.tooltips.connSeedingNum)}
+                        value={pnumPerPolygon}
+                        min="10"
+                        max={MAX_PER_POLYGON}
+                        onChange={e => setPnumPerPolygon(e.target.value)}
+                        styles={LABEL_STYLES}
+                      />
+                      <Text size="10px" c="dimmed">{p.connSeedingHint}</Text>
+                      {perPolygonTotal != null ? (
+                        <Text size="10px" c={perPolygonTooMany ? 'red.5' : 'blue.5'} fw={500}>
+                          {(seedPolygons === 1 ? p.connSeedingTotalOne : p.connSeedingTotal)
+                            .replace('{total}', perPolygonTotal.toLocaleString())
+                            .replace('{n}', seedPolygons)}
+                          {perPolygonTooMany && ` ${p.connSeedingTooMany.replace('{max}', MAX_PARTICLES.toLocaleString())}`}
+                        </Text>
+                      ) : seedAreaMode === 'upload' && (
+                        <Text size="10px" c="dimmed">{p.connSeedingUploadTotal.replace('{max}', MAX_PARTICLES.toLocaleString())}</Text>
+                      )}
                     </Stack>
                   )}
 
@@ -1144,7 +1215,7 @@ export default function PmarPanel({
                       placeholder={usesPerPolygon ? p.connSeedingOverride : undefined}
                       disabled={usesPerPolygon}
                       min="10"
-                      max="100000"
+                      max={MAX_PARTICLES}
                       onChange={e => setPnum(e.target.value)}
                       styles={LABEL_STYLES}
                     />
@@ -1193,7 +1264,7 @@ export default function PmarPanel({
                     style={{ background: ncBg, borderRadius: 6, borderLeft: `2px solid ${ncBorder}`, lineHeight: 1.4 }}
                   >
                     {p.ncSizeHint.replace('{size}', formatNcSize(ncEstimateBytes))}
-                    {usesPerPolygon && ` ${p.ncSizePerPolygon}`}
+                    {usesPerPolygon && perPolygonTotal == null && ` ${p.ncSizePerPolygon}`}
                   </Text>
                 </>
               ) : (
@@ -1242,7 +1313,6 @@ export default function PmarPanel({
                               `${sc.pnum_per_polygon?.toLocaleString()} × ${sc.n_polygons}`]]
                           : []),
                         [p.labelTimeStep,          `${sc.time_step_hours} h`],
-                        [p.labelCmemsMarginShort,  `${sc.cmems_margin ?? 5} °`],
                       ].map(([label, val]) => (
                         <Group key={label} justify="space-between" gap="xs">
                           <Text size="10px" c="dimmed">{label}</Text>
@@ -1438,8 +1508,8 @@ export default function PmarPanel({
                       value={connMode}
                       onChange={setConnMode}
                       data={[
-                        { value: 'transit',    label: p.connectivity.modeTransit },
                         { value: 'transition', label: p.connectivity.modeTransition },
+                        { value: 'passage',    label: p.connectivity.modePassage },
                       ]}
                     />
 

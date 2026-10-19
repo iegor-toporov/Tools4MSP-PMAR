@@ -81,7 +81,7 @@ describe('PROBABILITY_BANDS', () => {
     assert.equal(classIndex(0.03, PROBABILITY_BANDS), 1)
     assert.equal(classIndex(0.25, PROBABILITY_BANDS), 4)
     assert.equal(classIndex(1, PROBABILITY_BANDS), 5)
-    // il transito può superare 1 per riga, ma non per arco: resta comunque nell'ultima
+    // il passaggio può superare 1 per riga, ma non per arco: resta comunque nell'ultima
     assert.equal(classIndex(1.2, PROBABILITY_BANDS), 5)
   })
 })

@@ -140,3 +140,37 @@ export function formatSeedShape(shape, labels = {}) {
   return `${shape.lon_min.toFixed(2)}°–${shape.lon_max.toFixed(2)}°E · ` +
          `${shape.lat_min.toFixed(2)}°–${shape.lat_max.toFixed(2)}°N`
 }
+
+/**
+ * Poligoni in cui semina OpenDrift per una forma disegnata: uno per cerchio e
+ * rettangolo, uno per anello di un'area poligonale. Serve alla semina per
+ * connettività, dove il totale è particelle per poligono × poligoni.
+ *
+ * @param {?object} shape
+ * @returns {number}
+ */
+export function seedShapePolygonCount(shape) {
+  if (!shape) return 0
+  if (shape.type === 'polygon') return (shape.rings ?? []).filter(r => r.length >= 3).length
+  return 1
+}
+
+/**
+ * Poligoni di una geometria GeoJSON contati come li conta il backend
+ * (`geometry.explode()`): una MultiPolygon vale quanto le sue parti.
+ * Accetta geometrie, Feature e FeatureCollection.
+ *
+ * @param {?object} geo
+ * @returns {number}
+ */
+export function geometryPolygonCount(geo) {
+  if (!geo) return 0
+  switch (geo.type) {
+    case 'Polygon':            return 1
+    case 'MultiPolygon':       return geo.coordinates?.length ?? 0
+    case 'GeometryCollection': return (geo.geometries ?? []).reduce((n, g) => n + geometryPolygonCount(g), 0)
+    case 'Feature':            return geometryPolygonCount(geo.geometry)
+    case 'FeatureCollection':  return (geo.features ?? []).reduce((n, f) => n + geometryPolygonCount(f), 0)
+    default:                   return 0
+  }
+}

@@ -1,12 +1,14 @@
 import json
 import os
 from datetime import datetime, timezone
+from http import HTTPStatus
 from typing import Any, Optional, Tuple
 
 import redis as redis_client
 
 from pygeoapi.process.manager.base import BaseManager
 from pygeoapi.process.base import (
+    ProcessorExecuteError,
     BaseProcessor,
     JobNotFoundError,
     JobResultNotFoundError,
@@ -14,6 +16,19 @@ from pygeoapi.process.base import (
 from pygeoapi.util import JobStatus, RequestedResponse, Subscriber
 
 _TTL = 7 * 24 * 3600  # 7 days
+
+class InvalidSubmission(ProcessorExecuteError):
+    """Richiesta rifiutata alla preparazione (input non validi, accesso negato): 400, e
+    il messaggio arriva al client — pygeoapi mostra solo `user_msg`, altrimenti
+    risponderebbe "generic error (check logs)"."""
+    http_status_code = HTTPStatus.BAD_REQUEST
+
+    def __init__(self, msg):
+        super().__init__(msg, user_msg=msg)
+
+
+# Processi che fanno girare OpenDrift: vanno sulla coda `simulations`, una alla volta.
+SIMULATION_PROCESSES = {'precompute', 'opendrift'}
 
 
 class CeleryManager(BaseManager):
@@ -237,9 +252,27 @@ class CeleryManager(BaseManager):
         Returns:
             tuple[str, None, JobStatus]: ``('application/json', None, JobStatus.accepted)``.
         """
-        from worker.tasks import run_processor
+        from worker.app import SIMULATIONS_QUEUE
+        from worker.tasks import run_processor, run_simulation
         process_class_path = f"{p.__class__.__module__}.{p.__class__.__name__}"
-        result = run_processor.delay(job_id, process_class_path, data_dict)
+
+        # Preparazione sincrona, prima della coda (es. il precompute registra subito lo
+        # scenario come `queued`). Un errore qui torna all'utente come errore HTTP; il
+        # record del job, già creato da pygeoapi, va chiuso come fallito.
+        prepare = getattr(p, 'prepare', None)
+        if callable(prepare):
+            try:
+                data_dict = prepare(job_id, data_dict)
+            except Exception as e:
+                msg = getattr(e, 'user_msg', None) or str(e) or e.__class__.__name__
+                self.update_job(job_id, {'status': JobStatus.failed.value, 'message': msg})
+                raise InvalidSubmission(msg) from e
+
+        if p.metadata.get('id') in SIMULATION_PROCESSES:
+            result = run_simulation.apply_async(args=(job_id, process_class_path, data_dict),
+                                                queue=SIMULATIONS_QUEUE)
+        else:
+            result = run_processor.delay(job_id, process_class_path, data_dict)
         self._redis.hset(self._key(job_id), 'celery_task_id', result.id)
         return 'application/json', None, JobStatus.accepted
 

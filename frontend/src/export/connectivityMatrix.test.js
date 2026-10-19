@@ -40,12 +40,12 @@ describe('toEdgeListCsv', () => {
 })
 
 describe('toMatrixMarket', () => {
-  const text = toMatrixMarket(M, { comment: 'transit · 5 d', labels: LABELS })
+  const text = toMatrixMarket(M, { comment: 'passage · 5 d', labels: LABELS })
   const lines = text.trim().split('\n')
 
   it('writes the coordinate header, comments and size line', () => {
     assert.equal(lines[0], '%%MatrixMarket matrix coordinate real general')
-    assert.equal(lines[1], '% transit · 5 d')
+    assert.equal(lines[1], '% passage · 5 d')
     assert.ok(lines[2].startsWith('% nodes (row/column order): ["A1"'))
     assert.equal(lines[3], '3 3 5')
   })

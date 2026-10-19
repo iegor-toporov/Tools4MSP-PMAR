@@ -7,7 +7,9 @@ from pygeoapi.process.base import BaseProcessor
 
 from processes.PMARProcess import SCENARIOS_DIR, T4MSP_AREA_URL, _fetch_t4msp_areas
 from processes.logging_utils import setup_logger
-from processes.access import is_unlocked, require_scenario, scenario_allowed, token_configured
+from processes.access import (is_unlocked, require_scenario, require_unlocked, scenario_allowed,
+                              token_configured)
+from processes import scenario_state as state
 
 logger = setup_logger('scenario_status_process', 'pmar', 'scenario_status.log')
 
@@ -38,6 +40,13 @@ PROCESS_METADATA = {
             'title': 'Scenario id',
             'description': 'When given, returns only that scenario\'s seeding geometry '
                            'instead of the status map.',
+            'schema': {'type': 'string'},
+            'minOccurs': 0, 'maxOccurs': 1,
+        },
+        'remove_scenario': {
+            'title': 'Remove a failed scenario',
+            'description': 'Id of a failed scenario to delete (JSON, shapefile). Requires full '
+                           'access; scenarios that are ready, queued or running are refused.',
             'schema': {'type': 'string'},
             'minOccurs': 0, 'maxOccurs': 1,
         },
@@ -86,8 +95,7 @@ def _backfill_bounds(sc, meta_path):
         # il JSON per aggiungere i bounds ne cambierebbe la posizione, quindi la
         # data va ripristinata.
         st = os.stat(meta_path)
-        with open(meta_path, 'w') as f:
-            json.dump(sc, f, indent=2)
+        state.write_scenario(sc)
         os.utime(meta_path, (st.st_atime, st.st_mtime))
         logger.info(f'[ScenarioStatus] bounds aggiunti a {os.path.basename(meta_path)}')
     except Exception as e:
@@ -136,6 +144,35 @@ def _scenario_geometry(scenario_id):
         return None
 
 
+def _created_at(meta_file, sc):
+    if sc.get('created_at'):
+        return sc['created_at']
+    try:
+        return state.datetime.fromtimestamp(os.path.getmtime(meta_file), state.timezone.utc).isoformat()
+    except OSError:
+        return ''
+
+
+def _remove_failed(scenario_id, unlocked):
+    """Elimina uno scenario fallito. Solo quelli falliti: uno pronto non si cancella per
+    errore, uno in coda o in calcolo si ferma con lo Stop."""
+    require_unlocked(unlocked)
+    sc = state.read_scenario(scenario_id)
+    if sc is None:
+        return {'removed': scenario_id, 'state': None}
+    sc.setdefault('scenario_id', scenario_id)
+    sc = state.reconcile(sc)
+    if sc is None:
+        return {'removed': scenario_id, 'state': None}
+    st = state.state_of(sc)
+    if st != state.FAILED:
+        from pygeoapi.process.base import ProcessorExecuteError
+        raise ProcessorExecuteError(f'Scenario {scenario_id} is {st}: only failed scenarios can be removed.')
+    state.remove_scenario_files(scenario_id, sc)
+    logger.info(f'[ScenarioStatus] removed failed scenario {scenario_id}')
+    return {'removed': scenario_id, 'state': st}
+
+
 class ScenarioStatusProcessor(BaseProcessor):
     """OGC API Process that reports the pre-computation status of all registered PMAR scenarios."""
 
@@ -176,20 +213,46 @@ class ScenarioStatusProcessor(BaseProcessor):
             require_scenario(scenario_id, unlocked)
             return 'application/json', {'geo': _scenario_geometry(scenario_id)}
 
-        scenarios = {}
+        remove_id = data.get('remove_scenario')
+        if remove_id:
+            return 'application/json', _remove_failed(remove_id, unlocked)
 
-        for meta_file in sorted(glob.glob(os.path.join(SCENARIOS_DIR, 'custom_*.json')), key=os.path.getmtime, reverse=True):
+        loaded = []
+        for meta_file in glob.glob(os.path.join(SCENARIOS_DIR, 'custom_*.json')):
             try:
                 with open(meta_file) as f:
                     sc = json.load(f)
-                sid          = sc.get('scenario_id', os.path.basename(meta_file).replace('.json', ''))
-                if not scenario_allowed(sid, unlocked):
+                sc.setdefault('scenario_id', os.path.basename(meta_file)[:-len('.json')])
+                if not scenario_allowed(sc['scenario_id'], unlocked):
                     continue
-                _backfill_bounds(sc, meta_file)
+                # Job annullato o perso mentre lo scenario era in coda/in calcolo.
+                sc = state.reconcile(sc)
+                if sc is not None:
+                    loaded.append((meta_file, sc))
+            except Exception as e:
+                logger.warning(f'[ScenarioStatus] Failed to load {meta_file}: {e}')
+
+        # Più recenti prima, per data di creazione (gli scenari vecchi non l'hanno: mtime).
+        loaded.sort(key=lambda x: _created_at(*x), reverse=True)
+
+        # Posizione in coda: 1 = la prossima a partire.
+        queued = sorted((sc for _, sc in loaded if sc.get('state') == state.QUEUED),
+                        key=lambda sc: sc.get('queued_at') or '')
+        queue_pos = {sc['scenario_id']: i + 1 for i, sc in enumerate(queued)}
+
+        scenarios = {}
+        for meta_file, sc in loaded:
+            try:
+                sid = sc['scenario_id']
+                st  = state.state_of(sc)
+                if st == state.READY:
+                    _backfill_bounds(sc, meta_file)
                 nc_filenames = sc.get('nc_filenames') or [sc['nc_filename']]
                 existing     = [fn for fn in nc_filenames
                                 if os.path.exists(os.path.join(SCENARIOS_DIR, fn))]
-                computed     = len(existing) == len(nc_filenames)
+                # Durante il calcolo i NC dei seeding già finiti esistono, ma lo scenario
+                # non è utilizzabile finché non è `ready`.
+                computed     = st == state.READY and len(existing) == len(nc_filenames)
                 nc_size_mb   = round(
                     sum(os.path.getsize(os.path.join(SCENARIOS_DIR, fn)) for fn in existing)
                     / (1024 * 1024), 2
@@ -222,7 +285,18 @@ class ScenarioStatusProcessor(BaseProcessor):
                     'source':          'custom',
                     'seedings':        sc.get('seedings', 1),
                     'tshift':          sc.get('tshift', 0),
+                    # Ciclo di vita (vedi processes/scenario_state.py).
+                    'state':           st,
+                    'progress':        sc.get('progress') if st in state.ACTIVE else None,
+                    'queue_position':  queue_pos.get(sid),
+                    'error':           sc.get('error') or state.legacy_error(sc),
+                    'created_at':      sc.get('created_at'),
+                    'started_at':      sc.get('started_at'),
+                    'finished_at':     sc.get('finished_at'),
                 }
+                # L'id del job serve solo allo Stop, che richiede accesso pieno.
+                if unlocked and st in state.ACTIVE:
+                    scenarios[sid]['job_id'] = sc.get('job_id')
             except Exception as e:
                 logger.warning(f'[ScenarioStatus] Failed to load {meta_file}: {e}')
 

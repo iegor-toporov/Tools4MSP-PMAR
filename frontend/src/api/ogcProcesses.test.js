@@ -137,6 +137,23 @@ describe('waitForJob', () => {
     assert.equal(err.detail, 'no particles seeded')
   })
 
+  it('rides out network errors and 5xx when asked, but not a missing job', async () => {
+    stubFetch((_url, _init, n) => {
+      if (n === 1) throw new TypeError('Failed to fetch')
+      if (n === 2) return rawResponse('Bad Gateway', { status: 502 })
+      return jsonResponse({ status: 'successful' })
+    })
+    const { outcome } = await waitForJob('job-1', { intervalMs: 1, maxTransientErrors: 2 })
+    assert.equal(outcome, JobOutcome.SUCCESS)
+
+    stubFetch(() => { throw new TypeError('Failed to fetch') })
+    await assert.rejects(() => waitForJob('job-1', { intervalMs: 1 }), TypeError)
+
+    stubFetch(() => rawResponse(JSON.stringify({ description: 'job not found' }), { status: 404 }))
+    const err = await waitForJob('job-1', { intervalMs: 1, maxTransientErrors: 5 }).catch(e => e)
+    assert.equal(err.httpStatus, 404)
+  })
+
   it('stops polling when the caller aborts', async () => {
     statuses({ status: 'running' }, { status: 'running' }, { status: 'successful' })
     const controller = new AbortController()

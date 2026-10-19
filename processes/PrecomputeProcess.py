@@ -26,43 +26,13 @@ from processes.OpenDriftProcess import (
 )
 from processes.logging_utils import setup_logger
 from processes.access import is_unlocked, require_unlocked
+from processes import scenario_state as state
 
 logger = setup_logger('precompute_process', 'pmar', 'precompute_process.log')
 
-_precompute_lock = threading.Semaphore(1)
-
-
-def _cleanup_scenario(scenario_id, sc):
-    """Remove JSON metadata, partial NC files, and custom shapefile for an incomplete scenario."""
-    json_path = os.path.join(SCENARIOS_DIR, f'{scenario_id}.json')
-    if os.path.exists(json_path):
-        try:
-            os.remove(json_path)
-            logger.info(f'[{scenario_id}] Removed incomplete scenario metadata')
-        except OSError as e:
-            logger.warning(f'[{scenario_id}] Could not remove JSON: {e}')
-
-    for nc_filename in sc.get('nc_filenames', [sc.get('nc_filename', '')]):
-        if not nc_filename:
-            continue
-        nc_path = os.path.join(SCENARIOS_DIR, nc_filename)
-        if os.path.exists(nc_path):
-            try:
-                os.remove(nc_path)
-                logger.info(f'[{scenario_id}] Removed partial NC: {nc_filename}')
-            except OSError as e:
-                logger.warning(f'[{scenario_id}] Could not remove NC {nc_filename}: {e}')
-
-    shp = sc.get('shapefile', '')
-    if shp and os.path.basename(shp).startswith('custom_'):
-        base = os.path.splitext(shp)[0]
-        for ext in ('.shp', '.shx', '.dbf', '.prj', '.cpg'):
-            p = base + ext
-            if os.path.exists(p):
-                try:
-                    os.remove(p)
-                except OSError as e:
-                    logger.warning(f'[{scenario_id}] Could not remove shapefile {p}: {e}')
+# Una simulazione alla volta: la garantisce la coda Celery `simulations`, servita da
+# un worker dedicato con un solo processo (vedi docker-compose.yml). Un semaforo qui
+# non basterebbe: vale per processo, e il worker generico ne ha più d'uno.
 
 PROCESS_METADATA = {
     'version': '0.1.0',
@@ -223,7 +193,7 @@ def _save_custom_shapefile(geojson_input, shapefile_b64, dest_dir, custom_id):
     raise ProcessorExecuteError('Provide geojson or shapefile_b64.')
 
 
-def _build_custom_scenario(data, shp_path=None, area_label=None):
+def _build_custom_scenario(data, shp_path=None, area_label=None, job_id=None):
     """Validate simulation parameters, persist the seeding shapefile, and write scenario metadata.
 
     Constructs a scenario dict from the OGC API input payload, applies bounds to numeric
@@ -269,15 +239,32 @@ def _build_custom_scenario(data, shp_path=None, area_label=None):
     label     = data.get('label') or f'{PRESSURE_MODELS[pressure]["label_en"]} — {start_time_str[:10]}'
     custom_id = f'custom_{uuid.uuid4().hex[:8]}'
 
-    if shp_path is None:
+    own_shp = shp_path is None
+    if own_shp:
         shp_path = _save_custom_shapefile(geojson_input, shapefile_b64, SCENARIOS_SHP_DIR, custom_id)
+    try:
+        return _describe_custom_scenario(data, custom_id, shp_path, area_label, job_id,
+                                          pressure, pnum, duration_days, time_step_hours,
+                                          start_time_str, label, res)
+    except Exception:
+        # Richiesta rifiutata (es. troppe particelle): lo shapefile appena salvato non
+        # appartiene a nessuno scenario. Quelli Tools4MSP sono condivisi e restano.
+        if own_shp:
+            state.remove_scenario_files(custom_id, {'shapefile': shp_path})
+        raise
+
+
+def _describe_custom_scenario(data, custom_id, shp_path, area_label, job_id, pressure, pnum,
+                              duration_days, time_step_hours, start_time_str, label, res):
+    """Seconda metà di :func:`_build_custom_scenario`, una volta salvato lo shapefile:
+    semina, bounds e JSON dello scenario in stato `queued`."""
 
     # Seeding per la connettività.
     #
     # OpenDrift ripartisce `number` fra i poligoni *proporzionalmente all'area*
     # (seed_from_geopandas), mentre una matrice di connettività confronta le righe
     # fra loro: con uno sforzo di campionamento diverso per poligono le probabilità
-    # di transito dei poligoni piccoli sarebbero stimate su pochissime particelle e
+    # di passaggio dei poligoni piccoli sarebbero stimate su pochissime particelle e
     # non confrontabili con le altre. La tesi rilascia perciò lo stesso numero di
     # particelle in ogni poligono, e questa modalità riproduce quella scelta.
     # I bounds dell'area di semina vengono registrati qui una volta sola: servono
@@ -337,9 +324,12 @@ def _build_custom_scenario(data, shp_path=None, area_label=None):
         'bounds':           bounds,
         'source':           'custom',
     }
-    meta_path = os.path.join(SCENARIOS_DIR, f'{custom_id}.json')
-    with open(meta_path, 'w') as f:
-        json.dump(sc, f, indent=2)
+    # Ciclo di vita (processes/scenario_state.py): nasce in coda, il worker lo porta
+    # a running e poi a ready o failed. `created_at` fissa l'ordine nell'elenco, che
+    # non deve cambiare a ogni aggiornamento di stato.
+    sc.update(state=state.QUEUED, job_id=job_id, created_at=state.now_iso(),
+              queued_at=state.now_iso(), progress={'done': 0, 'total': sc['seedings']})
+    state.write_scenario(sc)
 
     logger.info(f'[PrecomputeProcess] Custom scenario created: {custom_id}, label={label!r}')
     return sc, custom_id, shp_path
@@ -525,6 +515,7 @@ def _run_multi_scenario(scenario_id, sc, shp_path):
         start_n = datetime.fromisoformat(sc['start_time']) + timedelta(days=tshift * n)
         sc_n = {**sc, 'start_time': start_n.isoformat(), 'nc_filename': nc_filenames[n]}
         logger.info(f'[{scenario_id}] Seeding {n+1}/{seedings}: start={start_n.date()}')
+        state.update_scenario(scenario_id, progress={'done': n, 'total': seedings})
         _run_scenario(scenario_id, sc_n, shp_path)
 
     logger.info(f'[{scenario_id}] Multi-seeding complete ({seedings} runs).')
@@ -536,44 +527,29 @@ class PrecomputeProcessor(BaseProcessor):
     Accepts a seeding geometry (GeoJSON, shapefile ZIP, or Tools4MSP area ID),
     builds a scenario metadata record, and runs one or more time-shifted OpenDrift
     simulations.  Results are written to ``SCENARIOS_DIR`` for later consumption by
-    :class:`PMARProcessor`.  A process-wide semaphore ensures only one pre-computation
-    runs at a time.
+    :class:`PMARProcessor`.  Requests are queued: the `simulations` Celery queue is served by a
+    single-process worker, so one simulation runs at a time and the others wait as `queued`
+    scenarios (see processes/scenario_state.py).
     """
 
     def __init__(self, processor_def):
         """Initialise the processor with its OGC API metadata definition."""
         super().__init__(processor_def, PROCESS_METADATA)
 
-    def execute(self, data):
-        """Validate inputs, build the scenario record, and run the OpenDrift pre-computation.
+    def prepare(self, job_id, data):
+        """Chiamato dal manager **all'invio**, prima di mettere il job in coda.
 
-        Resolves the seeding geometry from the provided input (GeoJSON, shapefile, or
-        Tools4MSP area ID), creates the scenario metadata via :func:`_build_custom_scenario`,
-        acquires the global pre-computation semaphore (rejecting concurrent requests), and
-        delegates to :func:`_run_multi_scenario`.
-
-        Args:
-            data (dict): OGC API input payload. At least one of the following geometry
-                sources must be present: ``geojson``, ``shapefile_b64``, or
-                ``t4msp_area_id``.  Additional keys control simulation parameters
-                (see ``PROCESS_METADATA``).
-
-        Returns:
-            tuple[str, dict]: ``('application/json', result)`` with keys
-            ``scenario_id``, ``status`` (``'done'``), ``nc_filename``,
-            ``nc_filenames``, and ``seedings``.
-
-        Raises:
-            ProcessorExecuteError: If no geometry source is provided, if a
-                pre-computation is already running, or if the simulation fails.
+        Controlla l'accesso, risolve la geometria e registra lo scenario come `queued`:
+        così compare subito nell'elenco (anche se un'altra simulazione occupa il
+        worker), e gli errori di input tornano subito all'utente invece di arrivare
+        come job fallito. Al worker passa solo lo `scenario_id`: il messaggio in coda
+        non deve trasportare lo shapefile in base64.
         """
-        # Prima di tutto: un rifiuto non deve lasciare file di scenario a metà.
         require_unlocked(is_unlocked(data))
 
         geojson_input  = data.get('geojson')
         shapefile_b64  = data.get('shapefile_b64')
         t4msp_area_id  = data.get('t4msp_area_id')
-
         if not geojson_input and not shapefile_b64 and not t4msp_area_id:
             raise ProcessorExecuteError('Provide geojson, shapefile_b64, or t4msp_area_id.')
 
@@ -587,25 +563,66 @@ class PrecomputeProcessor(BaseProcessor):
             if match:
                 area_label = match['label']
 
-        sc, scenario_id, shp_path = _build_custom_scenario(data, shp_path=shp_path, area_label=area_label)
+        _, scenario_id, _ = _build_custom_scenario(data, shp_path=shp_path,
+                                                   area_label=area_label, job_id=job_id)
+        logger.info(f'[PrecomputeProcess] {scenario_id} queued (job {job_id})')
+        return {'scenario_id': scenario_id}
 
+    def execute(self, data):
+        """Validate inputs, build the scenario record, and run the OpenDrift pre-computation.
+
+        Normally receives only ``scenario_id`` from :meth:`prepare` (called at submission);
+        marks the scenario `running`, runs :func:`_run_multi_scenario` updating its progress,
+        and ends as `ready`. An error marks it `failed` (kept, with the message); a Stop
+        (SIGTERM) removes it. A direct call with the full payload is prepared inline.
+
+        Args:
+            data (dict): OGC API input payload. At least one of the following geometry
+                sources must be present: ``geojson``, ``shapefile_b64``, or
+                ``t4msp_area_id``.  Additional keys control simulation parameters
+                (see ``PROCESS_METADATA``).
+
+        Returns:
+            tuple[str, dict]: ``('application/json', result)`` with keys
+            ``scenario_id``, ``status`` (``'done'``), ``nc_filename``,
+            ``nc_filenames``, and ``seedings``.
+
+        Raises:
+            ProcessorExecuteError: If no geometry source is provided, if the scenario
+                no longer exists, or if the simulation fails.
+        """
+        # Arriva dal worker con il solo scenario_id preparato da `prepare` all'invio.
+        # Una chiamata diretta (senza manager) si prepara qui.
+        if set(data) == {'scenario_id'}:
+            scenario_id = data['scenario_id']
+        else:
+            scenario_id = self.prepare(None, data)['scenario_id']
+
+        sc = state.read_scenario(scenario_id)
+        if sc is None:
+            raise ProcessorExecuteError(f'Scenario {scenario_id} not found (removed or cancelled).')
+        shp_path = sc['shapefile']
+        sc = state.update_scenario(scenario_id, state=state.RUNNING, started_at=state.now_iso(),
+                                   progress={'done': 0, 'total': sc.get('seedings', 1)})
         logger.info(f'[PrecomputeProcess] Starting pre-computation for scenario: {scenario_id}')
 
-        if not _precompute_lock.acquire(blocking=False):
-            raise ProcessorExecuteError('A pre-computation is already running. Please wait for it to finish.')
-
-        completed = False
         try:
             _run_multi_scenario(scenario_id, sc, shp_path)
-            completed = True
         except Exception as e:
+            # Errore vero (OpenDrift, CMEMS, soft time limit): lo scenario resta visibile
+            # come fallito, col messaggio, finché qualcuno non lo rimuove.
             logger.error(f'[PrecomputeProcess] Error during pre-computation of {scenario_id}: {e}', exc_info=True)
+            state.mark_failed(scenario_id, e)
             raise ProcessorExecuteError(str(e))
-        finally:
-            _precompute_lock.release()
-            if not completed:
-                _cleanup_scenario(scenario_id, sc)
+        except BaseException:
+            # Stop (SIGTERM) o arresto del worker, se arrivano come eccezione: annullato,
+            # non è un errore. Se invece il processo muore di colpo, la pulizia la fanno
+            # la riconciliazione (job `dismissed`) o `fail_interrupted` al riavvio.
+            state.remove_scenario_files(scenario_id)
+            raise
 
+        sc = state.update_scenario(scenario_id, state=state.READY, progress=None,
+                                   finished_at=state.now_iso()) or sc
         logger.info(f'[PrecomputeProcess] Pre-computation complete: {sc["nc_filenames"]}')
 
         return 'application/json', {
