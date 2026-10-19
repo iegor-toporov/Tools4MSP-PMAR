@@ -28,8 +28,9 @@ DTO-PMAR/
 │   ├── scenario_state.py                # Scenario lifecycle: state in the JSON, reconciliation with Redis jobs
 │   ├── WindfarmsProcess.py              # OGC API process: EMODnet wind farm preview (bbox query)
 │   ├── OffshoreInstallationsProcess.py  # OGC API process: EMODnet offshore installations preview
-│   ├── Natura2000Process.py             # OGC API process: Natura 2000 protected areas (EmodNet)
+│   ├── Natura2000Process.py             # OGC API process: Natura 2000 protected areas (EmodNet); no longer used by the UI
 │   ├── MSPZonesProcess.py               # OGC API process: EMODnet MSP aquaculture zones (bbox query)
+│   ├── ShapefileFieldsProcess.py        # OGC API process: columns of an uploaded shapefile (polygon labels)
 │   └── logging_utils.py                 # Shared log handler with line-count rotation
 ├── data/
 │   ├── cmems_datasets.py                # CMEMS dataset constants (dataset IDs, variables)
@@ -47,6 +48,9 @@ DTO-PMAR/
 │   │   │   └── seedShape.js             # Seeding-area conversions (GeoJSON, bbox, label): no React, no i18n
 │   │   ├── markov/
 │   │   │   └── frames.js                # Markov frames → PMAR raster per frame and layer (pure, tested)
+│   │   ├── export/
+│   │   │   ├── geotiff.js               # Float32 GeoTIFF writer for the layers' "Download raster" (pure, tested)
+│   │   │   └── pmarTools.js             # CSV files of the analysis tools (pure, tested)
 │   │   ├── hooks/
 │   │   │   └── usePreviewLayer.js       # React adapter: keeps one EMODnet overlay in sync with the seeding area
 │   │   ├── scenarios/
@@ -55,6 +59,7 @@ DTO-PMAR/
 │   │   │   ├── persistedState.js        # What the analyses panel saves, and how it is read back (pure, tested)
 │   │   │   └── analysesStore.js         # IndexedDB read/write, failure-tolerant
 │   │   ├── components/                  # Panels, map overlays, analysis windows (Mantine v9, react-leaflet)
+│   │   │   └── analysis/                # The three Analysis sections: Dispersal, Structural connectivity, Propagate
 │   │   ├── App.jsx                      # Root: map, panels, application state
 │   │   └── i18n.js                      # IT/EN strings
 │   ├── Dockerfile                       # Multi-stage build → nginx
@@ -222,7 +227,7 @@ The user defines a seeding area and simulation parameters, then triggers a **pre
 
 | Mode | Description |
 |---|---|
-| Draw | Circle, rectangle, or free **polygon** drawn interactively on the map. Supports a custom area name. |
+| Draw | Circle, rectangle, or free **polygon** drawn interactively on the map |
 | Shapefile | ZIP archive containing `.shp`, `.shx`, `.dbf` files |
 | Pre-defined area | Geographic area from the [Tools4MSP API](https://api.tools4msp.eu/api/v2/domainareas/) |
 
@@ -237,25 +242,33 @@ Selecting an existing simulation highlights **its** seeding area on the map and 
 it; the drawn area is hidden while that is the case, and comes back when the selection is cleared.
 Starting a new drawing clears the selection, so exactly one area is shown at any time.
 
+Whatever the mode, *Seeding area name* names the area (for a pre-defined area it replaces the
+Tools4MSP name; left empty, that name is kept).
+
 **Simulation parameters:**
 
 | Parameter | Range | Default |
 |---|---|---|
 | Title | Free text | Auto-generated from pressure + date |
 | Description | Free text | — |
-| Pressure type | `generic`, `plastic`, `oil`, `larvae` | `generic` |
+| Tracer type | `generic` (General), `plastic`, `oil`, `chemical`, `larvae` (Fish larvae) | `generic` |
+| Chemical compound | One of the 28 compounds known to ChemicalDrift (only with `chemical`) | Naphthalene |
 | Start date | ISO 8601 date | 10 days ago |
 | Duration | 1–730 days | 30 |
 | Particles | 10–100 000 | 1 000 |
-| Particles per polygon | 10–20 000 (shapefile seeding only) | off |
 | Time step | 1, 3, 6, 12, 24 h | 1 h |
-| CMEMS margin | 0–20° | 5° |
+| Particle distribution | *Evenly* or *Per polygon* (10–20 000 per polygon) | Evenly |
+| Multi seeding (Advanced) | Seedings and days between them | off |
+| CMEMS margin (Advanced) | 0–20° | 1° |
+| No beaching (Advanced) | Particles reaching the coast stay in the water | off |
 
-**Connectivity seeding.** By default OpenDrift splits the particle budget between polygons *in
+The form follows the order of the interface mock-up: title and description, seeding area, tracer
+type, *Timing & particles*, *Particle distribution*, then *Advanced*.
+
+**Particle distribution.** *Evenly* lets OpenDrift split the particle budget between polygons *in
 proportion to their area*, so a small polygon gets very few. A connectivity matrix compares its
 rows with one another, and a row estimated from a handful of particles is not comparable with the
-others. Switching on *Connectivity seeding* releases the same number of particles in every polygon
-instead. It works with every way of defining the seeding area. Below the field the panel shows the
+others. *Per polygon* releases the same number of particles in every polygon instead. It works with every way of defining the seeding area. Below the field the panel shows the
 resulting total when it can count the polygons — drawn areas (a circle or a rectangle is one
 polygon, each free polygon one more) and Tools4MSP areas (from the preview geometry, counting the
 parts of a MultiPolygon as the backend does) — and disables *Pre-compute* above 100 000 particles.
@@ -276,40 +289,41 @@ A live estimate of the temporary NetCDF file size is shown below the form, colou
 
 Once submitted, the simulation appears in the list straight away as queued or running and the list refreshes every 5 seconds until it is ready; only one simulation runs at a time, the others wait in a queue (see [Simulation queue and lifecycle](#simulation-queue-and-lifecycle)).
 
-Existing simulations are listed in a dropdown at the top of the tab. Selecting one shows a summary: area name, pressure type, start date, duration, particles, time step, CMEMS margin, and description.
+Existing simulations are listed in a dropdown at the top of the tab. Selecting one shows a summary: area name, tracer type (and compound), start date, duration, particles, time step, multi seeding, beaching and description.
 
 ### Tab 2 — Analysis
 
 Once a simulation is selected from the Simulation tab, the Analysis tab runs analyses on it
-without re-running the OpenDrift simulation. It holds two sub-tabs, both working on the same
-precomputed trajectories.
+without re-running the OpenDrift simulation. At the top, a summary of the simulation (bounding
+box, tracer type, forcing, dates, particles, time step, multi seeding, description); below, three
+expandable sections, each with an (i) explaining it, a *Layer title* (left empty, a title is
+generated, e.g. `PPI · Wind farms · Black Sea 2019`) and its own **Run analysis** button. Every
+run adds a layer to the *Analyses layers* of the right panel.
 
-#### Sources — pressure propagation
+#### Dispersal from source
 
-| Parameter | Options | Default |
-|---|---|---|
-| Source layer | `Uniform`, `Wind farms`, `Offshore installations`, `MSP aquaculture zones`, `Custom GeoTIFF` | `Uniform` |
-| Grid resolution | 0.1°, 0.05° | 0.1° |
-| Study area margin | 0–20° | 1° |
-
-Running the analysis produces a particle density heatmap overlaid on the map.
-
-#### Connectivity — exchange between areas
-
-Computes how much water-borne material moves between areas, as described in Bosi et al. (2026).
-The nodes of the network come from one of two sources:
-
-| Source | How the nodes are defined |
-|---|---|
-| Shapefile | A ZIP of polygons. An attribute column can be used to label the nodes. |
-| Grid | A regular grid of **ocean** cells over a bounding box; land cells are excluded automatically. Resolution 1° or 0.5°; the box defaults to the scenario's own seeding area and can be narrowed by hand. |
+Maps of tracer propagation from a source layer, counting passages per cell; trajectories are
+weighted by the source layer at their release point (`pmar` process).
 
 | Parameter | Options | Default |
 |---|---|---|
-| Probability | `Passage` (passes through j at least once within the horizon — structural connectivity) or `Transition` (is in j exactly after the horizon, e.g. a known larval duration) | `Transit` |
-| Horizon | Days | Full scenario duration |
-| Label column | Shapefile attribute used to name the nodes | — |
-| Self-loops | Whether a polygon's return to itself counts toward its metrics | off (matches the reference work) |
+| Source layer | `Uniform`, EMODnet `Wind farms`, `Offshore installations`, `MSP aquaculture zones`, `Custom` (GeoTIFF upload) | `Uniform` |
+| Indicator | `PPI`; with a multi-seeding simulation also `MAX`, `Q90`, `σ` (across seedings) | `PPI` |
+| Grid resolution (Advanced) | 0.1°, 0.05° | 0.1° |
+| Study area margin (Advanced) | 0–20° | 1° |
+
+The chosen indicator is the one the layer shows and downloads.
+
+#### Structural connectivity
+
+How much water-borne material moves between areas (`connectivity` process).
+
+| Parameter | Options | Default |
+|---|---|---|
+| Matrix type | *Transition probability*: in B exactly after Δt, if released from A. *Passage probability*: passes through B at least once during Δt | Transition |
+| Connectivity grid | *Use seeding area* (the polygons of the simulation's own seeding area; needs at least 2), *Upload shapefile* (a ZIP of polygons, with a *Polygon label* column picked from the file's columns or "None — number the polygons"), *Generate grid* (ocean cells of a resolution between 0.05° and 5° over a box drawn on the map with *Draw bbox*, by default the seeding area) | Use seeding area when it has ≥ 2 polygons, otherwise Generate grid |
+| Time interval Δt | Days | Simulation length |
+| Include self-loops | Whether a polygon's return to itself counts toward its metrics | on |
 
 The result is drawn directly on the map: the polygons coloured by the selected metric
 (**in-strength**, **out-strength**, **betweenness**), and the directed network of exchanges on
@@ -317,7 +331,7 @@ top of them. Polygons holding fewer than 30 particles at t=0 are drawn grey and 
 coloured — their row is not statistically meaningful — and the run reports how many there were.
 
 Clicking a polygon isolates its own connections, with a toggle for incoming / outgoing / both;
-clicking it again restores the whole network. The *Connectivity matrix* tool opens the full
+clicking it again restores the whole network. The layer's **Matrix** button opens the full
 matrix in a floating window: cells show the probability (0–1) with two decimals, and a non-zero
 value below 0.005 shows `<0.01` rather than `0.00` (hover a cell for the exact value). Three
 downloads, all at the backend's 6-decimal precision:
@@ -330,6 +344,23 @@ downloads, all at the backend's 6-decimal precision:
 
 A connectivity matrix is mostly zeros (distant nodes exchange no particles), so the two sparse
 formats grow with the number of links rather than with n².
+
+#### Propagate forward
+
+A Markov-chain approximation of tracer propagation after multiples of Δt, using a transition
+matrix (`markov` process, see [Markov process](#markov-process)).
+
+| Parameter | Options | Default |
+|---|---|---|
+| Transition matrix | *Use an existing matrix*: a *Structural connectivity* layer of this simulation with transition probability on a generated grid — its grid and Δt are reused, so the chain is that matrix. *Create a new matrix*: resolution (0.05°–5°) and a box drawn with *Draw bbox* | existing when one is available |
+| Time interval Δt | Days (shortcuts 1 / 5 / 10); read-only with an existing matrix | 10 |
+| Steps | 1–100 multiples of Δt; the horizon is steps × Δt and may exceed the simulation | 100 |
+| Release (collapsible) | Single or continuous (every Δt); source: Uniform, EMODnet layers, Custom GeoTIFF, or an area drawn on the map (orange) | Single, Uniform |
+
+Only transition matrices on a generated grid are offered as existing ones, the only ones a
+Markov chain can use: passage matrices, and matrices on an uploaded shapefile or on the
+seeding area, cannot be propagated. The panel estimates the particles per cell and warns when the
+simulation has beaching on.
 
 ## Precompute process
 
@@ -351,7 +382,8 @@ waits for another one to finish. See [Simulation queue and lifecycle](#simulatio
 | `geojson` | GeoJSON string of the seeding area: a `FeatureCollection` whose features are the polygons of the area — one when drawing a circle or a rectangle, several when drawing free polygons |
 | `shapefile_b64` | Base64-encoded shapefile ZIP (alternative to GeoJSON) |
 | `t4msp_area_id` | Integer ID of a Tools4MSP domain area (alternative to GeoJSON) |
-| `pressure` | `generic`, `plastic`, `oil`, or `larvae` |
+| `pressure` | `generic`, `plastic`, `oil`, `chemical` or `larvae` |
+| `chemical_compound` | ChemicalDrift compound (with `pressure: chemical`); one of `CHEMICAL_COMPOUNDS` in `PMARProcess.py`, default `Naphthalene` |
 | `start_time` | ISO 8601 datetime |
 | `duration_days` | Duration in days |
 | `pnum` | Number of particles (max 100 000) |
@@ -359,8 +391,9 @@ waits for another one to finish. See [Simulation queue and lifecycle](#simulatio
 | `time_step_hours` | Time step in hours (1–24) |
 | `label` | Human-readable title for the scenario |
 | `description` | Free-text notes about the simulation |
-| `area_name` | Name for the seeding area (draw mode only) |
+| `area_name` | Name for the seeding area; for a Tools4MSP area it replaces the area's own name |
 | `cmems_margin` | Degrees added beyond the seeding area bbox for CMEMS download (default: 5.0) |
+| `beaching` | `true` (default): particles reaching the coast strand. `false`: they go back to their previous position and stay in the water (OpenDrift `coastline_action: previous`, as PMAR with `beaching=False`) — the conservative tracer the Markov forecast needs |
 
 Exactly one of `geojson`, `shapefile_b64`, or `t4msp_area_id` must be provided.
 
@@ -513,9 +546,9 @@ Runs PMAR density analysis on a precomputed scenario trajectory.
   "vmax": 847.0,
   "colorbar_b64": "...",
   "colorbar_light_b64": "...",
-  "sum_raster_values": [[...]], "sum_colorbar_b64": "...", "sum_colorbar_light_b64": "...", "sum_vmin": 0.0, "sum_vmax": 1.0,
-  "max_raster_values": [[...]], "max_colorbar_b64": "...", "max_colorbar_light_b64": "...", "max_vmin": 0.0, "max_vmax": 1.0,
-  "q90_raster_values": [[...]], "q90_colorbar_b64": "...", "q90_colorbar_light_b64": "...", "q90_vmin": 0.0, "q90_vmax": 1.0,
+  "max_raster_values": [[...]], "max_colorbar_b64": "...", "max_vmin": 0.0, "max_vmax": 1.0, "max_geotiff_b64": "...",
+  "q90_raster_values": [[...]], "q90_colorbar_b64": "...", "q90_vmin": 0.0, "q90_vmax": 1.0, "q90_geotiff_b64": "...",
+  "std_raster_values": [[...]], "std_colorbar_b64": "...", "std_vmin": 0.0, "std_vmax": 1.0, "std_geotiff_b64": "...",
   "geotiff_b64": "...",
   "bounds": [[lat_min, lon_min], [lat_max, lon_max]],
   "pressure": "generic|plastic|oil|larvae",
@@ -535,7 +568,13 @@ Runs PMAR density analysis on a precomputed scenario trajectory.
 
 `seeding_geojson` is always included and contains the simplified seeding area polygon displayed on the map. `windfarms_geojson` and `offshore_geojson` are included only when the respective source layer was used.
 
-The `sum_*`, `max_*`, and `q90_*` fields are present when the PMAR library's `get_indicators()` call succeeds. Each provides an alternative raster and its own colorbar PNGs. The density raster (no prefix) is always present.
+The `max_*`, `q90_*` and `std_*` fields are present for **multi-seeding** scenarios only. They are
+statistics **across the seedings**, cell by cell, of the per-seeding passage maps: maximum, 90th
+percentile and standard deviation; the density raster (no prefix) is their mean and is always
+present. This differs from the PMAR library's `get_indicators()`, which computes SUM / MAX / Q90
+over the **time** axis of a single run; the across-seedings reading is the one the interface
+mock-up asks for ("available because the simulation uses multi seeding") and is to be confirmed
+with the PMAR authors. SUM is no longer returned.
 
 `colorbar_b64` uses white text (for dark map theme); `colorbar_light_b64` uses dark text (for light map theme). Both are always returned for the density raster and for each indicator.
 
@@ -580,7 +619,7 @@ pmar_<pressure>_<YYYYMMDD>-<YYYYMMDD>_p<pnum>[_<use_source>].tif
 **Execution mode:** asynchronous (`Prefer: respond-async`)
 
 Builds a connectivity matrix between areas from the Lagrangian trajectories of a precomputed
-scenario, and derives the graph metrics described in Bosi et al. (2026). The metrics are **not**
+scenario, and derives its graph metrics. The metrics are **not**
 reimplemented here: they come from the PMAR library (`get_cm`, `get_particles_by_cell`,
 `connectivity_analysis`, `get_network`, `export_network`), which this process drives and whose
 output it packages for the map.
@@ -592,16 +631,20 @@ output it packages for the map.
 | `scenario_id` | Precomputed scenario to read trajectories from (required) |
 | `shapefile_b64` | Base64-encoded ZIP of the polygons used as network nodes |
 | `geojson` | Polygons as GeoJSON (alternative to the shapefile) |
-| `grid_res` | Builds the nodes as a regular grid of ocean cells instead: 1.0 or 0.5 degrees |
-| `bbox` | `[lon_min, lat_min, lon_max, lat_max]` for the grid; defaults to the scenario's seeding area |
+| `node_source` | `seeding_area` uses the polygons of the scenario's own seeding area (at least 2); otherwise inferred from the other inputs |
+| `grid_res` | Builds the nodes as a regular grid of ocean cells instead: any resolution between 0.05 and 5 degrees (at most 300 sea cells) |
+| `bbox` | `[lon_min, lat_min, lon_max, lat_max]` for the grid, widened to multiples of `grid_res`; defaults to the scenario's seeding area |
 | `mode` | `passage` (default) or `transition`; `transit`, the former name of `passage`, is still accepted |
 | `t_days` | Time horizon in days; defaults to the scenario duration |
 | `node_label_field` | Shapefile attribute used to label the nodes |
 | `self_loops` | Whether i→i counts toward the metrics (default `false`) |
 | `margin` | Degrees added around the nodes when defining the study area (default 1.0) |
 
-Either polygons (`shapefile_b64` / `geojson`) or `grid_res` must be provided; polygons win if both
-are given.
+`node_source: seeding_area` wins; otherwise polygons (`shapefile_b64` / `geojson`) or `grid_res`
+must be provided, and polygons win if both are given. The grid box is aligned to multiples of
+`grid_res` exactly as the Markov grid is, so a transition matrix on a generated grid and a Markov
+forecast with the same `res`, `bbox` and Δt share their cells (verified: identical matrices on the
+common cells).
 
 ### Output
 
@@ -611,7 +654,8 @@ are given.
   "mode": "passage",
   "node_source": "grid",
   "grid_res": 0.5,
-  "grid_bbox": [11.89, 42.49, 16.42, 45.68],
+  "grid_bbox": [11.5, 42.0, 16.5, 46.0],
+  "t_days": 30,
   "polygons_geojson": { "type": "FeatureCollection", "features": [] },
   "edges_geojson":    { "type": "FeatureCollection", "features": [] },
   "matrix": [[0.95, 0.04], [0.01, 0.97]],
@@ -672,24 +716,24 @@ at all despite a matrix full of values.
 
 **Endpoint:** `POST /processes/markov/execution` (async, default Celery queue)
 
-A statistical forecast of tracer dispersal from Chapter 4 of Sofia Bosi's PhD thesis (*Markov
-chains as a tool for Maritime Spatial Planning*):
+A statistical forecast of tracer dispersal with Markov chains:
 
 - From the trajectories of a pre-computed scenario, a **transition matrix** between the cells of a
   regular grid is estimated: pᵢⱼ = Nᵢⱼ / Nᵢ, the share of the particles in cell i at t₀ that are in
-  cell j after Δt (eq. 1).
+  cell j after Δt.
 - A tracer release is then propagated step by step:
-  - **single** release: q·Mᵏ (eq. 2);
-  - **continuous** release (the same release every Δt): Σₖ₌₁ⁿ q·Mᵏ (eq. 3).
+  - **single** release: q·Mᵏ;
+  - **continuous** release (the same release every Δt): Σₖ₌₁ⁿ q·Mᵏ.
 - Frames can go **beyond the simulation length**. While they stay within it, every frame is
   compared with what the particles actually do.
 
 | Input | Description |
 |---|---|
 | `scenario_id` | Pre-computed scenario |
-| `res` | Grid resolution: `0.25`, `0.1` or `0.05` degrees |
+| `res` | Grid resolution, 0.05–5 degrees (default 0.25) |
+| `bbox` | `[lon_min, lat_min, lon_max, lat_max]` of the grid; defaults to the seeding area |
 | `dt_days` | Transition interval Δt, from one time step to the simulation length |
-| `horizon_days` | Forecast horizon, up to 365 days and 40 steps of Δt; may exceed the simulation |
+| `steps` | Number of Δt steps, 1–100 (default 100); the horizon is `steps × Δt` and may exceed the simulation. `horizon_days` is still accepted when `steps` is absent |
 | `release` | `single` or `continuous` |
 | `source` | `uniform`, `windfarms`, `offshore_installations`, `msp_zones`, `geotiff`, `area` |
 | `geotiff_b64`, `area_geojson` | The emission raster or the drawn release area, when the source needs them |
@@ -702,18 +746,18 @@ chains as a tool for Maritime Spatial Planning*):
   particle lying exactly on a cell edge, which shapely's `within` drops and the arithmetic keeps.
 - **Domain.** The cells holding at least one particle at t₀. Mass moving anywhere else, or
   particles without a position (stranded, or outside the forcing: OpenDrift writes NaN), counts as
-  **left the domain**. This is the absorbing "outside" state of eq. 8. Without it, a cell with no
+  **left the domain**. This is an absorbing "outside" state. Without it, a cell with no
   departing particles would swallow the mass that reaches it.
 - **Multi-seeding.** Pooled estimate Σₛ Nᵢⱼ / Σₛ Nᵢ. It equals the mean of the per-seeding matrices
-  (M̄, eq. 4) when every seeding releases the same particles in the same cells, as OpenDrift's
+  (M̄) when every seeding releases the same particles in the same cells, as OpenDrift's
   fixed seeding grid does.
 - **Initial state.**
-  - `uniform`: 1 in every domain cell, giving relative concentration as in the thesis;
+  - `uniform`: 1 in every domain cell, giving relative concentration (1 = initial);
   - other sources: rasterized on the same grid with the PMAR helpers (`_gdf_to_use_raster`,
     `_geotiff_to_use_raster`), then normalised so that each release sums to 1 (fraction of the
     release).
 - **Validation.** Each particle carries q₀(cell at t₀)/Nᵢ, and the reference map is the weighted
-  histogram of the particles at kΔt. For a continuous release it is Σᵢ₌₁ᵏ of those maps (§3.4).
+  histogram of the particles at kΔt. For a continuous release it is Σᵢ₌₁ᵏ of those maps.
   Per frame the process returns the difference (Markov − simulation), the signed maximum error, the
   mean absolute error, and the mass that left the domain in both.
   - At k = 1 the chain matches the simulation **exactly**, by construction. This is the method's
@@ -722,13 +766,17 @@ chains as a tool for Maritime Spatial Planning*):
 **Warnings** (`warnings`, with a code the UI translates):
 
 - `weak_cells`: cells with fewer than 30 particles per seeding at t₀;
-- `dt_short`: half of the cells keep more than 90% of their particles after Δt, the thesis's
-  Fig. 5a case;
+- `dt_short`: half of the cells keep more than 90% of their particles after Δt, so Δt is too
+  short for the grid and transport is underestimated;
 - `beyond_simulation`: frames after this day have no reference;
 - `source_outside`: part of the source lies outside the domain.
 
+**Payload limit.** The frames travel whole to the browser, so `cells × (steps + 1)` must stay
+within 400 000 values; beyond it the process answers 400 with the number of steps that would fit.
+
 **Output:**
-- `grid` and `cells`, the domain as flat row × nx + col indices, row 0 to the south;
+- `grid`, `grid_bbox` and `cells`, the domain as flat row × nx + col indices, row 0 to the south;
+- `steps`, the number of Δt steps computed;
 - `frames`: `[{k, day, values, mass_in, mass_out, released, ref: {values, emax, mae, mass_out} | null}]`;
 - `vmin` / `vmax`, common to all frames so colours stay comparable along the slider;
 - `diff_max` for the symmetric difference scale;
@@ -738,7 +786,14 @@ The frontend rebuilds the PMAR raster of any frame and layer (`frontend/src/mark
 the heatmap, legend and analysis tools work on the frame shown, except on the difference map,
 whose values are signed.
 
-**Data requirement.** The thesis uses 50 particles per cell. With the 10 000 particles of most
+**Beaching.** Markov chains need a conservative tracer (no beaching). A stranded particle has
+no position afterwards (OpenDrift writes NaN), so it falls in no cell and in no buffer: with
+`get_cm(buffer=…)` its row would no longer sum to 1. Here it counts as having left the domain, so
+mass is still accounted for. For forecasts, pre-compute the scenario with
+*No beaching (for Propagate)* (`beaching: false`); the Propagate section warns when the selected scenario has
+beaching on, and the card then labels the lost mass "left or beached".
+
+**Data requirement.** About 50 particles per cell are recommended. With the 10 000 particles of most
 existing scenarios, cells at 0.25° hold fewer than 30, and the forecast diffuses more than the
 simulation: it loses more mass from the domain and spreads more. For meaningful forecasts, use a
 scenario seeded uniformly over the area with as many particles as possible (up to 100 000) and a
@@ -756,7 +811,7 @@ All layers query the [EMODnet Human Activities WFS](https://ows.emodnet-humanact
 
 When a layer is active as `use_source`, its features are rasterized onto the simulation grid and used as PMAR weights. Features are returned in the response as GeoJSON for display on the map.
 
-A fourth EMODnet layer, **Natura 2000** protected areas (`emodnet:natura2000areas` → `emodnet:marineprotectedareas`), is available as a map overlay only — it is not a selectable `use_source` weighting option.
+A fourth EMODnet process, **Natura 2000** protected areas (`emodnet:natura2000areas` → `emodnet:marineprotectedareas`), is still registered but no longer used by the interface: the *Additional layers* box was removed in the redesign.
 
 ### Preview processes
 
@@ -765,9 +820,18 @@ Lightweight processes allow the frontend to preview layer coverage before runnin
 - `POST /processes/windfarms/execution`
 - `POST /processes/offshore_installations/execution`
 - `POST /processes/msp_zones/execution`
-- `POST /processes/natura2000/execution`
+- `POST /processes/natura2000/execution` (not used by the UI)
 
 All four accept `lon_min`, `lat_min`, `lon_max`, `lat_max` as inputs.
+
+### Shapefile columns
+
+`POST /processes/shapefile_fields/execution` (synchronous) reads an uploaded shapefile
+(`shapefile_b64`) and returns its columns, so that *Polygon label* can offer them:
+
+```json
+{ "columns": [{ "name": "name", "samples": ["A1", "B2", "C2"], "unique": true }], "n_features": 4, "n_polygons": 4 }
+```
 
 ## CMEMS data
 
@@ -797,7 +861,7 @@ Ocean currents, wind, waves, temperature/salinity, and bathymetry are downloaded
 | 2 | `cmems_mod_glo_wav_anfc_0.083deg_PT3H-i` |
 | 3 | `cmems_mod_glo_wav_my_0.2deg_PT3H-i` |
 
-**Temperature & salinity** (`OpenOil` weathering):
+**Temperature & salinity** (`OpenOil` weathering, `ChemicalDrift`):
 
 | Priority | Dataset | Variables |
 |---|---|---|
@@ -805,11 +869,25 @@ Ocean currents, wind, waves, temperature/salinity, and bathymetry are downloaded
 | 2 | `cmems_mod_glo_phy_my_0.083deg_P1D-m` | thetao, so |
 | 3–5 | Mediterranean / global temperature-only products | thetao |
 
-**Bathymetry** (`LarvalFish`, `OpenOil` — models with vertical mixing):
+**Mixed layer depth** (`ChemicalDrift`): `mlotst` from `cmems_mod_med_phy-mld_anfc_4.2km_P1D-m`,
+then the global analysis and reanalysis (`CMEMS_MLD_DATASETS`); non-blocking, OpenDrift's fallback
+(50 m) is used without it. `ChemicalDrift` also reads the cached bathymetry file as
+`sea_floor_depth_below_sea_level`.
+
+**Bathymetry** (`LarvalFish`, `OpenOil`, `ChemicalDrift` — models with vertical mixing):
 
 The `deptho` (seafloor depth) field is downloaded once per geographic area from a static CMEMS dataset (`cmems_mod_med_phy_anfc_4.2km_static` or global equivalent) and permanently cached. `maximum_depth` for the currents download is set to `max(deptho) + 10 m` instead of a fixed value, ensuring full water-column coverage in deep areas and avoiding over-downloading in shallow ones. If the bathymetry download fails the fixed default is used as fallback.
 
 Wind and waves downloads are non-blocking: if the dataset is unavailable the simulation continues with currents only (OpenDrift falls back to parametric Stokes drift from wind).
+
+**ChemicalDrift.** The `chemical` tracer runs OpenDrift's `ChemicalDrift` with the settings of the
+PMAR library (`pmar.py`): vertical mixing (`windspeed_Large1994`), sediment resuspension and
+desorption, volatilisation and degradation (`OverallRateConstants`), then
+`init_chemical_compound(compound)`, `init_species()` and `init_transfer_rates()`. Its readers are
+added **without lazy loading**: `ChemicalDrift.prepare_run` reads `.variables` of every reader, which
+initialises a lazy reader outside the environment, so the currents never enter the priority list
+and every particle is deactivated at the first step with "Missing variables". In the
+Mediterranean the temperature product has no salinity, so salinity uses OpenDrift's fallback (34).
 
 ## Frontend API client
 
@@ -864,69 +942,70 @@ read back (`storage/persistedState.test.js`).
 - Stranded particles highlighted in red
 - Toggle seeding area overlay
 
-### PMAR tab — Simulation
+### Main panel (left)
 
-- Define a seeding area by drawing on the map — circle, rectangle, or several free polygons (with optional area name) — uploading a shapefile, or selecting a Tools4MSP pre-defined area
-- Set simulation metadata: title, description
-- Set simulation parameters: pressure type, start date, duration, particles, time step, CMEMS margin
-- Live NetCDF size estimate, colour-coded by severity
-- Precompute button submits the simulation; if one is already running the new one is queued (the panel says so). Invalid input or a missing token is reported at once
-- **Simulations in progress** box below the list: running (in blue, seeding n/N, minutes since start, progress bar), queued (grey, position in the queue) and failed (red, reason) simulations — no icons, the state is written out and colour-coded, also in the dropdown, with **Stop** and **Remove** for users with full access. The state comes from the server, so it survives reloads and is the same on every device; the list refreshes every 5 s while something is queued or running, and a notification announces each simulation that becomes ready or fails, also after a reload
-- Saved simulations listed in a dropdown, each with its state; selecting one shows a full summary (area, pressure, dates, particles, time step, CMEMS margin, description) and highlights that simulation's seeding area on the map
-- *Connectivity seeding* releases the same number of particles in every polygon of the seeding area — drawn, uploaded or pre-defined — and shows the resulting total when the number of polygons is known
+- Header *PMAR — Particle-based Modelling and Analysis for MARine Decision Support*; the book icon
+  opens **About PMAR**: credits (CNR-ISMAR, University of Padova, University of Venice Ca'
+  Foscari), how to cite (the PMAR article, doi 10.1016/j.envsoft.2025.106822), data and software
+  links (OpenDrift, CMEMS, EMODnet, PMAR, this interface)
+- Two tabs, **Simulation** and **Analysis**; the font is IBM Plex Sans, as in the mock-up
 
-### PMAR tab — Analysis
+**Simulation**
 
-Three sub-tabs, **Sources**, **Connectivity** and **Markov**, sharing the selected simulation.
+- Existing simulations in a dropdown with their state; selecting one shows a summary and
+  highlights its seeding area on the map
+- **Simulations in progress** box: running (seeding n/N, minutes since start, progress bar),
+  queued (position) and failed (reason) simulations, with **Stop** and **Remove** for users with
+  full access. The state comes from the server, so it survives reloads and is the same on every
+  device; a notification announces each simulation that becomes ready or fails
+- *New simulation*: title, description, seeding area (Draw — circle, rectangle, polygons —,
+  Shapefile, Pre-defined area), seeding area name, **Tracer type** (dropdown, with *Chemical
+  compound* for Chemical), *Timing & particles*, **Particle distribution** (Evenly / Per polygon,
+  with the resulting total), **Advanced** (multi seeding, CMEMS margin, no beaching), the
+  estimated NetCDF size, and *Pre-compute simulation* in the fixed bar at the bottom
 
-- *Sources*: choose an anthropogenic weighting layer, grid resolution, and study area margin
-- *Connectivity*: choose the nodes (polygon shapefile, or a generated grid of ocean cells with a
-  resolution and a bounding box), the probability type, the time horizon, and whether self-loops
-  count; the result is coloured polygons plus the directed network of exchanges
-- *Markov*: choose Δt (shortcuts 1 / 5 / 10 days), the horizon (empty = twice the simulation,
-  within the limits), single or continuous release, grid resolution (with an estimate of the
-  particles per cell) and the release source. The sources are the same boxes as *Sources*, with
-  their EMODnet previews, plus a **drawn area**, drawn in orange and kept separate from the
-  seeding area of a new simulation. The analysis card has:
-  - a **frame slider** with play;
-  - a choice of **Forecast / Simulation / Difference**, where the last two are disabled beyond the
-    simulation;
-  - the share that left the domain, for the chain and for the simulation, and the error of the
-    frame.
-- Clicking a polygon isolates its connections, with incoming / outgoing / both
-- Hovering a polygon or a raster cell shows a tooltip; the two are placed on opposite sides of the
-  cursor so that they never overlap
+**Analysis**: the three sections described in [Tab 2 — Analysis](#tab-2--analysis).
 
 Every analysis is **saved in this browser** (IndexedDB), up to **10**: a page reload restores the
-panel as it was — titles, visibility, view settings, active analysis. An analysis still running
-when the page is reloaded is **resumed**: its *Analysis running…* button and Stop come back, and
-the result is added when it is ready (a job expired on the backend is reported instead). **Clear
-all**, with confirmation, empties the panel, e.g. on a shared laptop at a conference stand. The
-analyses are not sent to the server: another browser or device does not see them. If IndexedDB is
-unavailable (private window, blocked site data) the app works in memory as before.
-At 10 the Run buttons are disabled with a message until one is deleted. Before running, the
-*Analysis title* field names it; left empty, a title is generated (e.g. `PPI · Wind farms ·
-Black Sea 2019`).
+panel as it was — titles, visibility, opacity and view settings, active layer. An analysis still
+running when the page is reloaded is **resumed**. **Clear all**, with confirmation, empties the
+panel, e.g. on a shared laptop at a conference stand. The analyses are not sent to the server. At
+10 the Run buttons are disabled with a message until one is deleted.
 
-Saved analyses appear in the **Analyses panel** on the right, mirroring the main panel, newest
-first. At its top are the analysis tools; below, one card per analysis:
+### Layers panel (right)
 
-| Part | Contents |
+| Section | Contents |
 |---|---|
-| Compact row (every card) | Type badge (PMAR / Connectivity), title, show/hide, delete |
-| Expanded (active card only) | Rename, description — the simulation used (scenario, pressure, start, duration, particles, seedings, time step) and the analysis parameters — then its controls |
-| PMAR controls | Indicator (PPI, SUM, MAX, Q90, σ when available), seeding area and EMODnet source layer toggles, GeoTIFF download |
-| Connectivity controls | Metric (in-strength, out-strength, betweenness), seeding area, polygons and arrows toggles, selected node with incoming / outgoing / both and clear |
+| Base layers | *Seeding area* (of the selected simulation, or of the active layer), *Study area* (seeding box ± CMEMS margin: the simulation domain), *Source layer* (only when a non-uniform source is shown: the active layer's, or the one chosen in the form), *Connectivity grid* (outline of the nodes of the active connectivity layer, or of the latest one of the same simulation). Each has an eye; the grid starts hidden |
+| Analyses layers | One card per layer, newest first: title, (i) for the summary (SIMULATION and ANALYSIS blocks), rename, show/hide, delete, **Opacity** slider (80 % by default) and **Download raster**. Clicking a card makes it **active** (blue border): legend, cell tooltip and analysis tools follow it |
 
-Selecting a simulation highlights its seeding area as a preview, and choosing an EMODnet source previews that layer; once an analysis of that simulation (with that source) exists, the area and the layer are controlled only by the card's switches. Several analyses can be shown at once; clicking a card makes it **active**: the legend, the cell
-tooltip and the analysis tools follow it. Deleting the active one activates the newest remaining.
+Per-type extras on the card: connectivity layers have the metric (in-strength, out-strength,
+betweenness), the arrows switch, the selected node with incoming / outgoing / both, and the
+**Matrix** button; Propagate layers show the step on display ("Showing step k× Δt = N days").
+
+*Download raster* writes, named after the layer title:
+
+| Layer | File |
+|---|---|
+| Dispersal | The backend's GeoTIFF for the indicator shown (`_ppi`, `_max`, `_q90`, `_std`) |
+| Propagate | The frame and level shown (forecast, simulation or difference), written in the browser |
+| Connectivity on a generated grid | The selected metric, one cell per node |
+| Connectivity on polygons | *Download GeoJSON*: the polygons with their metrics (not a raster) |
+
+The browser-side GeoTIFFs come from `src/export/geotiff.js`: single Float32 band, uncompressed,
+EPSG:4326 (ModelPixelScale, ModelTiepoint, GeoKeys), GDAL nodata 0 (none for the difference map).
+
+**Analysis tools** sit in their own box below the Layers panel, shown once there is a layer.
 
 ### Map
 
 - **Theme and language bar** (top left, next to the main panel; the map zoom control sits below it): light/dark theme toggle (switches CartoDB basemap and all panel colours) and IT/EN language switch. Copernicus Marine credentials are configured server-side via environment variables (see `.env`).
-- **Natura 2000 layer**: protected marine areas fetched from the EmodNet WFS and displayed as a semi-transparent overlay. Fetched and toggled from *Additional layers* in the main panel.
+- **Propagate forward · Markov steps** (bottom, next to the legend), shown when the active layer
+  is a Propagate one: the step slider (0 to the number of steps, with play), the label
+  `k× Δt = N days`, the *Forecast / Simulation / Difference* choice (the last two disabled beyond
+  the simulation), the share that left the domain and the error of the frame
 - **Interactive legend** (bottom left, next to the main panel): sections for the **active analysis** — heatmap (6 log classes between `vmin` and `vmax`), connectivity polygons (5 linear classes of the active metric, plus unreliable polygons) and arrows (probability bands 0–1, 1–5, 5–10, 10–25, 25–50, 50–100 %). Each row shows its colour, range and count. Clicking rows switches classes on and off: on the map the chosen classes keep their colours and everything else is dimmed, and the arrow and node-selection filters combine. The × resets a section; a new result or indicator resets it too. Colours come from `src/legend/classes.js`, the same module the layers use, so legend and map cannot drift apart. When a new section appears the older ones collapse.
-- **Analysis tools** (top of the Analyses panel, collapsed at start): they work on the active analysis. The tools are split by the result they work on — *PMAR heatmap* (Histogram, Statistics, Profile, Threshold, CSV, Compare) and *Connectivity* (Connectivity matrix). A group whose result is missing is disabled and says which analysis enables it. The header shows how many analysis windows are open, and "Close all" appears inside when there are any.
+- **Analysis tools** (bottom right, below the Layers panel): *PMAR heatmap* tools — Histogram, Statistics, Profile, Threshold, CSV, Compare — on the active Dispersal or Propagate layer; disabled with a hint otherwise. "Close all (n)" appears when analysis windows are open. The connectivity matrix opens from its layer card.
 
   Every PMAR tool downloads a **CSV**, never an image. Each file starts with `#` metadata lines —
   tool, analysis title, scenario (label, start, duration, particles, seedings), source layer,
