@@ -2,21 +2,27 @@ import { useEffect, useRef } from 'react'
 import { useMap, useMapEvents } from 'react-leaflet'
 import L from 'leaflet'
 
-const CONFIRMED_STYLE = {
-  color: '#0ea5e9', fillColor: '#7dd3fc',
-  fillOpacity: 0.18, weight: 2,
+/**
+ * Colori di un'area disegnata. Due palette perché sulla mappa possono stare insieme
+ * l'area di semina di una nuova simulazione (azzurro) e l'area di rilascio di
+ * un'analisi Markov (arancio).
+ */
+export const DRAW_PALETTES = {
+  seed:    { color: '#0ea5e9', fillColor: '#7dd3fc' },
+  release: { color: '#f97316', fillColor: '#fdba74' },
 }
-const PREVIEW_STYLE = {
-  color: '#0ea5e9', fillColor: '#7dd3fc',
-  fillOpacity: 0.10, weight: 2, dashArray: '6 4',
-}
+const styles = palette => ({
+  confirmed: { ...palette, fillOpacity: 0.18, weight: 2 },
+  preview:   { ...palette, fillOpacity: 0.10, weight: 2, dashArray: '6 4' },
+})
 /** Bersaglio di chiusura: clic entro questo raggio dal primo vertice. */
 const CLOSE_PX = 12
 
 const toLatLngs = ring => ring.map(([lon, lat]) => [lat, lon])
 
-export default function SeedDrawer({ drawMode, seedShape, showSeedShape, onShapeDone }) {
+export default function SeedDrawer({ drawMode, seedShape, showSeedShape, onShapeDone, palette = 'seed' }) {
   const map = useMap()
+  const { confirmed: CONFIRMED_STYLE, preview: PREVIEW_STYLE } = styles(DRAW_PALETTES[palette] ?? DRAW_PALETTES.seed)
 
   // Refs usati dentro useMapEvents per evitare closure stale
   const drawModeRef    = useRef(drawMode)
@@ -60,8 +66,8 @@ export default function SeedDrawer({ drawMode, seedShape, showSeedShape, onShape
       L.polyline(cursor ? [...path, [cursor.lat, cursor.lng]] : path, PREVIEW_STYLE).addTo(group)
       L.circleMarker(path[0], {
         radius: verts.length >= 3 ? 6 : 4,
-        color: '#0ea5e9',
-        fillColor: verts.length >= 3 ? '#0ea5e9' : '#ffffff',
+        color: CONFIRMED_STYLE.color,
+        fillColor: verts.length >= 3 ? CONFIRMED_STYLE.color : '#ffffff',
         fillOpacity: 1,
         weight: 2,
       }).addTo(group)

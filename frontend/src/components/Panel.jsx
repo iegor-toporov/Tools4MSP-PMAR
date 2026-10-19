@@ -50,6 +50,7 @@ export default function Panel({
   onT4mspPreview,
   onScenarioArea, onAnalysisMarginChange,
   onRunConnectivity, connectivityLoading, connectivityStopping, onStopConnectivity,
+  markov, drawTarget,
   analysesFull,
 }) {
   const { t } = useLang()
@@ -314,6 +315,8 @@ export default function Panel({
               connectivityLoading={connectivityLoading}
               connectivityStopping={connectivityStopping}
               onStopConnectivity={onStopConnectivity}
+              markov={markov}
+              drawTarget={drawTarget}
               actionsTarget={actionsEl}
               analysesFull={analysesFull}
             />

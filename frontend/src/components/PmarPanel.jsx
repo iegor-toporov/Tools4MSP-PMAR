@@ -7,7 +7,7 @@ import {
 } from '@mantine/core'
 import { IconInfoCircle, IconX, IconChevronDown, IconChevronUp, IconCircleCheck,
          IconLock, IconLockOpen, IconGridDots, IconWindmill, IconBuildingFactory2,
-         IconFish, IconFileUpload } from '@tabler/icons-react'
+         IconFish, IconFileUpload, IconPolygon } from '@tabler/icons-react'
 import { notifications } from '@mantine/notifications'
 import { useLang } from '../LanguageContext'
 import { Process, ACCESS_DENIED, executeSync, executeAsync,
@@ -16,7 +16,8 @@ import { formatSeedShape, geometryPolygonCount, seedShapePolygonCount,
          seedShapeToGeoJSON } from '../geometry/seedShape'
 import PolygonDrawControls from './PolygonDrawControls'
 import SimulationJobs from './SimulationJobs'
-import { POLL_INTERVAL_MS, STATUS_ICON, anyActive, errorText, isActive, statusOf, statusText,
+import MarkovControls, { defaultHorizon, markovParamError } from './MarkovControls'
+import { POLL_INTERVAL_MS, anyActive, errorText, isActive, statusOf, statusText,
          transitions } from '../scenarios/lifecycle'
 
 function InfoTooltip({ text }) {
@@ -221,6 +222,7 @@ export default function PmarPanel({
   showNatura2000, onFetchNatura2000, onToggleNatura2000,
   hasSeedShape, onT4mspPreview, onScenarioArea, onAnalysisMarginChange,
   onRunConnectivity, connectivityLoading, connectivityStopping, onStopConnectivity,
+  markov = {}, drawTarget = 'seed',
   actionsTarget, analysesFull = false,
 }) {
   const { t, lang } = useLang()
@@ -280,6 +282,15 @@ export default function PmarPanel({
   const [connRes,        setConnRes]        = useState('0.5')
   const [connBbox,       setConnBbox]       = useState(['', '', '', ''])
   const connFileRef = useRef(null)
+
+  // Sotto-tab Markov (processes/MarkovProcess.py). La sorgente riusa `useSource` (stessi
+  // riquadri e anteprime EMODnet della PMAR); `markovArea` la sostituisce con un'area
+  // disegnata sulla mappa, che vale solo qui.
+  const [mkDt,       setMkDt]       = useState('10')
+  const [mkHorizon,  setMkHorizon]  = useState('')
+  const [mkRelease,  setMkRelease]  = useState('single')
+  const [mkRes,      setMkRes]      = useState('0.25')
+  const [markovArea, setMarkovArea] = useState(false)
 
   const [scenarioStatuses, setScenarioStatuses] = useState({})
   const [scenarioId,       setScenarioId]       = useState('')
@@ -458,8 +469,19 @@ export default function PmarPanel({
   // diversi: iniziare un disegno lascia la simulazione selezionata, così sulla
   // mappa resta evidenziata una sola area per volta.
   useEffect(() => {
-    if (drawMode) setScenarioId('')
-  }, [drawMode])
+    if (drawMode && drawTarget !== 'markov') setScenarioId('')
+  }, [drawMode]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // L'area di rilascio Markov si vede solo dove la si sceglie.
+  useEffect(() => {
+    markov.onShapeVisible?.(runMode === 'scenario' && analysisMode === 'markov' && markovArea)
+  }, [runMode, analysisMode, markovArea]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Δt non può superare la simulazione: scegliendone una più corta lo si riduce.
+  useEffect(() => {
+    const dur = scenarioStatuses[scenarioId]?.duration_days
+    if (dur && parseFloat(mkDt) > dur) setMkDt(String(Math.min(10, dur)))
+  }, [scenarioId, scenarioStatuses]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Pre-compila il riquadro con l'area di semina dello scenario scelto. Gli
   // scenari creati prima che i bounds venissero registrati non ne hanno: il
@@ -659,12 +681,123 @@ export default function PmarPanel({
     const sc = scenarioStatuses[scenarioId]
     return sc ? (lang === 'it' ? sc.label_it : sc.label_en) : ''
   })()
+  const markovSource = markovArea ? 'area' : useSource === 'none' ? 'uniform' : useSource
+  const markovSourceLabel = markovArea ? p.markov.sourceArea : p.useSources[useSource]
   const autoTitle = (analysisMode === 'connectivity'
     ? [p.connectivity.subTabConnectivity,
        connSource === 'grid' ? `${p.connectivity.sourceGrid} ${connRes}°` : (connShpName || p.connectivity.sourceShapefile),
        scenarioLabel]
+    : analysisMode === 'markov'
+    ? ['Markov', markovSourceLabel, `Δt ${mkDt} d`, scenarioLabel]
     : ['PPI', p.useSources[useSource], scenarioLabel]
   ).filter(Boolean).join(' · ')
+
+  /**
+   * Riquadri del layer sorgente, comuni a PPI e Markov. Per la Markov c'è in più l'area
+   * disegnata, e un bottone è acceso solo se l'area non è scelta.
+   */
+  function renderSourceGroups(forMarkov) {
+    const on = key => useSource === key && !(forMarkov && markovArea)
+    const pick = key => { if (forMarkov) setMarkovArea(false); onUseSourceChange(key) }
+    return (
+      <>
+        <SourceGroup title={p.useGroups.uniform}
+                     hint={forMarkov ? p.markov.uniformHint : p.useGroups.uniformHint}>
+          <SourceButton active={on('none')} Icon={IconGridDots} onClick={() => pick('none')}>
+            {p.useSources.none}
+          </SourceButton>
+        </SourceGroup>
+
+        <SourceGroup title={p.useGroups.emodnet}
+                     hint={forMarkov ? p.markov.emodnetHint : p.useGroups.emodnetHint}>
+          {EMODNET_SOURCES.map(({ key, Icon }) => (
+            <SourceButton key={key} active={on(key)} Icon={Icon}
+                          loading={emodnetState[key].loading}
+                          onClick={() => pick(key)}>
+              {p.useSources[key]}
+            </SourceButton>
+          ))}
+          {/* Solo l'avviso di area senza dati: cosa fa il layer lo dice già il titolo. */}
+          {EMODNET_SOURCES.some(({ key }) => on(key)) && emodnetState[useSource].empty && (
+            <Text size="xs" p="xs" c="red.4" style={NOTE_WARN}>
+              {emodnetState[useSource].emptyText}
+            </Text>
+          )}
+        </SourceGroup>
+
+        <SourceGroup title={p.useGroups.custom}
+                     hint={forMarkov ? p.markov.customHint : p.useGroups.customHint}>
+          <SourceButton active={on('geotiff')} Icon={IconFileUpload} onClick={() => pick('geotiff')}>
+            {p.useSources.geotiff}
+          </SourceButton>
+          {on('geotiff') && (
+            <Button
+              size="xs"
+              variant="default"
+              fullWidth
+              onClick={() => geotiffRef.current?.click()}
+              style={{ height: 'auto', padding: '10px 8px', borderStyle: 'dashed' }}
+              type="button"
+            >
+              <input ref={geotiffRef} type="file" accept=".tif,.tiff" style={{ display: 'none' }} onChange={handleGeotiffChange} />
+              {geotiffB64
+                ? <Text size="xs">{geotiffName}</Text>
+                : <Text size="xs" c="dimmed">{p.geotiffUploadHint}</Text>}
+            </Button>
+          )}
+          {forMarkov && (
+            <SourceButton active={markovArea} Icon={IconPolygon} onClick={() => setMarkovArea(true)}>
+              {p.markov.sourceArea}
+            </SourceButton>
+          )}
+        </SourceGroup>
+      </>
+    )
+  }
+
+  // ── Markov: parametri, validità, avvio ─────────────────────────────────────
+  const mkScenario = scenarioStatuses[scenarioId]
+  const mkDtNum    = parseFloat(mkDt)
+  const mkHorizonDefault = defaultHorizon(mkDtNum, mkScenario?.duration_days)
+  const mkHorizonNum = parseFloat(mkHorizon) || mkHorizonDefault
+  const mkError = mkScenario
+    ? markovParamError({ dt: mkDtNum, horizon: mkHorizonNum, simDays: mkScenario.duration_days,
+                         stepHours: mkScenario.time_step_hours }, p.markov)
+    : null
+  const mkSteps = mkHorizonNum > 0 && mkDtNum > 0 ? Math.floor(mkHorizonNum / mkDtNum + 1e-9) : 0
+  const mkValidUntil = mkScenario
+    ? Math.min(mkSteps, Math.floor(mkScenario.duration_days / mkDtNum + 1e-9)) * mkDtNum : 0
+  const canRunMarkov =
+    !markov.loading && !analysesFull && runMode === 'scenario' && !!scenarioId &&
+    mkScenario?.status === 'ready' && !mkError &&
+    (markovSource !== 'geotiff' || !!geotiffB64) &&
+    (markovSource !== 'area' || !!markov.shape)
+
+  function handleRunMarkov() {
+    if (!canRunMarkov) return
+    const title = analysisTitle.trim() || autoTitle
+    setAnalysisTitle('')
+    markov.onRun({
+      scenario_id:  scenarioId,
+      res:          parseFloat(mkRes),
+      dt_days:      mkDtNum,
+      horizon_days: mkHorizonNum,
+      release:      mkRelease,
+      source:       markovSource,
+      ...(markovSource === 'geotiff' ? { geotiff_b64: geotiffB64 } : {}),
+      ...(markovSource === 'area' ? { area_geojson: JSON.stringify(seedShapeToGeoJSON(markov.shape)) } : {}),
+    }, {
+      title,
+      info: {
+        scenario: scenarioInfo(),
+        params: {
+          source: markovSource, res: parseFloat(mkRes), dt_days: mkDtNum,
+          horizon_days: mkHorizonNum, release: mkRelease,
+          ...(markovSource === 'geotiff' ? { geotiff_name: geotiffName } : {}),
+        },
+      },
+    })
+  }
 
   const limitNote = analysesFull && (
     <Text size="xs" c="orange.6" ta="center">{t.analyses.limitReached}</Text>
@@ -750,6 +883,31 @@ export default function PmarPanel({
         {limitNote}
       </Stack>
     )
+  } else if (runMode === 'scenario' && analysisMode === 'markov') {
+    actions = (
+      <Stack gap={6}>
+        {markov.loading ? (
+          <Group grow gap="xs">
+            <Button size="sm" color="blue" disabled type="button">
+              {markov.stopping ? p.btnStopping : p.markov.btnRunning}
+            </Button>
+            <Button size="sm" color="red" variant="outline" type="button"
+                    loading={markov.stopping} disabled={markov.stopping} onClick={markov.onStop}>
+              {markov.stopping ? p.btnStopping : p.btnStop}
+            </Button>
+          </Group>
+        ) : (
+          <Button size="sm" color="blue" fullWidth type="button"
+                  disabled={!canRunMarkov} onClick={handleRunMarkov}>
+            {p.markov.btnRun}
+          </Button>
+        )}
+        {markovSource === 'area' && !markov.shape && (
+          <Text size="xs" c="dimmed" ta="center">{p.markov.areaHint}</Text>
+        )}
+        {limitNote}
+      </Stack>
+    )
   } else if (runMode === 'scenario' && analysisMode === 'connectivity') {
     actions = (
       <Stack gap={6}>
@@ -826,7 +984,7 @@ export default function PmarPanel({
                         const label   = lang === 'it' ? sc.label_it : sc.label_en
                         const multi   = sc.seedings > 1 ? ` [${sc.seedings}×]` : ''
                         const state   = sc.status === 'ready' ? '' : ` — ${statusText(sc, p)}`
-                        return { value: sid, label: `${STATUS_ICON[sc.status] ?? '?'} ${label}${multi}${state}` }
+                        return { value: sid, label: `${label}${multi}${state}` }
                       })
                     ]}
                   />
@@ -1348,9 +1506,10 @@ export default function PmarPanel({
 
               {/* ── Sotto-tab: Sorgenti | Connettività ─────────── */}
               <Tabs value={analysisMode} onChange={setAnalysisMode} variant="pills" radius="sm">
-                <Tabs.List grow>
-                  <Tabs.Tab value="sources">{p.connectivity.subTabSources}</Tabs.Tab>
-                  <Tabs.Tab value="connectivity">{p.connectivity.subTabConnectivity}</Tabs.Tab>
+                <Tabs.List grow style={{ flexWrap: 'nowrap' }}>
+                  <Tabs.Tab value="sources" fz="xs" px={6}>{p.connectivity.subTabSources}</Tabs.Tab>
+                  <Tabs.Tab value="connectivity" fz="xs" px={6}>{p.connectivity.subTabConnectivity}</Tabs.Tab>
+                  <Tabs.Tab value="markov" fz="xs" px={6}>{p.markov.subTab}</Tabs.Tab>
                 </Tabs.List>
 
                 <Tabs.Panel value="sources">
@@ -1363,50 +1522,7 @@ export default function PmarPanel({
                 </Text>
                 <InfoTooltip text={p.tooltips.sectionUse} />
               </Group>
-              <SourceGroup title={p.useGroups.uniform} hint={p.useGroups.uniformHint}>
-                <SourceButton active={useSource === 'none'} Icon={IconGridDots}
-                              onClick={() => onUseSourceChange('none')}>
-                  {p.useSources.none}
-                </SourceButton>
-              </SourceGroup>
-
-              <SourceGroup title={p.useGroups.emodnet} hint={p.useGroups.emodnetHint}>
-                {EMODNET_SOURCES.map(({ key, Icon }) => (
-                  <SourceButton key={key} active={useSource === key} Icon={Icon}
-                                loading={emodnetState[key].loading}
-                                onClick={() => onUseSourceChange(key)}>
-                    {p.useSources[key]}
-                  </SourceButton>
-                ))}
-                {/* Solo l'avviso di area senza dati: cosa fa il layer lo dice già il titolo. */}
-                {EMODNET_SOURCES.some(({ key }) => key === useSource) && emodnetState[useSource].empty && (
-                  <Text size="xs" p="xs" c="red.4" style={NOTE_WARN}>
-                    {emodnetState[useSource].emptyText}
-                  </Text>
-                )}
-              </SourceGroup>
-
-              <SourceGroup title={p.useGroups.custom} hint={p.useGroups.customHint}>
-                <SourceButton active={useSource === 'geotiff'} Icon={IconFileUpload}
-                              onClick={() => onUseSourceChange('geotiff')}>
-                  {p.useSources.geotiff}
-                </SourceButton>
-                {useSource === 'geotiff' && (
-                  <Button
-                    size="xs"
-                    variant="default"
-                    fullWidth
-                    onClick={() => geotiffRef.current?.click()}
-                    style={{ height: 'auto', padding: '10px 8px', borderStyle: 'dashed' }}
-                    type="button"
-                  >
-                    <input ref={geotiffRef} type="file" accept=".tif,.tiff" style={{ display: 'none' }} onChange={handleGeotiffChange} />
-                    {geotiffB64
-                      ? <Text size="xs">{geotiffName}</Text>
-                      : <Text size="xs" c="dimmed">{p.geotiffUploadHint}</Text>}
-                  </Button>
-                )}
-              </SourceGroup>
+              {renderSourceGroups(false)}
 
               {/* ── Risoluzione + Margine ─────────────────────── */}
               <NativeSelect
@@ -1547,6 +1663,25 @@ export default function PmarPanel({
                       <InfoTooltip text={p.tooltips.connSelfLoops} />
                     </Group>
                   </Stack>
+                </Tabs.Panel>
+
+                {/* ── Sotto-tab Markov ─────────────────────────── */}
+                <Tabs.Panel value="markov">
+                  <MarkovControls
+                    m={p.markov} p={p} lbl={lbl} labelStyles={LABEL_STYLES} sc={mkScenario}
+                    dt={mkDt} onDtChange={setMkDt}
+                    horizon={mkHorizon}
+                    horizonPlaceholder={mkHorizonDefault ? String(mkHorizonDefault) : ''}
+                    onHorizonChange={setMkHorizon}
+                    release={mkRelease} onReleaseChange={setMkRelease}
+                    res={mkRes} onResChange={setMkRes}
+                    sourceGroups={renderSourceGroups(true)}
+                    area={markovArea}
+                    draw={markov}
+                    error={mkError}
+                    steps={mkSteps}
+                    validUntil={+mkValidUntil.toFixed(2)}
+                  />
                 </Tabs.Panel>
               </Tabs>
 

@@ -21,6 +21,8 @@ DTO-PMAR/
 │   ├── OpenDriftProcess.py              # OGC API process: runs OpenDrift with CMEMS data
 │   ├── PMARProcess.py                   # OGC API process: PMAR density analysis on a precomputed scenario
 │   ├── ConnectivityProcess.py           # OGC API process: connectivity matrix + graph metrics between areas
+│   ├── MarkovProcess.py                 # OGC API process: Markov-chain dispersal forecast with validation
+│   ├── markov_core.py                   # Transition matrix, propagation, Lagrangian reference (numpy/scipy only)
 │   ├── PrecomputeProcess.py             # OGC API process: precomputes and stores a trajectory NC file
 │   ├── ScenarioStatusProcess.py         # OGC API process: lists saved scenarios + Tools4MSP areas
 │   ├── scenario_state.py                # Scenario lifecycle: state in the JSON, reconciliation with Redis jobs
@@ -43,6 +45,8 @@ DTO-PMAR/
 │   │   │   └── ogcProcesses.test.js     # Unit tests for the client (node:test, no browser needed)
 │   │   ├── geometry/
 │   │   │   └── seedShape.js             # Seeding-area conversions (GeoJSON, bbox, label): no React, no i18n
+│   │   ├── markov/
+│   │   │   └── frames.js                # Markov frames → PMAR raster per frame and layer (pure, tested)
 │   │   ├── hooks/
 │   │   │   └── usePreviewLayer.js       # React adapter: keeps one EMODnet overlay in sync with the seeding area
 │   │   ├── scenarios/
@@ -664,6 +668,82 @@ at all despite a matrix full of values.
   the two node sources share the whole downstream path. `make_grid` masks land using Natural
   Earth ocean polygons, downloaded on first use inside the container.
 
+## Markov process
+
+**Endpoint:** `POST /processes/markov/execution` (async, default Celery queue)
+
+A statistical forecast of tracer dispersal from Chapter 4 of Sofia Bosi's PhD thesis (*Markov
+chains as a tool for Maritime Spatial Planning*):
+
+- From the trajectories of a pre-computed scenario, a **transition matrix** between the cells of a
+  regular grid is estimated: pᵢⱼ = Nᵢⱼ / Nᵢ, the share of the particles in cell i at t₀ that are in
+  cell j after Δt (eq. 1).
+- A tracer release is then propagated step by step:
+  - **single** release: q·Mᵏ (eq. 2);
+  - **continuous** release (the same release every Δt): Σₖ₌₁ⁿ q·Mᵏ (eq. 3).
+- Frames can go **beyond the simulation length**. While they stay within it, every frame is
+  compared with what the particles actually do.
+
+| Input | Description |
+|---|---|
+| `scenario_id` | Pre-computed scenario |
+| `res` | Grid resolution: `0.25`, `0.1` or `0.05` degrees |
+| `dt_days` | Transition interval Δt, from one time step to the simulation length |
+| `horizon_days` | Forecast horizon, up to 365 days and 40 steps of Δt; may exceed the simulation |
+| `release` | `single` or `continuous` |
+| `source` | `uniform`, `windfarms`, `offshore_installations`, `msp_zones`, `geotiff`, `area` |
+| `geotiff_b64`, `area_geojson` | The emission raster or the drawn release area, when the source needs them |
+
+**How it is computed** (`processes/markov_core.py`, numpy and scipy only):
+
+- **Grid.** A regular grid aligned to multiples of `res` over the seeding area. Particles are
+  assigned to cells arithmetically (`floor((lon − lon₀) / res)`), not by point-in-polygon. The
+  matrix equals `PMAR.get_cm` on the same cells, verified to 0.0; the only difference is a
+  particle lying exactly on a cell edge, which shapely's `within` drops and the arithmetic keeps.
+- **Domain.** The cells holding at least one particle at t₀. Mass moving anywhere else, or
+  particles without a position (stranded, or outside the forcing: OpenDrift writes NaN), counts as
+  **left the domain**. This is the absorbing "outside" state of eq. 8. Without it, a cell with no
+  departing particles would swallow the mass that reaches it.
+- **Multi-seeding.** Pooled estimate Σₛ Nᵢⱼ / Σₛ Nᵢ. It equals the mean of the per-seeding matrices
+  (M̄, eq. 4) when every seeding releases the same particles in the same cells, as OpenDrift's
+  fixed seeding grid does.
+- **Initial state.**
+  - `uniform`: 1 in every domain cell, giving relative concentration as in the thesis;
+  - other sources: rasterized on the same grid with the PMAR helpers (`_gdf_to_use_raster`,
+    `_geotiff_to_use_raster`), then normalised so that each release sums to 1 (fraction of the
+    release).
+- **Validation.** Each particle carries q₀(cell at t₀)/Nᵢ, and the reference map is the weighted
+  histogram of the particles at kΔt. For a continuous release it is Σᵢ₌₁ᵏ of those maps (§3.4).
+  Per frame the process returns the difference (Markov − simulation), the signed maximum error, the
+  mean absolute error, and the mass that left the domain in both.
+  - At k = 1 the chain matches the simulation **exactly**, by construction. This is the method's
+    built-in check, verified at 0.0 together with mass conservation.
+
+**Warnings** (`warnings`, with a code the UI translates):
+
+- `weak_cells`: cells with fewer than 30 particles per seeding at t₀;
+- `dt_short`: half of the cells keep more than 90% of their particles after Δt, the thesis's
+  Fig. 5a case;
+- `beyond_simulation`: frames after this day have no reference;
+- `source_outside`: part of the source lies outside the domain.
+
+**Output:**
+- `grid` and `cells`, the domain as flat row × nx + col indices, row 0 to the south;
+- `frames`: `[{k, day, values, mass_in, mass_out, released, ref: {values, emax, mae, mass_out} | null}]`;
+- `vmin` / `vmax`, common to all frames so colours stay comparable along the slider;
+- `diff_max` for the symmetric difference scale;
+- `source_geojson`, the parameters and `bounds`.
+
+The frontend rebuilds the PMAR raster of any frame and layer (`frontend/src/markov/frames.js`). So
+the heatmap, legend and analysis tools work on the frame shown, except on the difference map,
+whose values are signed.
+
+**Data requirement.** The thesis uses 50 particles per cell. With the 10 000 particles of most
+existing scenarios, cells at 0.25° hold fewer than 30, and the forecast diffuses more than the
+simulation: it loses more mass from the domain and spreads more. For meaningful forecasts, use a
+scenario seeded uniformly over the area with as many particles as possible (up to 100 000) and a
+coarse grid.
+
 ## Anthropogenic layers
 
 All layers query the [EMODnet Human Activities WFS](https://ows.emodnet-humanactivities.eu/wfs) and cache results as pickle files (7-day TTL) in `cache/emodnet/`. Each layer tries a primary WFS type name first and falls back to alternates if it is unavailable.
@@ -791,18 +871,28 @@ read back (`storage/persistedState.test.js`).
 - Set simulation parameters: pressure type, start date, duration, particles, time step, CMEMS margin
 - Live NetCDF size estimate, colour-coded by severity
 - Precompute button submits the simulation; if one is already running the new one is queued (the panel says so). Invalid input or a missing token is reported at once
-- **Simulations in progress** box below the list: running (⏳, seeding n/N, minutes since start, progress bar), queued (⏸, position) and failed (✗, reason) simulations, with **Stop** and **Remove** for users with full access. The state comes from the server, so it survives reloads and is the same on every device; the list refreshes every 5 s while something is queued or running, and a notification announces each simulation that becomes ready or fails, also after a reload
+- **Simulations in progress** box below the list: running (in blue, seeding n/N, minutes since start, progress bar), queued (grey, position in the queue) and failed (red, reason) simulations — no icons, the state is written out and colour-coded, also in the dropdown, with **Stop** and **Remove** for users with full access. The state comes from the server, so it survives reloads and is the same on every device; the list refreshes every 5 s while something is queued or running, and a notification announces each simulation that becomes ready or fails, also after a reload
 - Saved simulations listed in a dropdown, each with its state; selecting one shows a full summary (area, pressure, dates, particles, time step, CMEMS margin, description) and highlights that simulation's seeding area on the map
 - *Connectivity seeding* releases the same number of particles in every polygon of the seeding area — drawn, uploaded or pre-defined — and shows the resulting total when the number of polygons is known
 
 ### PMAR tab — Analysis
 
-Two sub-tabs, **Sources** and **Connectivity**, sharing the selected simulation.
+Three sub-tabs, **Sources**, **Connectivity** and **Markov**, sharing the selected simulation.
 
 - *Sources*: choose an anthropogenic weighting layer, grid resolution, and study area margin
 - *Connectivity*: choose the nodes (polygon shapefile, or a generated grid of ocean cells with a
   resolution and a bounding box), the probability type, the time horizon, and whether self-loops
   count; the result is coloured polygons plus the directed network of exchanges
+- *Markov*: choose Δt (shortcuts 1 / 5 / 10 days), the horizon (empty = twice the simulation,
+  within the limits), single or continuous release, grid resolution (with an estimate of the
+  particles per cell) and the release source. The sources are the same boxes as *Sources*, with
+  their EMODnet previews, plus a **drawn area**, drawn in orange and kept separate from the
+  seeding area of a new simulation. The analysis card has:
+  - a **frame slider** with play;
+  - a choice of **Forecast / Simulation / Difference**, where the last two are disabled beyond the
+    simulation;
+  - the share that left the domain, for the chain and for the simulation, and the error of the
+    frame.
 - Clicking a polygon isolates its connections, with incoming / outgoing / both
 - Hovering a polygon or a raster cell shows a tooltip; the two are placed on opposite sides of the
   cursor so that they never overlap

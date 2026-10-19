@@ -16,8 +16,6 @@ export const Status = {
   FAILED:  'failed',
 }
 
-export const STATUS_ICON = { queued: '⏸', running: '⏳', ready: '✓', failed: '✗' }
-
 /** Ogni quanto rileggere l'elenco mentre qualcosa è in coda o in calcolo. */
 export const POLL_INTERVAL_MS = 5000
 

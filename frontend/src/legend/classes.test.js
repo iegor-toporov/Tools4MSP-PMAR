@@ -2,8 +2,8 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
 import {
-  PROBABILITY_BANDS, classIndex, formatBound, formatPercent, linNorm, linearClasses,
-  logClasses, logNorm, redsColor, spectralR,
+  PROBABILITY_BANDS, classIndex, divergingClasses, divergingColor, divergingNorm, formatBound,
+  formatPercent, linNorm, linearClasses, logClasses, logNorm, redsColor, spectralR,
 } from './classes.js'
 
 describe('color scales', () => {
@@ -95,5 +95,27 @@ describe('formatting', () => {
     assert.equal(formatBound(0.0512), '0.051')
     assert.equal(formatBound(0.0003), '3e-4')
     assert.equal(formatPercent(0.05), '5 %')
+  })
+})
+
+describe('diverging scale', () => {
+  it('is white at zero and blue / red at the ends', () => {
+    assert.deepEqual(divergingColor(0.5), [247, 247, 247])
+    assert.deepEqual(divergingColor(0), [5, 48, 97])
+    assert.deepEqual(divergingColor(1), [103, 0, 31])
+    assert.equal(divergingNorm(0, 2), 0.5)
+    assert.equal(divergingNorm(-5, 2), 0)
+    assert.equal(divergingNorm(1, 0), null)
+  })
+
+  it('splits [-d, d] symmetrically with zero on a boundary and open ends', () => {
+    const cls = divergingClasses(3)
+    assert.equal(cls.length, 6)
+    assert.equal(cls[3].from, 0)
+    assert.equal(classIndex(-0.1, cls), 2)
+    assert.equal(classIndex(0.1, cls), 3)
+    assert.equal(classIndex(-99, cls), 0)
+    assert.equal(classIndex(99, cls), 5)
+    cls.forEach((c, i) => assert.ok(Math.abs(c.t + cls[5 - i].t - 1) < 1e-12))
   })
 })

@@ -1,13 +1,18 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   Paper, Box, ScrollArea, Stack, Group, Text, Badge, ActionIcon, Tooltip, TextInput,
-  SegmentedControl, Switch, Button,
+  SegmentedControl, Switch, Button, Slider,
 } from '@mantine/core'
-import { IconEye, IconEyeOff, IconTrash, IconPencil, IconDownload, IconX } from '@tabler/icons-react'
+import { IconEye, IconEyeOff, IconTrash, IconPencil, IconDownload, IconX,
+         IconPlayerPlay, IconPlayerPause } from '@tabler/icons-react'
 import { useLang } from '../LanguageContext'
 import ToolsPanel from './ToolsPanel'
+import { MarkovLayer, clampFrame, effectiveLayer, firstUnvalidatedFrame, frameCount,
+         frameSummary, layerAvailable } from '../markov/frames'
 
 export const MAX_ANALYSES = 10
+
+const KIND_COLORS = { pmar: 'blue', connectivity: 'teal', markov: 'grape' }
 
 const SCROLLBAR_STYLES = {
   scrollbar: { background: 'transparent', '&[data-orientation="vertical"]': { width: 5 } },
@@ -100,7 +105,8 @@ export default function AnalysesPanel({
       <Box style={{ flexShrink: 0 }}>
         <ToolsPanel
           {...tools}
-          hasRaster={active?.kind === 'pmar'}
+          hasRaster={active?.kind === 'pmar' || (active?.kind === 'markov' &&
+            effectiveLayer(active.data, active.view.frame, active.view.layer) !== MarkovLayer.DIFFERENCE)}
           hasConnectivity={active?.kind === 'connectivity'}
         />
       </Box>
@@ -153,8 +159,8 @@ function AnalysisCard({ an, active, onActivate, onDelete, onRename, onView, onDo
     >
       {/* ── Riga compatta: tipo, titolo, mostra/nascondi, elimina ── */}
       <Group gap={6} wrap="nowrap" align="center">
-        <Badge size="xs" variant="light" color={isPmar ? 'blue' : 'teal'} style={{ flexShrink: 0 }}>
-          {isPmar ? a.kindPmar : a.kindConnectivity}
+        <Badge size="xs" variant="light" color={KIND_COLORS[an.kind]} style={{ flexShrink: 0 }}>
+          {{ pmar: a.kindPmar, connectivity: a.kindConnectivity, markov: a.kindMarkov }[an.kind]}
         </Badge>
         {editing ? (
           <TextInput
@@ -204,7 +210,8 @@ function AnalysisCard({ an, active, onActivate, onDelete, onRename, onView, onDo
         <Stack gap={8} mt={8} onClick={stop} style={{ cursor: 'default' }}>
           <Description an={an} />
           {isPmar ? <PmarControls an={an} onView={onView} onDownload={onDownload} />
-                  : <ConnectivityControls an={an} onView={onView} />}
+           : an.kind === 'markov' ? <MarkovCardControls an={an} onView={onView} />
+           : <ConnectivityControls an={an} onView={onView} />}
         </Stack>
       )}
     </Paper>
@@ -253,6 +260,108 @@ function PmarControls({ an, onView, onDownload }) {
         {c.downloadRaster}
       </Button>
     </Stack>
+  )
+}
+
+// Un passo del cursore ogni 0.9 s: abbastanza per leggere giorno e mappa.
+const PLAY_INTERVAL_MS = 900
+
+/**
+ * Comandi di un'analisi Markov: cursore dei frame (con play), livello mostrato
+ * (previsione, simulazione, differenza) e riassunto del frame.
+ */
+function MarkovCardControls({ an, onView }) {
+  const { t, a } = useLabels()
+  const m = t.pmar.markov
+  const v = an.view
+  const d = an.data
+  const n = frameCount(d)
+  const k = clampFrame(d, v.frame)
+  const layer = effectiveLayer(d, k, v.layer)
+  const sum = frameSummary(d, k)
+  const firstOut = firstUnvalidatedFrame(d)
+  const [playing, setPlaying] = useState(false)
+  // Frame corrente per il timer, che non deve ripartire a ogni passo.
+  const kRef = useRef(k)
+  kRef.current = k
+
+  useEffect(() => {
+    if (!playing) return
+    const timer = setInterval(() => {
+      if (kRef.current >= n - 1) setPlaying(false)
+      else onView({ frame: kRef.current + 1 })
+    }, PLAY_INTERVAL_MS)
+    return () => clearInterval(timer)
+  }, [playing, n]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const togglePlay = () => {
+    if (!playing && k >= n - 1) onView({ frame: 0 })      // dalla fine si riparte
+    setPlaying(p => !p)
+  }
+  const pct = x => `${(x * 100).toFixed(1)} %`
+  // Residui di arrotondamento (1e-17) sono zero: al primo passo l'errore è nullo per costruzione.
+  const num = x => (Math.abs(x) < 1e-12 ? 0 : Math.abs(x) >= 0.01 ? +x.toPrecision(3) : x.toExponential(1))
+
+  return (
+    <Stack gap={6}>
+      <Field label={`${m.dayN.replace('{d}', sum.day)} · ${m.stepN.replace('{k}', k).replace('{n}', n - 1)}`}>
+        <Group gap={8} wrap="nowrap" align="center">
+          <Tooltip label={playing ? m.pause : m.play} withArrow>
+            <ActionIcon size="sm" variant="light" aria-label={playing ? m.pause : m.play} onClick={togglePlay}>
+              {playing ? <IconPlayerPause size={14} /> : <IconPlayerPlay size={14} />}
+            </ActionIcon>
+          </Tooltip>
+          <Slider
+            style={{ flex: 1 }} size="sm"
+            min={0} max={n - 1} step={1} value={k}
+            onChange={frame => { setPlaying(false); onView({ frame }) }}
+            label={i => m.dayN.replace('{d}', d.frames[i]?.day ?? '')}
+            marks={firstOut !== null && firstOut > 0 ? [{ value: firstOut - 1 }] : []}
+            aria-label={m.frameSlider}
+          />
+        </Group>
+      </Field>
+      <Field label={a.layers}>
+        <SegmentedControl
+          size="xs" fullWidth
+          value={layer}
+          onChange={l => onView({ layer: l })}
+          data={Object.values(MarkovLayer).map(l => ({
+            value: l, label: m.layersShort[l], disabled: !layerAvailable(d, k, l),
+          }))}
+        />
+      </Field>
+      <div className="analysis-desc-block markov-summary">
+        <Row k={m.massOut} v={sum.refMassOut !== null && sum.validated
+          ? m.massOutBoth.replace('{m}', pct(sum.massOut)).replace('{s}', pct(sum.refMassOut))
+          : pct(sum.massOut)} />
+        {sum.validated
+          ? <Row k={m.error} v={m.errorValue.replace('{e}', num(sum.emax)).replace('{mae}', num(sum.mae))} />
+          : k > 0 && <Text size="10px" c="orange.6">{m.noValidation.replace('{d}', d.valid_days)}</Text>}
+        {k === 1 && sum.validated && <Text size="10px" c="dimmed">{m.firstStepExact}</Text>}
+      </div>
+      <Field label={a.layers}>
+        <Stack gap={4}>
+          {an.areaGeoJSON && (
+            <Switch size="xs" label={a.seedArea} checked={v.showSeedArea}
+                    onChange={e => onView({ showSeedArea: e.currentTarget.checked })} />
+          )}
+          {d.source_geojson && (
+            <Switch size="xs" label={m.sourceShown} checked={v.showSource}
+                    onChange={e => onView({ showSource: e.currentTarget.checked })} />
+          )}
+        </Stack>
+      </Field>
+    </Stack>
+  )
+}
+
+function Row({ k, v }) {
+  return (
+    <Group justify="space-between" gap="xs" wrap="nowrap">
+      <Text size="10px" c="dimmed">{k}</Text>
+      <Text size="xs" c="blue.5" fw={500} ta="right">{v}</Text>
+    </Group>
   )
 }
 
@@ -334,7 +443,20 @@ function Description({ an }) {
     [a.seedings,  sc.seedings > 1 ? `${sc.seedings}× / ${sc.tshift} d` : null],
     [a.timeStep,  sc.time_step_hours != null ? `${sc.time_step_hours} h` : null],
   ]
-  const analysis = an.kind === 'pmar'
+  const m = p.markov
+  const analysis = an.kind === 'markov'
+    ? [
+        [a.sourceLayer, [pr.source === 'area' ? m.sourceArea
+                          : p.useSources[pr.source === 'uniform' ? 'none' : pr.source],
+                         pr.geotiff_name].filter(Boolean).join(' · ')],
+        [m.labelRelease, pr.release === 'continuous' ? m.releaseContinuous : m.releaseSingle],
+        [m.dt,          an.data.dt_days != null ? `${+an.data.dt_days.toFixed(3)} d` : null],
+        [a.horizon,     an.data.horizon_days != null ? `${an.data.horizon_days} d` : null],
+        [a.resolution,  an.data.res != null ? `${an.data.res}°` : null],
+        [m.cells,       an.data.cells?.length?.toLocaleString()],
+        [m.unit,        an.data.unit === 'relative' ? m.unitRelative : m.unitFraction],
+      ]
+    : an.kind === 'pmar'
     ? [
         [a.sourceLayer, [p.useSources[pr.use_source], pr.geotiff_name].filter(Boolean).join(' · ')],
         [a.resolution,  pr.res != null ? `${pr.res}°` : null],

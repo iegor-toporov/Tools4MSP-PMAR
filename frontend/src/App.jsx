@@ -26,7 +26,9 @@ import { seedShapeToGeoJSON, seedShapeBounds } from './geometry/seedShape'
 import { cellsCsv } from './export/pmarTools'
 import { saveText } from './export/download'
 import { spectralR, logNorm, linNorm, logClasses, linearClasses, classIndex,
-         PROBABILITY_BANDS, redsColor, formatBound, formatPercent } from './legend/classes'
+         PROBABILITY_BANDS, redsColor, formatBound, formatPercent,
+         divergingColor, divergingNorm, divergingClasses } from './legend/classes'
+import { MarkovLayer, clampFrame, effectiveLayer, markovRaster } from './markov/frames'
 import { PmarConnectivityMatrix } from './components/PmarConnectivityMatrix'
 import MapLegend from './components/MapLegend'
 import 'leaflet/dist/leaflet.css'
@@ -463,7 +465,10 @@ function ConnectivityEdgesLayer({ geojson, visible, selectedNode, direction, hig
 }
 
 // ── PMAR seeding area polygon layer ─────────────────────────────────────────
-function SeedingAreaLayer({ geojson, visible }) {
+// Area di rilascio di un'analisi Markov: arancio, come mentre la si disegna.
+const RELEASE_AREA_STYLE = { color: '#f97316', fillColor: '#fdba74' }
+
+function SeedingAreaLayer({ geojson, visible, palette = null }) {
   const map      = useMap()
   const layerRef = useRef(null)
 
@@ -479,6 +484,7 @@ function SeedingAreaLayer({ geojson, visible }) {
         weight:      2,
         opacity:     0.85,
         dashArray:   '6 4',
+        ...palette,
       },
       // Puro contorno dell'area di studio: nulla vi è associato. Lasciandolo
       // interattivo si prenderebbe l'hover dei poligoni di connettività, perché
@@ -486,9 +492,21 @@ function SeedingAreaLayer({ geojson, visible }) {
       interactive: false,
     }).addTo(map)
     return () => { layerRef.current?.remove(); layerRef.current = null }
-  }, [geojson, visible, map])
+  }, [geojson, visible, palette, map])
 
   return null
+}
+
+/**
+ * Valore di una cella nel tooltip. I PPI sono conteggi (interi sopra 1); le
+ * previsioni Markov sono frazioni anche di 1e-5, che con tre decimali fissi
+ * diventerebbero "0.000".
+ */
+function formatCellValue(val, signed = false) {
+  const a = Math.abs(val)
+  const s = a >= 1 ? (a >= 100 ? Math.round(a).toString() : a.toFixed(2))
+          : a >= 0.001 ? a.toFixed(3) : a.toExponential(2)
+  return (val < 0 ? '−' : signed ? '+' : '') + s
 }
 
 // ── PMAR raster overlay (canvas layer con hover per cella) ───────────────────
@@ -523,6 +541,11 @@ function PmarLayer({ pmarData, visible, passagesLabel, classes, highlight, inter
       raster_lon_min, raster_lat_min, raster_res,
       raster_nx, raster_ny,
     } = pmarData
+    // Differenze di un'analisi Markov: valori con segno su una scala divergente.
+    const diverging = pmarData.scale === 'diverging'
+    const norm  = diverging ? v => divergingNorm(v, pmarData.dmax) : v => logNorm(v, vmin, vmax)
+    const paint = diverging ? divergingColor : spectralR
+    const shown = diverging ? v => !!v && Number.isFinite(v) : v => v > 0
 
     const canvas = L.DomUtil.create('canvas', 'leaflet-zoom-hide')
     canvas.style.pointerEvents = 'none'
@@ -550,7 +573,7 @@ function PmarLayer({ pmarData, visible, passagesLabel, classes, highlight, inter
         const rowData = raster_values[row]
         for (let col = 0; col < raster_nx; col++) {
           const val = rowData[col]
-          if (!val || val <= 0) continue
+          if (!shown(val)) continue
 
           const lat = raster_lat_min + row * raster_res
           const lon = raster_lon_min + col * raster_res
@@ -563,13 +586,13 @@ function PmarLayer({ pmarData, visible, passagesLabel, classes, highlight, inter
           const w = sw.x - ne.x, h = sw.y - ne.y
           if (x + w < 0 || y + h < 0 || x > size.x || y > size.y) continue
 
-          const t = logNorm(val, vmin, vmax)
+          const t = norm(val)
           if (t === null) continue
           const hl = highlightRef.current
           if (hl?.size && !hl.has(classIndex(val, classesRef.current))) {
             ctx.fillStyle = DIMMED_FILL
           } else {
-            const [r, g, b] = spectralR(t)
+            const [r, g, b] = paint(t)
             ctx.fillStyle = `rgba(${r},${g},${b},0.82)`
           }
           ctx.fillRect(x, y, w, h)
@@ -588,10 +611,10 @@ function PmarLayer({ pmarData, visible, passagesLabel, classes, highlight, inter
 
       if (col >= 0 && col < raster_nx && row >= 0 && row < raster_ny) {
         const val = raster_values[row][col]
-        if (val > 0) {
+        if (shown(val)) {
           const latC = (raster_lat_min + row * raster_res).toFixed(3)
           const lonC = (raster_lon_min + col * raster_res).toFixed(3)
-          const dispVal = val >= 1 ? Math.round(val) : val.toFixed(3)
+          const dispVal = formatCellValue(val, diverging)
           const decimals = Math.max(0, Math.ceil(-Math.log10(raster_res)) + 1)
           const latID = (raster_lat_min + row * raster_res).toFixed(decimals)
           const lonID = (raster_lon_min + col * raster_res).toFixed(decimals)
@@ -680,6 +703,15 @@ function describeWarning(w, t) {
   if (w.code === 'weak_polygons')
     return fill(w.count === 1 ? c.warnWeakPolygonsOne : c.warnWeakPolygons,
                 { count: w.count, total: w.total, n: w.min_particles })
+  const m = t.pmar.markov
+  if (w.code === 'weak_cells')
+    return fill(m.warnWeakCells, { count: w.count, total: w.total, n: w.min_particles })
+  if (w.code === 'dt_short')
+    return fill(m.warnDtShort, { pct: Math.round(w.median_stay * 100) })
+  if (w.code === 'beyond_simulation')
+    return fill(m.warnBeyondSimulation, { day: w.day, sim: w.sim_days })
+  if (w.code === 'source_outside')
+    return fill(m.warnSourceOutside, { pct: Math.round(w.fraction * 100) })
   return w.message ?? ''
 }
 
@@ -752,6 +784,30 @@ function ComparisonView({ areas, mapRef, mapTheme, onRemoveArea, onClose }) {
 }
 
 // ── Pure helper (outside component so reference is stable for useMemo) ───────
+/**
+ * Chiave del raster mostrato da un'analisi: l'indicatore per una PMAR, frame e livello
+ * per una Markov. Cambia quando cambia ciò che si vede, e fa da chiave della cache.
+ */
+function rasterKeyOf(a) {
+  if (a.kind !== 'markov') return a.view.indicator ?? 'ppi'
+  const k = clampFrame(a.data, a.view.frame)
+  return `markov:${k}:${effectiveLayer(a.data, k, a.view.layer)}`
+}
+
+/** Giorno di un frame: interi senza decimali, frazioni (Δt in ore) con due. */
+const formatDay = d => (Number.isInteger(d) ? `${d}` : `${+d.toFixed(2)}`)
+
+// Sorgente di un'analisi Markov nell'intestazione dei file degli strumenti (in inglese,
+// come le altre intestazioni).
+const MARKOV_EXPORT_SOURCES = {
+  uniform:                'uniform over the domain',
+  windfarms:              'EMODnet wind farms',
+  offshore_installations: 'EMODnet offshore installations',
+  msp_zones:              'EMODnet MSP aquaculture zones',
+  geotiff:                'uploaded GeoTIFF',
+  area:                   'drawn release area',
+}
+
 function getActivePmarData(data, indicator) {
   if (!data) return null
   if (!indicator || indicator === 'ppi') return data
@@ -836,6 +892,12 @@ const SOURCE_LAYER_COMPONENTS = [
   ['msp_zones_geojson', MspZonesLayer],
 ]
 
+const MARKOV_SOURCE_LAYERS = {
+  windfarms:              WindFarmsLayer,
+  offshore_installations: OffshoreInstallationsLayer,
+  msp_zones:              MspZonesLayer,
+}
+
 /** Tutto ciò che un'analisi PMAR disegna: heatmap, area di semina, layer sorgente. */
 function PmarAnalysisLayers({ analysis, raster, isActive, passagesLabel, classes, highlight }) {
   const { data, view: v } = analysis
@@ -847,6 +909,15 @@ function PmarAnalysisLayers({ analysis, raster, isActive, passagesLabel, classes
       {SOURCE_LAYER_COMPONENTS.map(([key, Layer]) => data[key] ? (
         <Layer key={key} geojson={data[key]} visible={v.visible && v.showSource} />
       ) : null)}
+      {analysis.kind === 'markov' && data.source_geojson && (() => {
+        // Sorgente di un'analisi Markov: i layer EMODnet col loro stile, l'area
+        // disegnata in arancio come mentre la si disegnava.
+        const Layer = MARKOV_SOURCE_LAYERS[data.source]
+        return Layer
+          ? <Layer geojson={data.source_geojson} visible={v.visible && v.showSource} />
+          : <SeedingAreaLayer geojson={data.source_geojson} palette={RELEASE_AREA_STYLE}
+                              visible={v.visible && v.showSource} />
+      })()}
     </>
   )
 }
@@ -898,6 +969,7 @@ const DEFAULT_VIEW = {
   indicator: 'ppi', showSource: true,                       // PMAR
   metric: 'in_strength', showPolygons: true, showEdges: true, // connettività
   selectedNode: null, edgeDirection: 'both',
+  frame: null, layer: 'forecast',                              // Markov (null = ultimo frame)
 }
 
 // Margini per fitBounds: a sinistra il pannello principale, a destra quello delle analisi.
@@ -940,11 +1012,14 @@ export default function App() {
   // stesso scenario mostra già la propria (sarebbe la stessa area due volte).
   const [selectedScenarioId, setSelectedScenarioId] = useState(null)
   const activeAnalysis = analyses.find(a => a.id === activeAnalysisId) ?? null
-  const activePmar = activeAnalysis?.kind === 'pmar' ? activeAnalysis : null
+  // Analisi a raster: PMAR, e Markov sul frame e livello scelti. Strumenti e legenda
+  // le trattano allo stesso modo.
+  const activePmar = activeAnalysis?.kind === 'pmar' || activeAnalysis?.kind === 'markov'
+    ? activeAnalysis : null
   const activeConn = activeAnalysis?.kind === 'connectivity' ? activeAnalysis : null
   // I nomi di prima, ora derivati dall'analisi attiva: strumenti e legenda li usano così.
   const pmarData           = activePmar?.data ?? null
-  const activeIndicator    = activePmar?.view.indicator ?? 'ppi'
+  const activeIndicator    = activePmar ? rasterKeyOf(activePmar) : 'ppi'
   const connectivityData   = activeConn?.data ?? null
   const connectivityMetric = activeConn?.view.metric ?? 'in_strength'
 
@@ -955,6 +1030,15 @@ export default function App() {
   const [connectivityLoading,  setConnectivityLoading]  = useState(false)
   const [connectivityJobId,    setConnectivityJobId]    = useState(null)
   const [connectivityStopping, setConnectivityStopping] = useState(false)
+
+  const [markovLoading,  setMarkovLoading]  = useState(false)
+  const [markovJobId,    setMarkovJobId]    = useState(null)
+  const [markovStopping, setMarkovStopping] = useState(false)
+  // Area di rilascio disegnata per un'analisi Markov: separata dall'area di semina,
+  // e il disegno va all'una o all'altra secondo `drawTarget`.
+  const [markovShape,        setMarkovShape]        = useState(null)
+  const [drawTarget,         setDrawTarget]         = useState('seed')
+  const [showMarkovShape,    setShowMarkovShape]    = useState(false)
   // Id dell'analisi di connettività di cui è aperta la matrice (null = chiusa).
   const [showConnMatrix,       setShowConnMatrix]       = useState(null)
   const [pmarStatus,      setPmarStatus]      = useState('')
@@ -1036,9 +1120,11 @@ export default function App() {
     setDrawMode(null)
   }
 
-  function handleStartDraw(mode) {
+  function handleStartDraw(mode, target = 'seed') {
+    setDrawTarget(target)
     setDrawMode(mode)
-    setSeedShape(null)
+    if (target === 'markov') setMarkovShape(null)
+    else setSeedShape(null)
   }
 
   /**
@@ -1046,7 +1132,8 @@ export default function App() {
    * poterne accumulare più d'uno nella stessa area di seeding.
    */
   function handleShapeDone(shape, opts) {
-    setSeedShape(shape)
+    if (drawTarget === 'markov') setMarkovShape(shape)
+    else setSeedShape(shape)
     if (!opts?.keepDrawing) setDrawMode(null)
   }
 
@@ -1069,16 +1156,19 @@ export default function App() {
   }
 
   /** Toglie l'ultimo poligono chiuso; azzera l'area se era l'unico. */
-  function handleUndoLastPolygon() {
-    setSeedShape(prev => {
+  function handleUndoLastPolygon(target = 'seed') {
+    const undo = prev => {
       if (prev?.type !== 'polygon') return prev
       const rings = prev.rings.slice(0, -1)
       return rings.length ? { ...prev, rings } : null
-    })
+    }
+    if (target === 'markov') setMarkovShape(undo)
+    else setSeedShape(undo)
   }
 
-  function handleClearSeedShape() {
-    setSeedShape(null)
+  function handleClearSeedShape(target = 'seed') {
+    if (target === 'markov') setMarkovShape(null)
+    else setSeedShape(null)
     setDrawMode(null)
   }
 
@@ -1221,6 +1311,23 @@ export default function App() {
                      submittedAt: Date.now() })
   }
 
+  async function handleRunMarkov(inputs, { title, info } = {}) {
+    if (analyses.length >= MAX_ANALYSES) return
+    const areaAtStart = selectedScenarioId && selectedScenarioId === info?.scenario?.id
+      ? scenarioAreaGeoJSON : null
+    setMarkovLoading(true)
+    let jobId
+    try {
+      jobId = await executeAsync(Process.MARKOV, inputs)
+    } catch (err) {
+      setPmarErrorMsg(describeError(err, t))
+      setMarkovLoading(false)
+      return
+    }
+    await trackJob({ jobId, kind: 'markov', title, info, areaGeoJSON: areaAtStart,
+                     submittedAt: Date.now() })
+  }
+
   function showPmarError(err) {
     const clean = describeError(err, t)
       .replace(/^Error executing process:\s*/i, '')
@@ -1243,13 +1350,14 @@ export default function App() {
    */
   async function trackJob(job, { resumed = false } = {}) {
     const pmar = job.kind === 'pmar'
+    const [setLoadingOf, setJobIdOf, setStoppingOf] = {
+      pmar:         [setPmarLoading, setPmarJobId, setPmarStopping],
+      connectivity: [setConnectivityLoading, setConnectivityJobId, setConnectivityStopping],
+      markov:       [setMarkovLoading, setMarkovJobId, setMarkovStopping],
+    }[job.kind]
     setPendingJobs(prev => [...prev.filter(j => j.jobId !== job.jobId), job])
-    if (pmar) {
-      setPmarLoading(true); setPmarJobId(job.jobId)
-      setPmarStatus(t.pmar.btnRunning); setPmarStatusType('')
-    } else {
-      setConnectivityLoading(true); setConnectivityJobId(job.jobId)
-    }
+    setLoadingOf(true); setJobIdOf(job.jobId)
+    if (pmar) { setPmarStatus(t.pmar.btnRunning); setPmarStatusType('') }
     let keepPending = false
     try {
       // ~1 minuto di errori consecutivi (intervallo di 3 s): il tempo di un riavvio.
@@ -1259,6 +1367,7 @@ export default function App() {
       const raw  = await fetchJobResults(job.jobId)
       const data = raw.result ?? raw
       if (pmar) finishPmar(job, data)
+      else if (job.kind === 'markov') finishMarkov(job, data)
       else finishConnectivity(job, data)
 
     } catch (err) {
@@ -1278,8 +1387,7 @@ export default function App() {
       }
     } finally {
       if (!keepPending) setPendingJobs(prev => prev.filter(j => j.jobId !== job.jobId))
-      if (pmar) { setPmarLoading(false); setPmarJobId(null); setPmarStopping(false) }
-      else { setConnectivityLoading(false); setConnectivityJobId(null); setConnectivityStopping(false) }
+      setLoadingOf(false); setJobIdOf(null); setStoppingOf(false)
     }
   }
 
@@ -1320,6 +1428,32 @@ export default function App() {
     if (data.bounds && mapRef.current)
       mapRef.current.fitBounds(L.latLngBounds(data.bounds), FIT_PADDING)
 
+    const warnings = (data.warnings ?? []).map(w => describeWarning(w, t)).filter(Boolean)
+    notifications.show({
+      title:     t.pmar.analysisReadyTitle,
+      message:   warnings.length === 0 ? t.pmar.analysisReadyBody
+               : warnings.length === 1 ? warnings[0]
+               : (
+                 <ul style={{ margin: 0, paddingLeft: 18 }}>
+                   {warnings.map((w, i) => <li key={i}>{w}</li>)}
+                 </ul>
+               ),
+      color:     warnings.length ? 'yellow' : 'green',
+      icon:      <IconCircleCheck size={18} />,
+      autoClose: 20000,
+    })
+  }
+
+  function finishMarkov(job, data) {
+    if (!data.frames?.length || !data.grid) throw new Error(t.status.badResponse)
+    addAnalysis({
+      kind: 'markov',
+      title: job.title || (lang === 'it' ? data.label_it : data.label_en) || 'Markov',
+      info: job.info, data, areaGeoJSON: job.areaGeoJSON ?? null,
+    })
+    if (data.bounds && mapRef.current)
+      mapRef.current.fitBounds(L.latLngBounds(data.bounds), FIT_PADDING)
+    setActiveMapTool(null)
     const warnings = (data.warnings ?? []).map(w => describeWarning(w, t)).filter(Boolean)
     notifications.show({
       title:     t.pmar.analysisReadyTitle,
@@ -1424,16 +1558,23 @@ export default function App() {
   // Raster dell'indicatore scelto, calcolato una volta per analisi e indicatore: un
   // oggetto nuovo a ogni render farebbe ricreare il canvas di PmarLayer.
   const rasterCache = useRef(new WeakMap())
-  const rasterOf = useCallback((data, indicator) => {
-    let byIndicator = rasterCache.current.get(data)
-    if (!byIndicator) { byIndicator = new Map(); rasterCache.current.set(data, byIndicator) }
-    if (!byIndicator.has(indicator)) byIndicator.set(indicator, getActivePmarData(data, indicator))
-    return byIndicator.get(indicator)
+  const rasterOf = useCallback(a => {
+    const key = rasterKeyOf(a)
+    let byKey = rasterCache.current.get(a.data)
+    if (!byKey) { byKey = new Map(); rasterCache.current.set(a.data, byKey) }
+    if (!byKey.has(key)) {
+      byKey.set(key, a.kind === 'markov'
+        ? markovRaster(a.data, a.view.frame, a.view.layer)
+        : getActivePmarData(a.data, a.view.indicator))
+    }
+    return byKey.get(key)
   }, [])
   const activePmarData = useMemo(
-    () => (pmarData ? rasterOf(pmarData, activeIndicator) : null),
-    [pmarData, activeIndicator, rasterOf],
+    () => (activePmar ? rasterOf(activePmar) : null),
+    [activePmar?.data, activeIndicator, rasterOf], // eslint-disable-line react-hooks/exhaustive-deps
   )
+  // Gli strumenti lavorano su valori positivi: non sulla mappa delle differenze.
+  const rasterTools = !!activePmarData && activePmarData.scale !== 'diverging'
 
   // ── Legenda interattiva: classi, conteggi e classi accese per ogni layer ──
   // Strumenti di analisi (in cima al pannello di destra): chiusi all'avvio.
@@ -1449,7 +1590,8 @@ export default function App() {
   useEffect(() => { setEdgeHighlight(new Set()) }, [connectivityData])
 
   const ppiClasses = useMemo(
-    () => (activePmarData?.vmax > 0 ? logClasses(activePmarData.vmin, activePmarData.vmax) : null),
+    () => (activePmarData?.scale === 'diverging' ? divergingClasses(activePmarData.dmax)
+         : activePmarData?.vmax > 0 ? logClasses(activePmarData.vmin, activePmarData.vmax) : null),
     [activePmarData],
   )
   const metricClasses = useMemo(() => {
@@ -1461,13 +1603,18 @@ export default function App() {
     const out = []
     const L = t.legend
     if (pmarData && activePmar.view.visible && ppiClasses) {
-      const counts = countByClass(activePmarData.raster_values.flat(), ppiClasses)
+      const diverging = activePmarData.scale === 'diverging'
+      const counts = countByClass(activePmarData.raster_values.flat().filter(v => v !== 0), ppiClasses)
       const ind = INDICATOR_LABEL_KEYS[activeIndicator]
+      const title = activePmar.kind === 'markov'
+        ? `${t.pmar.markov.layers[activePmarData.layer]} · ${t.pmar.markov.dayN.replace('{d}',
+            formatDay(pmarData.frames[activePmarData.frame].day))}`
+        : `${t.pmarControls.colorbarLabel}${ind && activeIndicator !== 'ppi' ? ` · ${t.pmarControls[ind]}` : ''}`
       out.push({
         key: 'ppi',
-        title: `${t.pmarControls.colorbarLabel}${ind && activeIndicator !== 'ppi' ? ` · ${t.pmarControls[ind]}` : ''}`,
+        title,
         rows: legendRows(ppiClasses, counts, formatBound, c => {
-          const [r, g, b] = spectralR(c.t); return { color: `rgb(${r},${g},${b})` }
+          const [r, g, b] = (diverging ? divergingColor : spectralR)(c.t); return { color: `rgb(${r},${g},${b})` }
         }),
         selected: ppiHighlight, onToggle: toggleIn(setPpiHighlight), onReset: () => setPpiHighlight(new Set()),
       })
@@ -1515,6 +1662,19 @@ export default function App() {
     const a = activePmar
     if (!a) return {}
     const sc = a.info?.scenario ?? {}
+    if (a.kind === 'markov') {
+      const d = a.data, r = activePmarData
+      return {
+        title: a.title,
+        scenario: { label: sc.label_en || sc.label_it, start_time: sc.start_time,
+                    duration_days: sc.duration_days, pnum: sc.pnum, seedings: sc.seedings },
+        sourceLayer: MARKOV_EXPORT_SOURCES[d.source] ?? d.source,
+        valueLabel: `Markov ${r.layer}, day ${d.frames[r.frame].day}, `
+          + `${d.release} release every ${d.dt_days} d, `
+          + (d.unit === 'relative' ? 'concentration relative to the initial one' : 'fraction of the release'),
+        res: r.raster_res,
+      }
+    }
     const src = a.info?.params?.use_source
     const ind = a.view.indicator
     return {
@@ -1644,16 +1804,18 @@ export default function App() {
         <SimLayer simData={simData} currentStep={currentStep} />
         {/* ── Analisi PMAR: una heatmap (più area e layer sorgente) per analisi.
              Dall'ultima alla più recente, così la più recente sta sopra. ── */}
-        {[...analyses].reverse().filter(a => a.kind === 'pmar').map(a => {
+        {[...analyses].reverse().filter(a => a.kind === 'pmar' || a.kind === 'markov').map(a => {
           const isActive = a.id === activeAnalysisId
-          const v = a.view
+          const raster = rasterOf(a)
           return (
             <PmarAnalysisLayers
               key={a.id}
               analysis={a}
-              raster={rasterOf(a.data, v.indicator)}
+              raster={raster}
               isActive={isActive}
-              passagesLabel={t.pmarControls.tooltipPassages}
+              passagesLabel={a.kind === 'markov'
+                ? t.pmar.markov.tooltip[raster.layer === MarkovLayer.DIFFERENCE ? 'difference' : a.data.unit]
+                : t.pmarControls.tooltipPassages}
               classes={isActive ? ppiClasses : null}
               highlight={isActive ? ppiHighlight : NO_HIGHLIGHT}
             />
@@ -1691,12 +1853,19 @@ export default function App() {
           )
         })}
         <SeedDrawer
-          drawMode={drawMode}
+          drawMode={drawTarget === 'seed' ? drawMode : null}
           seedShape={seedShape}
           showSeedShape={showSeedShape && !scenarioAreaGeoJSON}
           onShapeDone={handleShapeDone}
         />
-        {pmarData && (
+        <SeedDrawer
+          palette="release"
+          drawMode={drawTarget === 'markov' ? drawMode : null}
+          seedShape={markovShape}
+          showSeedShape={showMarkovShape}
+          onShapeDone={handleShapeDone}
+        />
+        {rasterTools && (
           <HistogramDrawLayer
             active={activeMapTool === 'histogram'}
             rasterData={activePmarData}
@@ -1705,7 +1874,7 @@ export default function App() {
             }
           />
         )}
-        {pmarData && ['stats', 'threshold', 'csv', 'comparison'].includes(activeMapTool) && (
+        {rasterTools && ['stats', 'threshold', 'csv', 'comparison'].includes(activeMapTool) && (
           <RectSelectionLayer
             active={true}
             rasterData={activePmarData}
@@ -1718,7 +1887,7 @@ export default function App() {
             }}
           />
         )}
-        {pmarData && activeMapTool === 'profile' && (
+        {rasterTools && activeMapTool === 'profile' && (
           <LineSelectionLayer
             active={true}
             onResult={(lineData, layer) => {
@@ -1762,7 +1931,7 @@ export default function App() {
         pmarStopping={pmarStopping}
         pmarStatus={pmarStatus}
         pmarStatusType={pmarStatusType}
-        drawMode={drawMode}
+        drawMode={drawTarget === 'seed' ? drawMode : null}
         onStartDraw={handleStartDraw}
         onFinishDraw={handleFinishDraw}
         onUndoLastPolygon={handleUndoLastPolygon}
@@ -1795,6 +1964,20 @@ export default function App() {
         onStopConnectivity={async () => {
           if (connectivityJobId) { setConnectivityStopping(true); await dismissJob(connectivityJobId) }
         }}
+        markov={{
+          onRun: handleRunMarkov,
+          loading: markovLoading,
+          stopping: markovStopping,
+          onStop: async () => { if (markovJobId) { setMarkovStopping(true); await dismissJob(markovJobId) } },
+          shape: markovShape,
+          drawing: drawTarget === 'markov' ? drawMode : null,
+          onStartDraw: mode => handleStartDraw(mode, 'markov'),
+          onFinishDraw: handleFinishDraw,
+          onUndo: () => handleUndoLastPolygon('markov'),
+          onClear: () => handleClearSeedShape('markov'),
+          onShapeVisible: setShowMarkovShape,
+        }}
+        drawTarget={drawTarget}
       />
 
       <MapLegend sections={legendSections} labels={t.legend} />

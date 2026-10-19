@@ -16,7 +16,7 @@ export const STATE_VERSION = 1
 /** I job restano in Redis 7 giorni (worker/tasks.py `_TTL`): oltre, non c'è più niente da riprendere. */
 export const PENDING_MAX_AGE_MS = 7 * 24 * 3600 * 1000
 
-const KINDS = new Set(['pmar', 'connectivity'])
+const KINDS = new Set(['pmar', 'connectivity', 'markov'])
 
 export function toStored({ analyses, activeAnalysisId, pendingJobs }, { max, now = Date.now() }) {
   return {

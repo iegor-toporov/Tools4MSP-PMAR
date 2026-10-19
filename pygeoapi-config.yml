@@ -111,3 +111,8 @@ resources:
       type: process
       processor:
             name: processes.ConnectivityProcess.ConnectivityProcessor
+
+    markov:
+      type: process
+      processor:
+            name: processes.MarkovProcess.MarkovProcessor

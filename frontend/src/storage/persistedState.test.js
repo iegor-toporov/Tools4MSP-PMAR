@@ -35,6 +35,13 @@ describe('fromStored distrusts what it reads', () => {
       assert.deepEqual(fromStored(raw, { max: 10 }), { analyses: [], activeAnalysisId: null, pendingJobs: [] })
   })
 
+  it('keeps Markov analyses and jobs', () => {
+    const back = fromStored({ version: STATE_VERSION, analyses: [an('m', 'markov')],
+                              pendingJobs: [{ jobId: 'j', kind: 'markov' }] }, { max: 10, now: NOW })
+    assert.deepEqual(back.analyses.map(a => a.kind), ['markov'])
+    assert.deepEqual(back.pendingJobs.map(j => j.kind), ['markov'])
+  })
+
   it('drops malformed analyses and jobs', () => {
     const back = fromStored({
       version: STATE_VERSION,

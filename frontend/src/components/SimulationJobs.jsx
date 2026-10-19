@@ -1,5 +1,5 @@
 import { Paper, Stack, Group, Text, Button, Progress } from '@mantine/core'
-import { Status, STATUS_ICON, errorText, isActive, minutesSince, statusText } from '../scenarios/lifecycle'
+import { Status, errorText, isActive, minutesSince, statusText } from '../scenarios/lifecycle'
 
 /**
  * Simulazioni in coda, in calcolo e fallite, con Stop e Rimuovi.
@@ -38,7 +38,7 @@ export default function SimulationJobs({ entries, lang, p, canManage, busyIds, o
             <Stack key={sid} gap={3} data-testid={`sim-job-${sid}`}>
               <Group justify="space-between" gap={6} wrap="nowrap">
                 <Text size="xs" fw={500} truncate style={{ minWidth: 0 }} title={label}>
-                  {STATUS_ICON[sc.status]} {label}
+                  {label}
                 </Text>
                 {canManage && (failed || sc.job_id) && (
                   <Button size="compact-xs" variant="subtle" color={failed ? 'gray' : 'red'} type="button"
@@ -48,7 +48,9 @@ export default function SimulationJobs({ entries, lang, p, canManage, busyIds, o
                   </Button>
                 )}
               </Group>
-              <Text size="10px" c={failed ? 'red.5' : 'dimmed'}>
+              {/* Niente icone: lo stato lo dicono testo e colore — in calcolo in blu
+                  (con la barra), in coda in grigio, fallita in rosso. */}
+              <Text size="10px" c={failed ? 'red.5' : running ? 'blue.5' : 'dimmed'} fw={running ? 600 : 400}>
                 {statusText(sc, p)}
                 {failed && `: ${errorText(sc.error, p.errors)}`}
                 {minutes != null && ` · ${p.startedAgo.replace('{min}', minutes)}`}

@@ -28,6 +28,14 @@ const REDS = [
   [239, 59, 44],   [203, 24, 29],   [165, 15, 21],   [103, 0, 13],
 ]
 
+// RdBu_r di matplotlib (ColorBrewer, 11 tappe): blu sotto zero, bianco a zero, rosso
+// sopra. Per le mappe di differenza, dove il segno conta quanto il valore.
+const RDBU_R = [
+  [5, 48, 97],    [33, 102, 172], [67, 147, 195], [146, 197, 222], [209, 229, 240],
+  [247, 247, 247],
+  [253, 219, 199], [244, 165, 130], [214, 96, 77],  [178, 24, 43],   [103, 0, 31],
+]
+
 function interpolate(stops, t) {
   const x = Math.max(0, Math.min(1, t))
   const n = stops.length - 1
@@ -39,6 +47,36 @@ function interpolate(stops, t) {
 
 /** Colore Spectral_r per t ∈ [0,1], come terna [r, g, b]. */
 export const spectralR = t => interpolate(SPECTRAL_R, t)
+
+/** Colore RdBu_r per t ∈ [0,1] (0.5 = zero), come terna [r, g, b]. */
+export const divergingColor = t => interpolate(RDBU_R, t)
+
+/** Posizione di un valore con segno sulla scala divergente: [-dmax, dmax] → [0, 1]. */
+export function divergingNorm(val, dmax) {
+  if (!Number.isFinite(val) || !(dmax > 0)) return null
+  return Math.max(0, Math.min(1, (val / dmax + 1) / 2))
+}
+
+/**
+ * Classi simmetriche attorno a zero, per le differenze. `n` pari: zero è un confine,
+ * non sta in mezzo a una classe che mescolerebbe sovrastima e sottostima. Gli
+ * estremi sono aperti, come per le altre classi lineari.
+ */
+export function divergingClasses(dmax, n = 6) {
+  const d = dmax > 0 ? dmax : 1
+  const step = (2 * d) / n
+  return Array.from({ length: n }, (_, i) => {
+    // Dal centro, non da -d: così il confine a zero è esattamente 0 e non 1e-17.
+    const from = (i - n / 2) * step
+    const to   = (i + 1 - n / 2) * step
+    return {
+      lo: i === 0 ? -Infinity : from,
+      hi: i === n - 1 ? Infinity : to,
+      from, to,
+      t: ((from + to) / 2 / d + 1) / 2,
+    }
+  })
+}
 
 /** Colore `Reds` per t ∈ [0,1], come stringa esadecimale (lo stesso formato di PMAR). */
 export function redsColor(t) {
