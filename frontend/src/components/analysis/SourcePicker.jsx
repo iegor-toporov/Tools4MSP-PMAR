@@ -5,21 +5,21 @@ import { RadioCard } from '../ui'
 const EMODNET_SOURCES = ['windfarms', 'offshore_installations', 'msp_zones']
 
 /**
- * Layer sorgente come lista di schede radio, come nel mockup: Uniform, i layer EMODnet
- * delle attività umane, un layer dell'utente. Per Propagate c'è in più l'area disegnata
- * sulla mappa (`allowArea`). `value` è la chiave scelta ('none', 'windfarms', …, 'area').
+ * Layer sorgente di Dispersal come lista di schede radio, come nel mockup: Uniform, i
+ * layer EMODnet delle attività umane, un layer dell'utente. `value` è la chiave scelta
+ * ('none', 'windfarms', …, 'geotiff').
  *
  * `emodnet[key]` = { loading, empty, emptyText } dalla preview in App;
  * `geotiff` = { b64, name, onFile(file) }.
  */
-export default function SourcePicker({ value, onPick, emodnet, geotiff, allowArea, area, labels }) {
+export default function SourcePicker({ value, onPick, emodnet, geotiff, labels }) {
   const s = labels
   const fileRef = useRef(null)
 
   return (
     <Stack gap={6} role="radiogroup">
       <RadioCard selected={value === 'none'} onSelect={() => onPick('none')}
-                 title={s.uniform} description={allowArea ? s.uniformDescMarkov : s.uniformDesc} />
+                 title={s.uniform} description={s.uniformDesc} />
 
       <Text size="10px" fw={600} c="dimmed" mt={2}>{s.emodnet}</Text>
       {EMODNET_SOURCES.map(key => (
@@ -49,12 +49,6 @@ export default function SourcePicker({ value, onPick, emodnet, geotiff, allowAre
           </Text>
         </Button>
       </RadioCard>
-      {allowArea && (
-        <RadioCard selected={value === 'area'} onSelect={() => onPick('area')}
-                   title={s.areaName} description={s.areaDesc}>
-          {area}
-        </RadioCard>
-      )}
     </Stack>
   )
 }

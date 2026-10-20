@@ -1,25 +1,24 @@
-"""Catene di Markov da traiettorie lagrangiane (Bosi et al., Paper III della tesi).
+"""Catene di Markov da traiettorie lagrangiane.
 
-Il calcolo, senza I/O: posizioni delle particelle in ingresso, matrici e mappe in
-uscita. Solo numpy e scipy, così si verifica da solo (vedi la sezione Verifica in
-README, "Markov process").
-
-Notazione della tesi:
+Il calcolo, senza I/O: posizioni delle particelle in ingresso, matrice e mappe in
+uscita. Solo numpy e scipy. Fa lo stesso conto della libreria PMAR, verificato con
+`get_cm`, `get_histogram` e `predict_with_cm` (vedi README, "Markov process"):
 
 - griglia regolare di celle; pᵢⱼ = Nᵢⱼ / Nᵢ, frazione delle particelle che a t₀ stanno
-  nella cella i e dopo Δt stanno nella cella j (eq. 1);
-- rilascio singolo:   q(t₀ + kΔt) = q(t₀) · Mᵏ                       (eq. 2)
-- rilascio continuo:  q_acc(t₀ + nΔt) = Σₖ₌₁ⁿ q(t₀) · Mᵏ             (eq. 3)
-- con più seeding le matrici si combinano (M̄, eq. 4).
+  nella cella i e dopo Δt stanno nella cella j (`PMAR.get_cm`);
+- condizione iniziale q₀ = particelle per cella a t₀ (`PMAR.get_histogram(t=0,
+  dim=['trajectory'])`);
+- previsione dopo k passi: q₀ · Mᵏ (`PMAR.predict_with_cm`).
 
-Scelte che vanno oltre la tesi, tutte motivate nel codice:
+Scelte motivate nel codice:
 
-- **dominio** = celle con almeno una particella a t₀. Una cella senza particelle in
-  partenza ha la riga tutta a zero: la massa che ci arriva sparirebbe al passo
-  dopo. Togliendola dal dominio, quella massa conta subito come uscita, che è lo
-  stato assorbente "fuori dal dominio" dell'eq. 8 (1 − Σⱼ pᵢⱼ);
+- **dominio** = celle con almeno una particella a t₀ o dopo Δt. Le altre celle della
+  griglia non ricevono mai niente e restano fuori, così il vettore resta piccolo. Una
+  cella raggiunta solo dopo Δt ha la riga a zero, come in `PMAR.get_cm`: la massa che
+  ci arriva si vede per un passo e al passo dopo esce dalla catena;
 - **particelle senza posizione** (spiaggiate, o uscite dal forcing: OpenDrift le
-  scrive NaN) contano come uscite dal dominio;
+  scrive NaN) e quelle uscite dalla griglia escono dalla catena: le righe di M
+  sommano a meno di 1, come in `PMAR.get_cm` senza buffer;
 - **più seeding**: stima congiunta Σₛ Nᵢⱼ / Σₛ Nᵢ, che coincide con la media delle
   matrici quando i seeding rilasciano le stesse particelle nelle stesse celle (il
   caso di OpenDrift, che semina su una griglia di punti fissa) ed è più stabile
@@ -82,16 +81,18 @@ def transition_matrix(c0_list, c1_list, n_cells):
 
     Returns:
         tuple: ``(M, cells, Ni)`` — M (csr, D × D) sulle sole celle del dominio, con
-        righe che sommano a ≤ 1 (il resto è uscito); ``cells`` gli indici di griglia
-        delle D celle; ``Ni`` le particelle di ciascuna a t₀.
+        righe che sommano a ≤ 1 (il resto è uscito; 0 per le celle vuote a t₀);
+        ``cells`` gli indici di griglia delle D celle; ``Ni`` le particelle di
+        ciascuna a t₀, sommate sui seeding (0 per le celle raggiunte solo dopo Δt).
     """
     c0 = np.concatenate([np.asarray(c) for c in c0_list])
     c1 = np.concatenate([np.asarray(c) for c in c1_list])
     start = c0 >= 0
     Ni_full = np.bincount(c0[start], minlength=n_cells)
-    cells = np.flatnonzero(Ni_full)
-    if not len(cells):
+    if not Ni_full.any():
         raise ValueError('no particle inside the grid at t0')
+    reached = np.bincount(c1[c1 >= 0], minlength=n_cells)
+    cells = np.flatnonzero((Ni_full > 0) | (reached > 0))
     to_dom = np.full(n_cells, -1, dtype=np.int64)
     to_dom[cells] = np.arange(len(cells))
 
@@ -102,15 +103,17 @@ def transition_matrix(c0_list, c1_list, n_cells):
     D = len(cells)
     Nij = coo_array((np.ones(int(stay.sum())), (i[stay], j[stay])), shape=(D, D)).tocsr()
     Ni = Ni_full[cells].astype(float)
-    M = csr_array(diags(1.0 / Ni) @ Nij)
+    inv = np.divide(1.0, Ni, out=np.zeros_like(Ni), where=Ni > 0)
+    M = csr_array(diags(inv) @ Nij)
     return M, cells, Ni
 
 
-def propagate(M, q0, k_max, continuous=False):
-    """Stati q₀·Mᵏ per k = 0..k_max (eq. 2), o cumulati Σᵢ₌₁ᵏ q₀·Mⁱ (eq. 3).
+def propagate(M, q0, k_max):
+    """Stati q₀·Mᵏ per k = 0..k_max.
 
-    Il frame 0 è sempre il rilascio q₀. Ogni passo è un prodotto vettore-matrice
-    sparso: non si forma mai Mᵏ, che si riempirebbe a ogni potenza.
+    Il frame 0 è la condizione iniziale. Ogni passo è un prodotto vettore-matrice
+    sparso: non si forma mai Mᵏ, che si riempirebbe a ogni potenza (come fa
+    `PMAR.predict_with_cm`).
 
     Returns:
         list[np.ndarray]: k_max + 1 vettori sul dominio.
@@ -118,51 +121,10 @@ def propagate(M, q0, k_max, continuous=False):
     MT = M.T.tocsr()
     q = np.asarray(q0, dtype=float)
     frames = [q.copy()]
-    acc = np.zeros_like(q)
     for _ in range(k_max):
         q = MT @ q
-        if continuous:
-            acc = acc + q
-            frames.append(acc.copy())
-        else:
-            frames.append(q.copy())
+        frames.append(q.copy())
     return frames
-
-
-def particle_weights(c0, cells, Ni, q0, n_cells):
-    """Peso di ogni particella perché la simulazione trasporti lo stesso q₀: la
-    massa q₀ᵢ di una cella si divide fra le sue Nᵢ particelle (come i pesi PMAR)."""
-    c0 = np.asarray(c0)
-    to_dom = np.full(n_cells, -1, dtype=np.int64)
-    to_dom[cells] = np.arange(len(cells))
-    d = np.where(c0 >= 0, to_dom[np.clip(c0, 0, None)], -1)
-    w = np.zeros(len(c0), dtype=float)
-    ok = d >= 0
-    w[ok] = np.asarray(q0, dtype=float)[d[ok]] / np.asarray(Ni, dtype=float)[d[ok]]
-    return w
-
-
-def reference_map(ck_list, w_list, cells, n_cells):
-    """Mappa della simulazione: somma dei pesi delle particelle che a quell'istante
-    stanno in ciascuna cella del dominio (fuori dominio = uscite)."""
-    to_dom = np.full(n_cells, -1, dtype=np.int64)
-    to_dom[cells] = np.arange(len(cells))
-    out = np.zeros(len(cells), dtype=float)
-    for ck, w in zip(ck_list, w_list):
-        ck = np.asarray(ck)
-        d = np.where(ck >= 0, to_dom[np.clip(ck, 0, None)], -1)
-        ok = d >= 0
-        out += np.bincount(d[ok], weights=w[ok], minlength=len(cells))
-    return out
-
-
-def error_stats(pred, ref):
-    """e_max con segno (come la tesi: >0 la catena sovrastima) ed errore medio assoluto."""
-    diff = np.asarray(pred) - np.asarray(ref)
-    if not len(diff):
-        return 0.0, 0.0
-    i = int(np.argmax(np.abs(diff)))
-    return float(diff[i]), float(np.mean(np.abs(diff)))
 
 
 def round_sig(a, digits=4):

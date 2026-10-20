@@ -188,12 +188,12 @@ export default function PmarPanel({
   const [pnum,          setPnum]          = useState('1000')
   const [timeStepHours, setTimeStepHours] = useState('1')
 
-  // Layer sorgente GeoTIFF dell'utente: comune a Dispersal e Propagate, come `useSource`.
+  // Layer sorgente GeoTIFF dell'utente, per Dispersal (come `useSource`).
   const [geotiffB64,  setGeotiffB64]  = useState(null)
   const [geotiffName, setGeotiffName] = useState('')
 
-  // Sezioni aperte dell'Analisi.
-  const [openSections, setOpenSections] = useState(['dispersal'])
+  // Sezioni aperte dell'Analisi: all'avvio tutte chiuse, così si vedono tutte e tre.
+  const [openSections, setOpenSections] = useState([])
 
   const [scenarioStatuses, setScenarioStatuses] = useState({})
   const [scenarioId,       setScenarioId]       = useState('')
@@ -462,9 +462,9 @@ export default function PmarPanel({
     offshore_installations: { loading: offshoreLoading,  empty: offshoreEmpty,  emptyText: p.useOffshoreEmpty },
     msp_zones:              { loading: mspZonesLoading,  empty: mspZonesEmpty,  emptyText: p.useMspZonesEmpty },
   }
-  const renderSourcePicker = ({ value, onPick, allowArea = false, area = null }) => (
-    <SourcePicker value={value} onPick={onPick} allowArea={allowArea} area={area}
-                  emodnet={emodnetState} geotiff={geotiff} labels={t.analysis.sources} />
+  const renderSourcePicker = ({ value, onPick }) => (
+    <SourcePicker value={value} onPick={onPick} emodnet={emodnetState} geotiff={geotiff}
+                  labels={t.analysis.sources} />
   )
 
   const ctx = { t, sc, scenarioId, scenarioLabel, scenarioInfo, ready: !!sc, limitNote, analysesFull, geotiff }
@@ -929,9 +929,6 @@ export default function PmarPanel({
                     draw={draw}
                     matrices={matrices}
                     active={sectionActive('propagate')}
-                    useSource={useSource}
-                    onUseSourceChange={onUseSourceChange}
-                    sourcePicker={args => renderSourcePicker({ ...args, allowArea: true })}
                   />
                 </Accordion.Panel>
               </Accordion.Item>

@@ -21,8 +21,8 @@ DTO-PMAR/
 │   ├── OpenDriftProcess.py              # OGC API process: runs OpenDrift with CMEMS data
 │   ├── PMARProcess.py                   # OGC API process: PMAR density analysis on a precomputed scenario
 │   ├── ConnectivityProcess.py           # OGC API process: connectivity matrix + graph metrics between areas
-│   ├── MarkovProcess.py                 # OGC API process: Markov-chain dispersal forecast with validation
-│   ├── markov_core.py                   # Transition matrix, propagation, Lagrangian reference (numpy/scipy only)
+│   ├── MarkovProcess.py                 # OGC API process: Markov-chain propagation of the particle distribution
+│   ├── markov_core.py                   # Transition matrix and propagation, as PMAR (numpy/scipy only)
 │   ├── PrecomputeProcess.py             # OGC API process: precomputes and stores a trajectory NC file
 │   ├── ScenarioStatusProcess.py         # OGC API process: lists saved scenarios + Tools4MSP areas
 │   ├── scenario_state.py                # Scenario lifecycle: state in the JSON, reconciliation with Redis jobs
@@ -347,15 +347,15 @@ formats grow with the number of links rather than with n².
 
 #### Propagate forward
 
-A Markov-chain approximation of tracer propagation after multiples of Δt, using a transition
-matrix (`markov` process, see [Markov process](#markov-process)).
+With a transition matrix built on a regular grid, the particle distribution at t=0 is
+propagated forward in time with a Markov chain, in multiples of the interval Δt (`markov`
+process, see [Markov process](#markov-process)). Once the layer exists, a slider at the bottom
+centre of the map steps through the multiples 0–100 of Δt.
 
 | Parameter | Options | Default |
 |---|---|---|
 | Transition matrix | *Use an existing matrix*: a *Structural connectivity* layer of this simulation with transition probability on a generated grid — its grid and Δt are reused, so the chain is that matrix. *Create a new matrix*: resolution (0.05°–5°) and a box drawn with *Draw bbox* | existing when one is available |
-| Time interval Δt | Days (shortcuts 1 / 5 / 10); read-only with an existing matrix | 10 |
-| Steps | 1–100 multiples of Δt; the horizon is steps × Δt and may exceed the simulation | 100 |
-| Release (collapsible) | Single or continuous (every Δt); source: Uniform, EMODnet layers, Custom GeoTIFF, or an area drawn on the map (orange) | Single, Uniform |
+| Time interval Δt | Days, typed in the field; read-only with an existing matrix | 10 |
 
 Only transition matrices on a generated grid are offered as existing ones, the only ones a
 Markov chain can use: passage matrices, and matrices on an uploaded shapefile or on the
@@ -716,88 +716,69 @@ at all despite a matrix full of values.
 
 **Endpoint:** `POST /processes/markov/execution` (async, default Celery queue)
 
-A statistical forecast of tracer dispersal with Markov chains:
+Propagates the particle distribution of a pre-computed scenario forward in time with a Markov
+chain. It is PMAR's own computation:
 
-- From the trajectories of a pre-computed scenario, a **transition matrix** between the cells of a
-  regular grid is estimated: pᵢⱼ = Nᵢⱼ / Nᵢ, the share of the particles in cell i at t₀ that are in
-  cell j after Δt.
-- A tracer release is then propagated step by step:
-  - **single** release: q·Mᵏ;
-  - **continuous** release (the same release every Δt): Σₖ₌₁ⁿ q·Mᵏ.
-- Frames can go **beyond the simulation length**. While they stay within it, every frame is
-  compared with what the particles actually do.
+| Step | PMAR | Here (`processes/markov_core.py`, numpy and scipy only) |
+|---|---|---|
+| Transition matrix after Δt on a regular grid: pᵢⱼ = Nᵢⱼ / Nᵢ, the share of the particles in cell i at t₀ that are in cell j after Δt | `get_cm(t, res, study_area)` | `transition_matrix` |
+| Initial condition: particles per cell at t=0 | `get_histogram(res, study_area, t=0, dim=['trajectory'])` | `Nᵢ` (mean over the seedings) |
+| Distribution after k steps: q₀ · Mᵏ | `predict_with_cm(initial_condition, cm, k)` | `propagate`, all steps in one pass |
+
+Verified against the PMAR functions on the same scenario, grid and Δt: identical at k = 1
+(difference 7e-15) and equal to 1e-4 afterwards, which is the 4-significant-digit rounding of
+the values sent to the browser. Doing it here avoids PMAR's point-in-polygon pass per particle
+and computes the 100 steps in one go.
 
 | Input | Description |
 |---|---|
 | `scenario_id` | Pre-computed scenario |
 | `res` | Grid resolution, 0.05–5 degrees (default 0.25) |
-| `bbox` | `[lon_min, lat_min, lon_max, lat_max]` of the grid; defaults to the seeding area |
-| `dt_days` | Transition interval Δt, from one time step to the simulation length |
-| `steps` | Number of Δt steps, 1–100 (default 100); the horizon is `steps × Δt` and may exceed the simulation. `horizon_days` is still accepted when `steps` is absent |
-| `release` | `single` or `continuous` |
-| `source` | `uniform`, `windfarms`, `offshore_installations`, `msp_zones`, `geotiff`, `area` |
-| `geotiff_b64`, `area_geojson` | The emission raster or the drawn release area, when the source needs them |
+| `bbox` | `[lon_min, lat_min, lon_max, lat_max]` of the grid; defaults to the seeding area. With the `res` and `bbox` of a connectivity grid the matrix is that analysis's one |
+| `dt_days` | Time interval Δt, from one time step to the simulation length |
 
-**How it is computed** (`processes/markov_core.py`, numpy and scipy only):
+**How it is computed:**
 
-- **Grid.** A regular grid aligned to multiples of `res` over the seeding area. Particles are
-  assigned to cells arithmetically (`floor((lon − lon₀) / res)`), not by point-in-polygon. The
-  matrix equals `PMAR.get_cm` on the same cells, verified to 0.0; the only difference is a
-  particle lying exactly on a cell edge, which shapely's `within` drops and the arithmetic keeps.
-- **Domain.** The cells holding at least one particle at t₀. Mass moving anywhere else, or
-  particles without a position (stranded, or outside the forcing: OpenDrift writes NaN), counts as
-  **left the domain**. This is an absorbing "outside" state. Without it, a cell with no
-  departing particles would swallow the mass that reaches it.
-- **Multi-seeding.** Pooled estimate Σₛ Nᵢⱼ / Σₛ Nᵢ. It equals the mean of the per-seeding matrices
-  (M̄) when every seeding releases the same particles in the same cells, as OpenDrift's
-  fixed seeding grid does.
-- **Initial state.**
-  - `uniform`: 1 in every domain cell, giving relative concentration (1 = initial);
-  - other sources: rasterized on the same grid with the PMAR helpers (`_gdf_to_use_raster`,
-    `_geotiff_to_use_raster`), then normalised so that each release sums to 1 (fraction of the
-    release).
-- **Validation.** Each particle carries q₀(cell at t₀)/Nᵢ, and the reference map is the weighted
-  histogram of the particles at kΔt. For a continuous release it is Σᵢ₌₁ᵏ of those maps.
-  Per frame the process returns the difference (Markov − simulation), the signed maximum error, the
-  mean absolute error, and the mass that left the domain in both.
-  - At k = 1 the chain matches the simulation **exactly**, by construction. This is the method's
-    built-in check, verified at 0.0 together with mass conservation.
+- **Grid.** A regular grid aligned to multiples of `res`. Particles are assigned to cells
+  arithmetically (`floor((lon − lon₀) / res)`), not by point-in-polygon.
+- **Domain.** The cells holding a particle at t₀ or after Δt; the others never receive anything.
+  A cell reached only after Δt has an empty row, as in `get_cm`: what arrives there is shown for
+  one step and then leaves the chain. Particles without a position (stranded, or outside the
+  forcing: OpenDrift writes NaN) and particles leaving the grid leave the chain too, so rows sum
+  to less than 1.
+- **Multi-seeding.** Pooled estimate Σₛ Nᵢⱼ / Σₛ Nᵢ, equal to the mean of the per-seeding
+  matrices when every seeding releases the same particles in the same cells, as OpenDrift's fixed
+  seeding grid does. The initial condition is the mean over the seedings, so values stay
+  "particles of one simulation".
+- **Steps.** Always 100 multiples of Δt (frames 0–100), and they may go beyond the simulation
+  length. Only for very fine grids, where `cells × 101` would exceed 400 000 values in the
+  payload, are there fewer.
 
 **Warnings** (`warnings`, with a code the UI translates):
 
 - `weak_cells`: cells with fewer than 30 particles per seeding at t₀;
 - `dt_short`: half of the cells keep more than 90% of their particles after Δt, so Δt is too
-  short for the grid and transport is underestimated;
-- `beyond_simulation`: frames after this day have no reference;
-- `source_outside`: part of the source lies outside the domain.
-
-**Payload limit.** The frames travel whole to the browser, so `cells × (steps + 1)` must stay
-within 400 000 values; beyond it the process answers 400 with the number of steps that would fit.
+  short for the grid and transport is underestimated.
 
 **Output:**
 - `grid`, `grid_bbox` and `cells`, the domain as flat row × nx + col indices, row 0 to the south;
-- `steps`, the number of Δt steps computed;
-- `frames`: `[{k, day, values, mass_in, mass_out, released, ref: {values, emax, mae, mass_out} | null}]`;
+- `steps`, `dt_days`, `horizon_days`;
+- `frames`: `[{k, day, values}]`, particles per cell after k × Δt;
 - `vmin` / `vmax`, common to all frames so colours stay comparable along the slider;
-- `diff_max` for the symmetric difference scale;
-- `source_geojson`, the parameters and `bounds`.
+- `n_particles` (per cell at t₀), `unit: "particles"`, the parameters and `bounds`.
 
-The frontend rebuilds the PMAR raster of any frame and layer (`frontend/src/markov/frames.js`). So
-the heatmap, legend and analysis tools work on the frame shown, except on the difference map,
-whose values are signed.
+The frontend rebuilds the raster of any frame (`frontend/src/markov/frames.js`), so the heatmap,
+legend and analysis tools work on the frame shown.
 
-**Beaching.** Markov chains need a conservative tracer (no beaching). A stranded particle has
-no position afterwards (OpenDrift writes NaN), so it falls in no cell and in no buffer: with
-`get_cm(buffer=…)` its row would no longer sum to 1. Here it counts as having left the domain, so
-mass is still accounted for. For forecasts, pre-compute the scenario with
-*No beaching (for Propagate)* (`beaching: false`); the Propagate section warns when the selected scenario has
-beaching on, and the card then labels the lost mass "left or beached".
+**Beaching.** A stranded particle has no position afterwards (OpenDrift writes NaN), so it falls
+in no cell and leaves the chain. For forecasts, pre-compute the scenario with *No beaching (for
+Propagate)* (`beaching: false`); the Propagate section warns when the selected scenario has
+beaching on.
 
-**Data requirement.** About 50 particles per cell are recommended. With the 10 000 particles of most
-existing scenarios, cells at 0.25° hold fewer than 30, and the forecast diffuses more than the
-simulation: it loses more mass from the domain and spreads more. For meaningful forecasts, use a
-scenario seeded uniformly over the area with as many particles as possible (up to 100 000) and a
-coarse grid.
+**Data requirement.** About 50 particles per cell are recommended. With the 10 000 particles of
+most existing scenarios, cells at 0.25° hold fewer than 30 and the forecast diffuses more than the
+particles would. For meaningful forecasts, use a scenario seeded uniformly over the area with as
+many particles as possible (up to 100 000) and a coarse grid.
 
 ## Anthropogenic layers
 
@@ -988,7 +969,7 @@ betweenness), the arrows switch, the selected node with incoming / outgoing / bo
 | Layer | File |
 |---|---|
 | Dispersal | The backend's GeoTIFF for the indicator shown (`_ppi`, `_max`, `_q90`, `_std`) |
-| Propagate | The frame and level shown (forecast, simulation or difference), written in the browser |
+| Propagate | The step shown, written in the browser |
 | Connectivity on a generated grid | The selected metric, one cell per node |
 | Connectivity on polygons | *Download GeoJSON*: the polygons with their metrics (not a raster) |
 
@@ -1000,10 +981,9 @@ EPSG:4326 (ModelPixelScale, ModelTiepoint, GeoKeys), GDAL nodata 0 (none for the
 ### Map
 
 - **Theme and language bar** (top left, next to the main panel; the map zoom control sits below it): light/dark theme toggle (switches CartoDB basemap and all panel colours) and IT/EN language switch. Copernicus Marine credentials are configured server-side via environment variables (see `.env`).
-- **Propagate forward · Markov steps** (bottom, next to the legend), shown when the active layer
-  is a Propagate one: the step slider (0 to the number of steps, with play), the label
-  `k× Δt = N days`, the *Forecast / Simulation / Difference* choice (the last two disabled beyond
-  the simulation), the share that left the domain and the error of the frame
+- **Propagate forward · Markov steps** (bottom centre, next to the legend), shown when the
+  active layer is a Propagate one: the step slider from 0× to 100× Δt, with play, and the label
+  `k× Δt = N days`
 - **Interactive legend** (bottom left, next to the main panel): sections for the **active analysis** — heatmap (6 log classes between `vmin` and `vmax`), connectivity polygons (5 linear classes of the active metric, plus unreliable polygons) and arrows (probability bands 0–1, 1–5, 5–10, 10–25, 25–50, 50–100 %). Each row shows its colour, range and count. Clicking rows switches classes on and off: on the map the chosen classes keep their colours and everything else is dimmed, and the arrow and node-selection filters combine. The × resets a section; a new result or indicator resets it too. Colours come from `src/legend/classes.js`, the same module the layers use, so legend and map cannot drift apart. When a new section appears the older ones collapse.
 - **Analysis tools** (bottom right, below the Layers panel): *PMAR heatmap* tools — Histogram, Statistics, Profile, Threshold, CSV, Compare — on the active Dispersal or Propagate layer; disabled with a hint otherwise. "Close all (n)" appears when analysis windows are open. The connectivity matrix opens from its layer card.
 

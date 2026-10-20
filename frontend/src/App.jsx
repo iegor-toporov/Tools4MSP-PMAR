@@ -30,7 +30,7 @@ import { encodeGeoTiff, connectivityRaster, fileStem } from './export/geotiff'
 import { spectralR, logNorm, linNorm, logClasses, linearClasses, classIndex,
          PROBABILITY_BANDS, redsColor, formatBound, formatPercent,
          divergingColor, divergingNorm, divergingClasses } from './legend/classes'
-import { MarkovLayer, clampFrame, effectiveLayer, markovRaster } from './markov/frames'
+import { clampFrame, frameDay, markovRaster } from './markov/frames'
 import { PmarConnectivityMatrix } from './components/PmarConnectivityMatrix'
 import MapLegend from './components/MapLegend'
 import 'leaflet/dist/leaflet.css'
@@ -462,9 +462,6 @@ function ConnectivityEdgesLayer({ geojson, visible, selectedNode, direction, hig
 }
 
 // ── PMAR seeding area polygon layer ─────────────────────────────────────────
-// Area di rilascio di un'analisi Markov: arancio, come mentre la si disegna.
-const RELEASE_AREA_STYLE = { color: '#f97316', fillColor: '#fdba74' }
-
 function SeedingAreaLayer({ geojson, visible, palette = null }) {
   const map      = useMap()
   const layerRef = useRef(null)
@@ -708,10 +705,6 @@ function describeWarning(w, t) {
     return fill(m.warnWeakCells, { count: w.count, total: w.total, n: w.min_particles })
   if (w.code === 'dt_short')
     return fill(m.warnDtShort, { pct: Math.round(w.median_stay * 100) })
-  if (w.code === 'beyond_simulation')
-    return fill(m.warnBeyondSimulation, { day: w.day, sim: w.sim_days })
-  if (w.code === 'source_outside')
-    return fill(m.warnSourceOutside, { pct: Math.round(w.fraction * 100) })
   return w.message ?? ''
 }
 
@@ -791,22 +784,11 @@ function ComparisonView({ areas, mapRef, mapTheme, onRemoveArea, onClose }) {
 function rasterKeyOf(a) {
   if (a.kind !== 'markov') return a.view.indicator ?? 'ppi'
   const k = clampFrame(a.data, a.view.frame)
-  return `markov:${k}:${effectiveLayer(a.data, k, a.view.layer)}`
+  return `markov:${k}`
 }
 
 /** Giorno di un frame: interi senza decimali, frazioni (Δt in ore) con due. */
 const formatDay = d => (Number.isInteger(d) ? `${d}` : `${+d.toFixed(2)}`)
-
-// Sorgente di un'analisi Markov nell'intestazione dei file degli strumenti (in inglese,
-// come le altre intestazioni).
-const MARKOV_EXPORT_SOURCES = {
-  uniform:                'uniform over the domain',
-  windfarms:              'EMODnet wind farms',
-  offshore_installations: 'EMODnet offshore installations',
-  msp_zones:              'EMODnet MSP aquaculture zones',
-  geotiff:                'uploaded GeoTIFF',
-  area:                   'drawn release area',
-}
 
 function getActivePmarData(data, indicator) {
   if (!data) return null
@@ -892,26 +874,12 @@ const SOURCE_LAYER_COMPONENTS = [
   ['msp_zones_geojson', MspZonesLayer],
 ]
 
-const MARKOV_SOURCE_LAYERS = {
-  windfarms:              WindFarmsLayer,
-  offshore_installations: OffshoreInstallationsLayer,
-  msp_zones:              MspZonesLayer,
-}
-
 /**
- * Layer sorgente di un'analisi (PMAR: i layer EMODnet che il risultato si porta dietro;
- * Markov: la sorgente del rilascio, l'area disegnata in arancio come mentre la si
- * disegnava). Li mostra il layer di base "Source layer", per il layer attivo.
+ * Layer sorgente di un'analisi Dispersal: i layer EMODnet che il risultato si porta
+ * dietro. Li mostra il layer di base "Source layer".
  */
 function AnalysisSourceLayers({ analysis, visible }) {
   const { data } = analysis
-  if (analysis.kind === 'markov') {
-    if (!data.source_geojson) return null
-    const Layer = MARKOV_SOURCE_LAYERS[data.source]
-    return Layer
-      ? <Layer geojson={data.source_geojson} visible={visible} />
-      : <SeedingAreaLayer geojson={data.source_geojson} palette={RELEASE_AREA_STYLE} visible={visible} />
-  }
   return SOURCE_LAYER_COMPONENTS.map(([key, Layer]) => data[key] ? (
     <Layer key={key} geojson={data[key]} visible={visible} />
   ) : null)
@@ -931,7 +899,6 @@ function BaseLayersOf({ analysis, base }) {
 /** Ha un layer sorgente da mostrare (cioè non è uniforme)? */
 function hasSourceLayer(a) {
   if (!a) return false
-  if (a.kind === 'markov') return !!a.data.source_geojson
   if (a.kind === 'pmar') return SOURCE_LAYER_COMPONENTS.some(([key]) => a.data[key]?.features?.length)
   return false
 }
@@ -988,7 +955,7 @@ const DEFAULT_VIEW = {
   indicator: 'ppi',                                            // PMAR
   metric: 'in_strength', showEdges: true,                      // connettività
   selectedNode: null, edgeDirection: 'both',
-  frame: null, layer: 'forecast',                              // Markov (null = ultimo frame)
+  frame: null,                                                 // Propagate (null = ultimo frame)
 }
 
 /** Interruttori dei layer di base di un'analisi (le viste salvate prima non li hanno). */
@@ -1080,8 +1047,8 @@ export default function App() {
   // Forme disegnate per il pannello Analisi, separate dall'area di semina: l'area di
   // rilascio di Propagate e i riquadri delle griglie (connettività e matrice nuova).
   // Il disegno va all'una o all'altra secondo `drawTarget` ('seed' = area di semina).
-  const [extraShapes,  setExtraShapes]  = useState({ markov: null, connBbox: null, propBbox: null })
-  const [extraVisible, setExtraVisible] = useState({ markov: false, connBbox: false, propBbox: false })
+  const [extraShapes,  setExtraShapes]  = useState({ connBbox: null, propBbox: null })
+  const [extraVisible, setExtraVisible] = useState({ connBbox: false, propBbox: false })
   const [drawTarget,   setDrawTarget]   = useState('seed')
   // Id dell'analisi di connettività di cui è aperta la matrice (null = chiusa).
   const [showConnMatrix,       setShowConnMatrix]       = useState(null)
@@ -1609,7 +1576,7 @@ export default function App() {
     if (!byKey) { byKey = new Map(); rasterCache.current.set(a.data, byKey) }
     if (!byKey.has(key)) {
       byKey.set(key, a.kind === 'markov'
-        ? markovRaster(a.data, a.view.frame, a.view.layer)
+        ? markovRaster(a.data, a.view.frame)
         : getActivePmarData(a.data, a.view.indicator))
     }
     return byKey.get(key)
@@ -1649,8 +1616,8 @@ export default function App() {
       const counts = countByClass(activePmarData.raster_values.flat().filter(v => v !== 0), ppiClasses)
       const ind = INDICATOR_LABEL_KEYS[activeIndicator]
       const title = activePmar.kind === 'markov'
-        ? `${t.pmar.markov.layers[activePmarData.layer]} · ${t.pmar.markov.dayN.replace('{d}',
-            formatDay(pmarData.frames[activePmarData.frame].day))}`
+        ? `${t.pmar.markov.legendTitle} · ${t.pmar.markov.dayN.replace('{d}',
+            formatDay(frameDay(pmarData, activePmarData.frame)))}`
         : `${t.pmarControls.colorbarLabel}${ind && activeIndicator !== 'ppi' ? ` · ${t.pmarControls[ind]}` : ''}`
       out.push({
         key: 'ppi',
@@ -1710,10 +1677,8 @@ export default function App() {
         title: a.title,
         scenario: { label: sc.label_en || sc.label_it, start_time: sc.start_time,
                     duration_days: sc.duration_days, pnum: sc.pnum, seedings: sc.seedings },
-        sourceLayer: MARKOV_EXPORT_SOURCES[d.source] ?? d.source,
-        valueLabel: `Markov ${r.layer}, day ${d.frames[r.frame].day}, `
-          + `${d.release} release every ${d.dt_days} d, `
-          + (d.unit === 'relative' ? 'concentration relative to the initial one' : 'fraction of the release'),
+        sourceLayer: 'particle distribution at t=0',
+        valueLabel: `Markov chain particles per cell, step ${r.frame} × Δt ${d.dt_days} d = day ${frameDay(d, r.frame)}`,
         res: r.raster_res,
       }
     }
@@ -1810,9 +1775,8 @@ export default function App() {
       const bytes = encodeGeoTiff({
         values: r.raster_values, lon_min: r.raster_lon_min, lat_min: r.raster_lat_min,
         res: r.raster_res, nx: r.raster_nx, ny: r.raster_ny,
-      // La differenza vale anche 0 (previsione uguale alla simulazione): niente nodata.
-      }, { nodata: r.layer === MarkovLayer.DIFFERENCE ? null : 0 })
-      saveBytes(bytes, `${stem}_${r.layer}_step${r.frame}.tif`, 'image/tiff')
+      })
+      saveBytes(bytes, `${stem}_step${r.frame}.tif`, 'image/tiff')
       return
     }
     const raster = connectivityRaster(an.data, an.view.metric)
@@ -1842,7 +1806,7 @@ export default function App() {
       const name = sc && loc(sc.area_it, sc.area_en)
       return name && !/^(Area personalizzata|Custom area)$/.test(name) ? name : loc(sc?.label_it, sc?.label_en)
     }
-    const sourceLabel = key => (key === 'area' ? t.pmar.markov.sourceArea : t.pmar.useSources[key])
+    const sourceLabel = key => t.pmar.useSources[key]
     const SW = {
       seed:   { border: '2px dashed #0a84ff', background: 'rgba(100,210,255,0.25)' },
       study:  { border: '1.5px dashed #64748b' },
@@ -1858,7 +1822,7 @@ export default function App() {
         { key: 'seed', subtitle: a.areaGeoJSON ? areaLabel(sc) : l.notAvailable, available: !!a.areaGeoJSON },
         { key: 'study', subtitle: studyBoundsOf(sc) ? l.studySub : l.notAvailable, available: !!studyBoundsOf(sc) },
         ...(hasSourceLayer(a) ? [{ key: 'source', available: true, subtitle: sourceLabel(
-              a.kind === 'markov' ? a.data.source : a.info?.params?.use_source) }] : []),
+              a.info?.params?.use_source) }] : []),
         { key: 'grid', subtitle: grid ? grid.title : l.gridNone, available: !!grid },
       ].map(r => ({ ...r, on: baseOf(a)[r.key] }))
     } else {
@@ -1929,9 +1893,7 @@ export default function App() {
               visible={a.view.visible}
               interactive={isActive}
               opacity={a.view.opacity ?? 0.8}
-              passagesLabel={a.kind === 'markov'
-                ? t.pmar.markov.tooltip[raster.layer === MarkovLayer.DIFFERENCE ? 'difference' : a.data.unit]
-                : t.pmarControls.tooltipPassages}
+              passagesLabel={a.kind === 'markov' ? t.pmar.markov.tooltipParticles : t.pmarControls.tooltipPassages}
               classes={isActive ? ppiClasses : null}
               highlight={isActive ? ppiHighlight : NO_HIGHLIGHT}
             />
@@ -1970,13 +1932,6 @@ export default function App() {
           drawMode={drawTarget === 'seed' ? drawMode : null}
           seedShape={seedShape}
           showSeedShape={showSeedShape && previewBase.seed && !scenarioAreaGeoJSON}
-          onShapeDone={handleShapeDone}
-        />
-        <SeedDrawer
-          palette="release"
-          drawMode={drawTarget === 'markov' ? drawMode : null}
-          seedShape={extraShapes.markov}
-          showSeedShape={extraVisible.markov}
           onShapeDone={handleShapeDone}
         />
         {['connBbox', 'propBbox'].map(target => (

@@ -6,7 +6,7 @@ import {
 import { IconEye, IconEyeOff, IconTrash, IconPencil, IconDownload, IconX,
          IconInfoCircle, IconChevronDown, IconTable } from '@tabler/icons-react'
 import { useLang } from '../LanguageContext'
-import { clampFrame, frameSummary } from '../markov/frames'
+import { clampFrame, frameDay } from '../markov/frames'
 
 export const MAX_ANALYSES = 10
 
@@ -258,7 +258,7 @@ function CardIcon({ label, color, pressed, onClick, children }) {
 function MarkovStepNote({ an }) {
   const { t } = useLang()
   const k = clampFrame(an.data, an.view.frame)
-  const day = frameSummary(an.data, k).day
+  const day = frameDay(an.data, k)
   return (
     <Text size="xs" c="dimmed" lh={1.35}>
       {t.layers.markovStep.replace('{k}', k).replace('{d}', formatDay(day))}
@@ -338,17 +338,13 @@ function Description({ an }) {
   const d = an.data
   const analysis = an.kind === 'markov'
     ? [
-        [a.sourceLayer, [pr.source === 'area' ? m.sourceArea
-                          : p.useSources[pr.source === 'uniform' ? 'none' : pr.source],
-                         pr.geotiff_name].filter(Boolean).join(' · ')],
-        [m.labelRelease, pr.release === 'continuous' ? m.releaseContinuous : m.releaseSingle],
-        [a.matrix,      pr.matrix_from ?? null],
+        [a.matrix,      pr.matrix_from ?? t.analysis.propagate.create],
         [m.dt,          d.dt_days != null ? `${+d.dt_days.toFixed(3)} d` : null],
         [a.steps,       d.steps ?? (d.frames ? d.frames.length - 1 : null)],
         [a.horizon,     d.horizon_days != null ? `${d.horizon_days} d` : null],
         [a.resolution,  d.res != null ? `${d.res}°` : null],
         [m.cells,       d.cells?.length?.toLocaleString()],
-        [m.unit,        d.unit === 'relative' ? m.unitRelative : m.unitFraction],
+        [m.unit,        m.unitParticles],
       ]
     : an.kind === 'pmar'
     ? [
