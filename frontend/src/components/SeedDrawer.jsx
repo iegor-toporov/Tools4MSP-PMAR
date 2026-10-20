@@ -3,13 +3,14 @@ import { useMap, useMapEvents } from 'react-leaflet'
 import L from 'leaflet'
 
 /**
- * Colori di un'area disegnata. Due palette perché sulla mappa possono stare insieme
- * l'area di semina di una nuova simulazione (azzurro) e l'area di rilascio di
- * un'analisi Markov (arancio).
+ * Colori di un'area disegnata. Più palette perché sulla mappa possono stare insieme
+ * l'area di semina di una nuova simulazione (azzurro), l'area di rilascio di
+ * Propagate (arancio) e il riquadro di una griglia (viola).
  */
 export const DRAW_PALETTES = {
   seed:    { color: '#0ea5e9', fillColor: '#7dd3fc' },
   release: { color: '#f97316', fillColor: '#fdba74' },
+  bbox:    { color: '#7c3aed', fillColor: '#c4b5fd' },
 }
 const styles = palette => ({
   confirmed: { ...palette, fillOpacity: 0.18, weight: 2 },

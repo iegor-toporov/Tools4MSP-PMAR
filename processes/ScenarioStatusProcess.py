@@ -74,7 +74,9 @@ def _backfill_bounds(sc, meta_path):
     risposta — sono già stati messi in *sc* — e la cache di processo evita di
     ricalcolarli a ogni chiamata; si perde solo la persistenza fra riavvii.
     """
-    if sc.get('bounds') or not sc.get('shapefile'):
+    # Con i bounds si registra anche il numero di poligoni dell'area di semina:
+    # la connettività "sull'area di semina" ne richiede almeno due.
+    if (sc.get('bounds') and sc.get('n_seed_polygons')) or not sc.get('shapefile'):
         return
     shp = sc['shapefile']
     if not os.path.exists(shp):
@@ -82,15 +84,19 @@ def _backfill_bounds(sc, meta_path):
 
     cached = _bounds_cache.get(shp)
     if cached:
-        sc['bounds'] = cached
+        sc['bounds'], sc['n_seed_polygons'] = cached
         return
 
     try:
         import geopandas as gpd
         os.environ.pop('PROJ_LIB', None)
         os.environ.pop('PROJ_DATA', None)
-        b = gpd.read_file(shp).to_crs('EPSG:4326').total_bounds
-        sc['bounds'] = _bounds_cache[shp] = [round(float(v), 4) for v in b]
+        gdf = gpd.read_file(shp).to_crs('EPSG:4326')
+        b = gdf.total_bounds
+        parts = gdf.geometry.explode(index_parts=False)
+        sc['bounds'] = [round(float(v), 4) for v in b]
+        sc['n_seed_polygons'] = int((parts.geom_type == 'Polygon').sum())
+        _bounds_cache[shp] = (sc['bounds'], sc['n_seed_polygons'])
         # L'elenco delle simulazioni è ordinato per data di modifica: riscrivere
         # il JSON per aggiungere i bounds ne cambierebbe la posizione, quindi la
         # data va ripristinata.
@@ -265,6 +271,7 @@ class ScenarioStatusProcessor(BaseProcessor):
                     'area_it':         sc.get('area_it', ''),
                     'area_en':         sc.get('area_en', ''),
                     'pressure':        sc['pressure'],
+                    'chemical_compound': sc.get('chemical_compound'),
                     'pnum':            sc['pnum'],
                     # Only per-polygon seeding gives every polygon the same sampling
                     # effort, so the UI needs this to tell which scenarios are sound
@@ -276,6 +283,7 @@ class ScenarioStatusProcessor(BaseProcessor):
                     # riquadro della griglia di connettività. Assenti sugli scenari
                     # creati prima che venissero registrati.
                     'bounds':           sc.get('bounds'),
+                    'n_seed_polygons':  sc.get('n_seed_polygons'),
                     'duration_days':   sc['duration_days'],
                     'time_step_hours': sc['time_step_hours'],
                     'start_time':      sc['start_time'][:10],
@@ -285,6 +293,8 @@ class ScenarioStatusProcessor(BaseProcessor):
                     'source':          'custom',
                     'seedings':        sc.get('seedings', 1),
                     'tshift':          sc.get('tshift', 0),
+                    # Gli scenari creati prima dell'opzione spiaggiavano sempre.
+                    'beaching':        sc.get('beaching', True),
                     # Ciclo di vita (vedi processes/scenario_state.py).
                     'state':           st,
                     'progress':        sc.get('progress') if st in state.ACTIVE else None,

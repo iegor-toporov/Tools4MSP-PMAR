@@ -27,6 +27,7 @@ from data.cmems_datasets import (
     CMEMS_BATHY_DATASETS,
     CMEMS_THERMO_DATASETS,
     CMEMS_WIND_DATASETS,
+    CMEMS_MLD_DATASETS,
 )
 
 # ── Available models with UI metadata ───────────────────────────────────────
@@ -367,6 +368,26 @@ def _build_model(model_name, model_meta):
             o.set_config('drift:vertical_mixing', True)
         except Exception:
             pass
+
+    elif model_name == 'ChemicalDrift':
+        # Come la libreria PMAR (pmar.py, PMAR.get_trajectories): l'ordine delle
+        # configurazioni conta, init_species/init_transfer_rates vanno per ultimi.
+        o.set_config('drift:vertical_mixing', True)
+        o.set_config('vertical_mixing:diffusivitymodel', 'windspeed_Large1994')
+        o.set_config('vertical_mixing:background_diffusivity', 0.0001)
+        o.set_config('chemical:sediment:resuspension_depth_uncert', 0.1)
+        o.set_config('chemical:sediment:resuspension_critvel', 0.15)
+        o.set_config('chemical:sediment:desorption_depth', 1.)
+        o.set_config('chemical:sediment:desorption_depth_uncert', 0.1)
+        o.set_config('chemical:transformations:volatilization', True)
+        o.set_config('chemical:transformations:degradation', True)
+        o.set_config('chemical:transformations:degradation_mode', 'OverallRateConstants')
+        o.init_chemical_compound(model_meta['compound'])
+        # Tutto disciolto al rilascio, come in PMAR.
+        o.set_config('seed:LMM_fraction', 1)
+        o.set_config('seed:particle_fraction', 0)
+        o.init_species()
+        o.init_transfer_rates()
 
     return o
 
@@ -717,6 +738,55 @@ def _download_thermo(slon_min, slon_max, slat_min, slat_max, snap_start, n_days,
             logger.warning(f"T/S dataset failed: {ds['dataset_id']} — {e}")
             last_err = e
     raise RuntimeError(f'No T/S dataset available: {last_err}')
+
+
+def _get_mld_file(lon_min, lon_max, lat_min, lat_max, start_time, end_time, margin=5.0):
+    """Path of a cached CMEMS mixed-layer thickness NetCDF (mlotst), or None.
+
+    Used by ChemicalDrift for vertical mixing. Non-blocking: without it OpenDrift
+    falls back to a constant mixed layer.
+    """
+    cache_path, slon_min, slon_max, slat_min, slat_max, snap_start, n_days = _cache_key(
+        lon_min, lon_max, lat_min, lat_max, start_time, end_time, suffix='mld', margin=margin
+    )
+    if os.path.exists(cache_path):
+        return cache_path
+    import copernicusmarine
+    logger.info(f'MLD cache: MISS — starting download ({n_days} days, margin={margin}°)')
+    bbox = _build_bbox(slon_min, slon_max, slat_min, slat_max, snap_start, n_days, margin=margin)
+    # Campo bidimensionale: niente intervallo di profondità.
+    bbox.pop('minimum_depth', None)
+    bbox.pop('maximum_depth', None)
+    for ds in CMEMS_MLD_DATASETS:
+        try:
+            copernicusmarine.subset(
+                dataset_id       = ds['dataset_id'],
+                variables        = ds['variables'],
+                output_filename  = os.path.basename(cache_path),
+                output_directory = CACHE_DIR,
+                overwrite        = True,
+                **bbox,
+            )
+            logger.info(f"MLD dataset downloaded: {ds['dataset_id']}")
+            return cache_path
+        except Exception as e:
+            logger.warning(f"MLD dataset failed: {ds['dataset_id']} — {e}")
+    logger.warning('MLD not available: constant mixed layer')
+    return None
+
+
+def _get_bathymetry_file(lon_min, lon_max, lat_min, lat_max, margin=5.0):
+    """Path of the cached static bathymetry (deptho) for the area, or None."""
+    if _get_max_depth_for_area(lon_min, lon_max, lat_min, lat_max, margin) is None:
+        return None
+    slon_min, slon_max = math.floor(lon_min), math.ceil(lon_max)
+    slat_min, slat_max = math.floor(lat_min), math.ceil(lat_max)
+    raw    = f'{slon_min}|{slon_max}|{slat_min}|{slat_max}|bathy|m{margin:.1f}'
+    digest = hashlib.md5(raw.encode()).hexdigest()[:8]
+    clon   = round((lon_min + lon_max) / 2)
+    clat   = round((lat_min + lat_max) / 2)
+    path = os.path.join(CACHE_DIR, f'cmems_{clon:+03d}_{clat:+03d}_bathy_m{margin:.1f}_{digest}.nc')
+    return path if os.path.exists(path) else None
 
 
 # ── Cache helpers — static bathymetry (maximum area depth) ───────────────────

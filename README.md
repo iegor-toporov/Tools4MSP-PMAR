@@ -976,7 +976,7 @@ panel, e.g. on a shared laptop at a conference stand. The analyses are not sent 
 
 | Section | Contents |
 |---|---|
-| Base layers | *Seeding area* (of the selected simulation, or of the active layer), *Study area* (seeding box ± CMEMS margin: the simulation domain), *Source layer* (only when a non-uniform source is shown: the active layer's, or the one chosen in the form), *Connectivity grid* (outline of the nodes of the active connectivity layer, or of the latest one of the same simulation). Each has an eye; the grid starts hidden |
+| Base layers | *Seeding area*, *Study area* (seeding box ± CMEMS margin: the simulation domain), *Source layer* (only for a non-uniform source), *Connectivity grid* (outline of the nodes: the layer's own for a connectivity layer, otherwise the latest connectivity of the same simulation). They belong to the **selected analysis layer**: every layer keeps its own eyes (saved with its view; the grid starts hidden), so selecting a card shows and controls that layer's base layers, and those of every visible layer stay on the map as set. With no layer selected they control the previews of the left panel (selected simulation, drawn area, chosen source). A layer's base layers are hidden together with the layer |
 | Analyses layers | One card per layer, newest first: title, (i) for the summary (SIMULATION and ANALYSIS blocks), rename, show/hide, delete, **Opacity** slider (80 % by default) and **Download raster**. Clicking a card makes it **active** (blue border): legend, cell tooltip and analysis tools follow it |
 
 Per-type extras on the card: connectivity layers have the metric (in-strength, out-strength,

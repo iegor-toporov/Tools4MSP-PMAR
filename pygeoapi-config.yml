@@ -116,3 +116,9 @@ resources:
       type: process
       processor:
             name: processes.MarkovProcess.MarkovProcessor
+
+
+    shapefile_fields:
+      type: process
+      processor:
+            name: processes.ShapefileFieldsProcess.ShapefileFieldsProcessor

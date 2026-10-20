@@ -148,6 +148,20 @@ PRESSURE_MODELS = {
         'label_it':       'Idrocarburi',
         'label_en':       'Hydrocarbons',
     },
+    # ChemicalDrift: composti della sua tabella (init_chemical_compound), il composto
+    # lo sceglie l'utente (PrecomputeProcess, input chemical_compound).
+    'chemical': {
+        'module':         'opendrift.models.chemicaldrift',
+        'class':          'ChemicalDrift',
+        'needs_wind':     True,
+        'needs_thermo':   True,
+        'needs_mld':      True,
+        'needs_bathymetry': True,
+        'needs_vertical': True,
+        'max_depth':      50.0,
+        'label_it':       'Sostanze chimiche',
+        'label_en':       'Chemicals',
+    },
     'larvae': {
         'module':         'opendrift.models.larvalfish',
         'class':          'LarvalFish',
@@ -158,6 +172,18 @@ PRESSURE_MODELS = {
         'label_en':       'Fish larvae',
     },
 }
+
+# Composti noti a ChemicalDrift (OpenDrift 1.14.9, init_chemical_compound): IPA e
+# due antivegetativi. Il primo è il default.
+CHEMICAL_COMPOUNDS = (
+    'Naphthalene', 'C1-Naphthalene', 'C2-Naphthalene', 'C3-Naphthalene',
+    'Acenaphthene', 'Acenaphthylene', 'Fluorene', 'Anthracene', 'Phenanthrene',
+    'C1-Phenanthrene', 'C2-Phenanthrene', 'C3-Phenanthrene', 'Dibenzothiophene',
+    'C1-Dibenzothiophene', 'C2-Dibenzothiophene', 'C3-Dibenzothiophene',
+    'Fluoranthene', 'Pyrene', 'Chrysene', 'Benzo-a-anthracene', 'Benzo-b-fluoranthene',
+    'Benzo-k-fluoranthene', 'Benzo-a-pyrene', 'Dibenzo-ah-anthracene',
+    'Benzo-ghi-perylene', 'Indeno-123cd-pyrene', 'Econea', 'Tralopyril',
+)
 
 PROCESS_METADATA = {
     'version': '0.1.0',
@@ -434,9 +460,10 @@ class PMARProcessor(BaseProcessor):
 
                 logger.debug(f'Forcing files: {forcing_paths}')
 
-                o = _build_model(pm_cfg['class'], pm_cfg)
+                o = _build_model(pm_cfg['class'], {**pm_cfg, 'compound': CHEMICAL_COMPOUNDS[0]})
                 o.set_config('general:coastline_action', 'stranding')
-                o.add_readers_from_list(forcing_paths)
+                # Reader non lazy per ChemicalDrift: vedi PrecomputeProcess._run_scenario.
+                o.add_readers_from_list(forcing_paths, lazy=pm_cfg['class'] != 'ChemicalDrift')
 
                 nc_output = os.path.join(OUT_DIR, f'pmar_{uuid.uuid4().hex}.nc')
                 try:
@@ -584,16 +611,20 @@ class PMARProcessor(BaseProcessor):
                     )
                     h_list.append(h_i)
 
+                # Con più seeding: PPI = media, e indicatori della variabilità fra i
+                # rilasci, cella per cella (MAX, Q90, σ). Con un seeding solo non
+                # c'è variabilità da descrivere: si ha solo il PPI.
+                h_std = h_max = h_q90 = None
                 if len(h_list) == 1:
-                    h     = h_list[0]
-                    h_std = None
+                    h = h_list[0]
                 else:
                     h_stack = xr.concat(h_list, dim='seeding')
                     h       = h_stack.mean('seeding')
                     h_std   = h_stack.std('seeding')
-                    logger.info(f'PMAR: media di {len(h_list)} istogrammi calcolata')
+                    h_max   = h_stack.max('seeding')
+                    h_q90   = h_stack.quantile(0.9, dim='seeding').drop_vars('quantile', errors='ignore')
+                    logger.info(f'PMAR: media e indicatori di {len(h_list)} seeding calcolati')
 
-                # p e p_i sono usati per get_indicators; usa l'ultima istanza
                 p = p_i
 
                 map_bounds, colorbar_dark_b64, colorbar_light_b64, vmin, vmax = _raster_to_png(h)
@@ -602,15 +633,6 @@ class PMARProcessor(BaseProcessor):
                         'Nessuna particella ha attraversato le aree selezionate.'
                     )
                 geotiff_result_b64 = _histogram_to_geotiff(h)
-
-                indicator_sum = indicator_max = indicator_q90 = None
-                try:
-                    p.get_indicators(res=res, study_area=study_area)
-                    indicator_sum = p.output.get('SUM')
-                    indicator_max = p.output.get('MAX')
-                    indicator_q90 = p.output.get('Q90')
-                except Exception as _ind_err:
-                    logger.warning(f'get_indicators fallito (non bloccante): {_ind_err}')
 
                 x_vals    = h.coords['x'].values
                 y_vals    = h.coords['y'].values
@@ -683,7 +705,7 @@ class PMARProcessor(BaseProcessor):
                         'std_geotiff_b64':        std_geotiff_b64,
                     })
 
-                for key, da in [('sum', indicator_sum), ('max', indicator_max), ('q90', indicator_q90)]:
+                for key, da in [('max', h_max), ('q90', h_q90)]:
                     if da is not None:
                         ind = _serialize_indicator(da, res)
                         if ind:

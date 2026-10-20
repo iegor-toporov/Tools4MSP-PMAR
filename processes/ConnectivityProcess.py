@@ -35,9 +35,9 @@ MAX_TIME_PASSES = 180
 
 SIMPLIFY_TOLERANCE = 0.005
 
-# Risoluzioni ammesse per la griglia automatica (gradi). Una griglia fine su un
-# bacino intero produrrebbe migliaia di celle e una matrice n² ingestibile.
-GRID_RESOLUTIONS = (1.0, 0.5)
+# Risoluzione della griglia automatica (gradi): libera in questo intervallo. Il
+# limite vero è il numero di celle di mare (MAX_POLYGONS), controllato dopo.
+GRID_RES_MIN, GRID_RES_MAX = 0.05, 5.0
 
 # Tetto alle feature della rete di archi. Oltre, si tengono gli archi con
 # probabilità più alta: la matrice resta completa, si alleggerisce solo il disegno.
@@ -115,8 +115,18 @@ PROCESS_METADATA = {
             'title': 'Grid resolution (degrees)',
             'description': 'Alternative to supplying polygons: builds a regular grid of '
                            'ocean cells at this resolution over bbox. Land cells are '
-                           f'excluded. Allowed values: {list(GRID_RESOLUTIONS)}.',
+                           f'excluded. Between {GRID_RES_MIN} and {GRID_RES_MAX} degrees; '
+                           'the bbox is aligned to multiples of the resolution, so the '
+                           'cells match those of the Markov process.',
             'schema': {'type': 'number'},
+            'minOccurs': 0, 'maxOccurs': 1,
+        },
+        'node_source': {
+            'title': 'Nodes',
+            'description': '"seeding_area" uses the polygons of the scenario seeding '
+                           'area (at least two). Otherwise the nodes are the uploaded '
+                           'polygons (shapefile_b64 / geojson) or a generated grid (grid_res).',
+            'schema': {'type': 'string', 'enum': ['seeding_area', 'polygons', 'grid']},
             'minOccurs': 0, 'maxOccurs': 1,
         },
         'bbox': {
@@ -186,13 +196,11 @@ def _make_grid_polygons(res, bbox):
     """
     from pmar.utils import make_grid, make_vector_grid
 
-    if res not in GRID_RESOLUTIONS:
+    if not (GRID_RES_MIN <= res <= GRID_RES_MAX):
         raise ProcessorExecuteError(
-            f'Risoluzione non ammessa: {res}. Valori possibili: {list(GRID_RESOLUTIONS)}.'
+            f'Risoluzione non ammessa: {res}°. Usare un valore fra {GRID_RES_MIN}° e {GRID_RES_MAX}°.'
         )
-    lon_min, lat_min, lon_max, lat_max = (float(v) for v in bbox)
-    if lon_max <= lon_min or lat_max <= lat_min:
-        raise ProcessorExecuteError(f'Bounding box non valido: {bbox}.')
+    lon_min, lat_min, lon_max, lat_max = align_bbox(bbox, res)
 
     # Stima prima di costruire: make_grid vettorializza l'intero riquadro, e su
     # una griglia assurda si pagherebbero minuti prima di poter rifiutare.
@@ -228,6 +236,45 @@ def _make_grid_polygons(res, bbox):
     gdf.insert(0, 'node_id', range(len(gdf)))
     gdf.insert(1, 'node_label', labels)
     return gdf, labels
+
+
+def align_bbox(bbox, res):
+    """Bbox allargato ai multipli di *res*: le celle risultano le stesse della
+    griglia Markov (markov_core.Grid), e una matrice di transizione calcolata qui
+    descrive le stesse celle di una previsione con gli stessi res e bbox."""
+    lon_min, lat_min, lon_max, lat_max = (float(v) for v in bbox)
+    if lon_max <= lon_min or lat_max <= lat_min:
+        raise ProcessorExecuteError(f'Bounding box non valido: {bbox}.')
+    snap_lo = lambda v: math.floor(v / res + 1e-9) * res
+    snap_hi = lambda v: math.ceil(v / res - 1e-9) * res
+    return [round(snap_lo(lon_min), 6), round(snap_lo(lat_min), 6),
+            round(snap_hi(lon_max), 6), round(snap_hi(lat_max), 6)]
+
+
+def _seeding_area_polygons(sc):
+    """Poligoni dell'area di semina dello scenario, uno per nodo: le parti di un
+    multipoligono diventano nodi distinti, come le aree di un network di MPA."""
+    shp = sc.get('shapefile')
+    if not shp or not os.path.exists(shp):
+        raise ProcessorExecuteError('Lo scenario non ha un\'area di semina sul disco.')
+    gdf = gpd.read_file(shp).to_crs('EPSG:4326')
+    gdf = gdf[~gdf.geometry.isna() & ~gdf.geometry.is_empty]
+    parts = gdf.explode(index_parts=False).reset_index(drop=True)
+    parts = parts[parts.geometry.geom_type == 'Polygon'].reset_index(drop=True)
+    if len(parts) < 2:
+        raise ProcessorExecuteError(
+            'L\'area di semina ha un solo poligono: per la connettività servono almeno '
+            'due nodi. Caricare uno shapefile o generare una griglia.'
+        )
+    if len(parts) > MAX_POLYGONS:
+        raise ProcessorExecuteError(
+            f'Troppi poligoni nell\'area di semina ({len(parts)}): il massimo è {MAX_POLYGONS}.'
+        )
+    labels = [f'#{i}' for i in range(len(parts))]
+    out = parts[['geometry']].copy()
+    out.insert(0, 'node_id', range(len(out)))
+    out.insert(1, 'node_label', labels)
+    return out, labels
 
 
 def _warning(code, message, **params):
@@ -435,7 +482,10 @@ class ConnectivityProcessor(BaseProcessor):
             # Due modi di definire i nodi: i poligoni dell'utente, oppure una
             # griglia regolare di celle di mare su un riquadro. I poligoni hanno
             # la precedenza, perché darli entrambi è quasi sempre una svista.
-            if data.get('shapefile_b64') or data.get('geojson'):
+            if data.get('node_source') == 'seeding_area':
+                gdf, labels = _seeding_area_polygons(sc)
+                node_source, grid_res, grid_bbox = 'seeding_area', None, None
+            elif data.get('shapefile_b64') or data.get('geojson'):
                 gdf, labels = _read_polygons(data, tmpdir, label_field)
                 node_source, grid_res, grid_bbox = 'polygons', None, None
             elif data.get('grid_res'):
@@ -445,6 +495,7 @@ class ConnectivityProcessor(BaseProcessor):
                     raise ProcessorExecuteError(
                         'bbox deve essere [lon_min, lat_min, lon_max, lat_max].'
                     )
+                grid_bbox = align_bbox(grid_bbox, grid_res)
                 gdf, labels = _make_grid_polygons(grid_res, grid_bbox)
                 node_source = 'grid'
                 logger.info(f'[Connectivity] griglia {grid_res}° su {grid_bbox}: '

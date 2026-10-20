@@ -38,3 +38,9 @@ CMEMS_WIND_DATASETS = [
     {'dataset_id': 'cmems_obs-wind_glo_phy_nrt_l4_0.125deg_PT1H', 'variables': ['eastward_wind', 'northward_wind']},
     {'dataset_id': 'cmems_obs-wind_glo_phy_my_l4_0.125deg_PT1H',  'variables': ['eastward_wind', 'northward_wind']},
 ]
+# ── Dataset CMEMS for mixed-layer thickness (ChemicalDrift vertical mixing) ─────
+CMEMS_MLD_DATASETS = [
+    {'dataset_id': 'cmems_mod_med_phy-mld_anfc_4.2km_P1D-m',  'variables': ['mlotst']},
+    {'dataset_id': 'cmems_mod_glo_phy_anfc_0.083deg_P1D-m',   'variables': ['mlotst']},
+    {'dataset_id': 'cmems_mod_glo_phy_my_0.083deg_P1D-m',     'variables': ['mlotst']},
+]

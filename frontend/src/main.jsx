@@ -11,7 +11,8 @@ import './index.css'
 const theme = createTheme({
   primaryColor: 'blue',
   primaryShade: { light: 6, dark: 5 },
-  fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Display", sans-serif',
+  fontFamily: '"IBM Plex Sans", system-ui, -apple-system, BlinkMacSystemFont, sans-serif',
+  fontFamilyMonospace: '"IBM Plex Mono", ui-monospace, monospace',
   defaultRadius: 'md',
   colors: {
     blue: [

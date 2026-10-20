@@ -3,13 +3,14 @@ import {
   Paper, Tabs, Box, Button, Group, Stack, Text, TextInput,
   SimpleGrid, ScrollArea, ActionIcon,
 } from '@mantine/core'
-import { IconX } from '@tabler/icons-react'
+import { IconX, IconBook2 } from '@tabler/icons-react'
 import { MODELS, defaultStartTime } from '../constants'
 import { useLang } from '../LanguageContext'
 import { formatSeedShape } from '../geometry/seedShape'
 import PolygonDrawControls from './PolygonDrawControls'
 import ModelCard from './ModelCard'
 import PmarPanel from './PmarPanel'
+import AboutModal from './AboutModal'
 
 const SCROLLBAR_STYLES = {
   scrollbar: {
@@ -44,18 +45,18 @@ export default function Panel({
   windfarmsLoading, windfarmsEmpty,
   offshoreLoading, offshoreEmpty,
   mspZonesLoading, mspZonesEmpty,
-  natura2000Loading, natura2000Empty, natura2000Geojson,
-  showNatura2000, onFetchNatura2000, onToggleNatura2000,
-  hasSeedShape,
   onT4mspPreview,
   onScenarioArea, onAnalysisMarginChange,
   onRunConnectivity, connectivityLoading, connectivityStopping, onStopConnectivity,
-  markov, drawTarget,
+  markov, draw, matrices,
   analysesFull,
 }) {
   const { t } = useLang()
-  // Nodo della barra di azioni fissa: PmarPanel ci disegna i bottoni di avvio.
+  // Nodo della barra di azioni fissa: PmarPanel ci disegna il bottone di avvio della
+  // simulazione (in Analysis ogni sezione ha il suo, in fondo alla sezione).
   const [actionsEl, setActionsEl] = useState(null)
+  const [runMode,   setRunMode]   = useState('custom')
+  const [aboutOpen, setAboutOpen] = useState(false)
   const [selectedModel, setSelectedModel] = useState('OceanDrift')
   const [startTime, setStartTime]         = useState(defaultStartTime())
   const [number,    setNumber]            = useState('100')
@@ -84,7 +85,7 @@ export default function Panel({
         top: 16,
         left: 16,
         zIndex: 1000,
-        width: 310,
+        width: 320,
         maxHeight: 'calc(100vh - 32px)',
         overflow: 'hidden',
         background: 'var(--panel-bg)',
@@ -266,14 +267,23 @@ export default function Panel({
           {/* Colonna a tutta altezza: intestazione, contenuto che scorre, barra di
               azioni fissa in fondo — i bottoni di avvio restano sempre a portata. */}
           <Box style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 34px)' }}>
-          <Box
-            px="md"
-            py="sm"
-            style={{ borderBottom: '1px solid var(--modal-divider)', flexShrink: 0 }}
-          >
-            <Text fw={700} size="md">PMAR</Text>
-            <Text size="xs" c="dimmed">Marine pressure assessment tool</Text>
+          <Box px="md" pt="sm" pb={8} style={{ flexShrink: 0 }}>
+            <Group gap={4} align="center">
+              <Text fw={700} size="lg">PMAR</Text>
+              <ActionIcon variant="subtle" color="gray" size="md" onClick={() => setAboutOpen(true)}
+                          aria-label={t.header.about} title={t.header.about}>
+                <IconBook2 size={17} />
+              </ActionIcon>
+            </Group>
+            <Text size="xs" c="dimmed" lh={1.35}>{t.header.subtitle}</Text>
           </Box>
+          <Tabs value={runMode} onChange={setRunMode} style={{ flexShrink: 0 }}>
+            <Tabs.List grow px="md">
+              <Tabs.Tab value="custom">{t.pmar.modeCustomBtn}</Tabs.Tab>
+              <Tabs.Tab value="scenario">{t.pmar.modeScenarioBtn}</Tabs.Tab>
+            </Tabs.List>
+          </Tabs>
+          <AboutModal opened={aboutOpen} onClose={() => setAboutOpen(false)} />
           <ScrollArea
             style={{ flex: 1, minHeight: 0 }}
             scrollbarSize={5}
@@ -301,13 +311,6 @@ export default function Panel({
               offshoreEmpty={offshoreEmpty}
               mspZonesLoading={mspZonesLoading}
               mspZonesEmpty={mspZonesEmpty}
-              natura2000Loading={natura2000Loading}
-              natura2000Empty={natura2000Empty}
-              natura2000Geojson={natura2000Geojson}
-              showNatura2000={showNatura2000}
-              onFetchNatura2000={onFetchNatura2000}
-              onToggleNatura2000={onToggleNatura2000}
-              hasSeedShape={hasSeedShape}
               onT4mspPreview={onT4mspPreview}
               onScenarioArea={onScenarioArea}
               onAnalysisMarginChange={onAnalysisMarginChange}
@@ -316,7 +319,9 @@ export default function Panel({
               connectivityStopping={connectivityStopping}
               onStopConnectivity={onStopConnectivity}
               markov={markov}
-              drawTarget={drawTarget}
+              draw={draw}
+              matrices={matrices}
+              runMode={runMode}
               actionsTarget={actionsEl}
               analysesFull={analysesFull}
             />

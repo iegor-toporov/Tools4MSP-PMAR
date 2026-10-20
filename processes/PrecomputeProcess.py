@@ -16,12 +16,12 @@ import numpy as np
 from pygeoapi.process.base import BaseProcessor, ProcessorExecuteError
 
 from processes.PMARProcess import (
-    SCENARIOS_DIR, SCENARIOS_SHP_DIR, PRESSURE_MODELS,
+    SCENARIOS_DIR, SCENARIOS_SHP_DIR, PRESSURE_MODELS, CHEMICAL_COMPOUNDS,
     ensure_t4msp_shapefile, _fetch_t4msp_areas,
 )
 from processes.OpenDriftProcess import (
     _get_forcing_file, _get_wind_file, _get_waves_file, _get_thermo_file,
-    _get_max_depth_for_area,
+    _get_max_depth_for_area, _get_mld_file, _get_bathymetry_file,
     _build_model, OUT_DIR,
 )
 from processes.logging_utils import setup_logger
@@ -64,7 +64,15 @@ PROCESS_METADATA = {
         },
         'pressure': {
             'title': 'Pressure type',
+            'description': f'One of {list(PRESSURE_MODELS)}.',
             'schema': {'type': 'string', 'default': 'generic'},
+            'minOccurs': 0, 'maxOccurs': 1,
+        },
+        'chemical_compound': {
+            'title': 'Chemical compound',
+            'description': 'Only with pressure="chemical" (ChemicalDrift). One of '
+                           f'{list(CHEMICAL_COMPOUNDS)}; default {CHEMICAL_COMPOUNDS[0]}.',
+            'schema': {'type': 'string', 'default': CHEMICAL_COMPOUNDS[0]},
             'minOccurs': 0, 'maxOccurs': 1,
         },
         'start_time': {
@@ -120,6 +128,16 @@ PROCESS_METADATA = {
             'title': 'CMEMS download margin (degrees)',
             'description': 'Degrees added around the seeding area centre for CMEMS data download. Default: 5.0.',
             'schema': {'type': 'number', 'default': 5.0},
+            'minOccurs': 0, 'maxOccurs': 1,
+        },
+        'beaching': {
+            'title': 'Beaching',
+            'description': 'True (default): particles that reach the coast strand and stop. '
+                           'False: they return to their previous position and stay in the water '
+                           '(conservative tracer, as PMAR with beaching=False). Use False for '
+                           'Markov-chain forecasts: stranded particles have no position and would '
+                           'leave the transition matrix.',
+            'schema': {'type': 'boolean', 'default': True},
             'minOccurs': 0, 'maxOccurs': 1,
         },
         'seedings': {
@@ -193,6 +211,13 @@ def _save_custom_shapefile(geojson_input, shapefile_b64, dest_dir, custom_id):
     raise ProcessorExecuteError('Provide geojson or shapefile_b64.')
 
 
+def _as_bool(v):
+    """Booleano da JSON o da form: accetta anche "false" / "0" come stringhe."""
+    if isinstance(v, str):
+        return v.strip().lower() not in ('false', '0', 'no', 'off', '')
+    return bool(v)
+
+
 def _build_custom_scenario(data, shp_path=None, area_label=None, job_id=None):
     """Validate simulation parameters, persist the seeding shapefile, and write scenario metadata.
 
@@ -220,6 +245,12 @@ def _build_custom_scenario(data, shp_path=None, area_label=None, job_id=None):
     pressure      = data.get('pressure', 'generic')
     if pressure not in PRESSURE_MODELS:
         raise ProcessorExecuteError(f'Invalid pressure: {pressure!r}')
+    compound = None
+    if pressure == 'chemical':
+        compound = data.get('chemical_compound') or CHEMICAL_COMPOUNDS[0]
+        if compound not in CHEMICAL_COMPOUNDS:
+            raise ProcessorExecuteError(
+                f'Composto non supportato: {compound!r}. Valori possibili: {list(CHEMICAL_COMPOUNDS)}.')
 
     duration_days   = int(data.get('duration_days', 30))
     pnum            = min(int(data.get('pnum', 1000)), 100000)
@@ -306,6 +337,8 @@ def _describe_custom_scenario(data, custom_id, shp_path, area_label, job_id, pre
         'area_it':          area_label or 'Area personalizzata',
         'area_en':          area_label or 'Custom area',
         'pressure':         pressure,
+        'chemical_compound': (data.get('chemical_compound') or CHEMICAL_COMPOUNDS[0]
+                              if pressure == 'chemical' else None),
         'pnum':             pnum,
         'seeding_mode':     seeding_mode,
         'pnum_per_polygon': pnum_per_polygon,
@@ -318,6 +351,9 @@ def _describe_custom_scenario(data, custom_id, shp_path, area_label, job_id, pre
         'description':      description,
         'seedings':         seedings,
         'tshift':           tshift,
+        # Senza spiaggiamento il tracciante è conservativo, come nella tesi (Paper III):
+        # è la condizione perché le matrici di transizione per la Markov sommino a 1.
+        'beaching':         _as_bool(data.get('beaching', True)),
         'nc_filename':      f'{custom_id}_s0.nc',
         'nc_filenames':     [f'{custom_id}_s{n}.nc' for n in range(seedings)],
         'shapefile':        shp_path,
@@ -408,14 +444,29 @@ def _run_scenario(scenario_id, sc, shp_path):
         else:
             logger.warning(f'[{scenario_id}] T/S not available: weathering with constant values')
 
+    if pm_cfg.get('needs_mld'):
+        mld_path = _get_mld_file(bounds[0], bounds[2], bounds[1], bounds[3], start_time, end_time, cmems_margin)
+        if mld_path:
+            forcing_paths.append(mld_path)
+    if pm_cfg.get('needs_bathymetry'):
+        bathy_path = _get_bathymetry_file(bounds[0], bounds[2], bounds[1], bounds[3], cmems_margin)
+        if bathy_path:
+            forcing_paths.append(bathy_path)
+
     logger.info(f'[{scenario_id}] Forcing files: {forcing_paths}')
 
     os.environ.pop('PROJ_LIB', None)
     os.environ.pop('PROJ_DATA', None)
 
-    o = _build_model(pm_cfg['class'], pm_cfg)
-    o.set_config('general:coastline_action', 'stranding')
-    o.add_readers_from_list(forcing_paths)
+    o = _build_model(pm_cfg['class'], {**pm_cfg, 'compound': sc.get('chemical_compound')})
+    # 'stranding': la particella che tocca costa si ferma (e da lì in poi non ha più
+    # posizione). 'previous': torna alla posizione precedente e resta in acqua, come
+    # PMAR con beaching=False. Gli scenari vecchi, senza il campo, spiaggiavano.
+    o.set_config('general:coastline_action', 'stranding' if sc.get('beaching', True) else 'previous')
+    # ChemicalDrift.prepare_run legge `.variables` di ogni reader: su un LazyReader
+    # questo lo inizializza fuori dall'ambiente, che non lo registra mai fra le fonti
+    # (correnti "mancanti" al primo passo). Per ChemicalDrift i reader si aprono subito.
+    o.add_readers_from_list(forcing_paths, lazy=pm_cfg['class'] != 'ChemicalDrift')
 
     tmp_nc = os.path.join(OUT_DIR, f'precompute_{uuid.uuid4().hex}.nc')
     try:
@@ -560,7 +611,8 @@ class PrecomputeProcessor(BaseProcessor):
             shp_path = ensure_t4msp_shapefile(area_id)
             areas    = _fetch_t4msp_areas()
             match    = next((a for a in areas if a['id'] == area_id), None)
-            if match:
+            # Il nome scritto dall'utente vince; senza, quello dell'area Tools4MSP.
+            if match and not area_label:
                 area_label = match['label']
 
         _, scenario_id, _ = _build_custom_scenario(data, shp_path=shp_path,

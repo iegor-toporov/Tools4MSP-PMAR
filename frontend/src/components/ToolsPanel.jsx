@@ -1,36 +1,22 @@
-import { Button, Badge, Text, SimpleGrid } from '@mantine/core'
+import { Button, Badge, Text, SimpleGrid, Group, Paper } from '@mantine/core'
 import {
-  IconChartBar, IconChartAreaLine, IconWaveSine, IconBolt, IconFileTypeCsv, IconStack2,
-  IconTable, IconX, IconTool, IconChevronDown, IconChevronUp,
+  IconChartBar, IconChartAreaLine, IconWaveSine, IconBolt, IconFileTypeCsv, IconStack2, IconX,
 } from '@tabler/icons-react'
 import { useLang } from '../LanguageContext'
 
 /**
- * Blocco "Strumenti di analisi" in cima al pannello delle analisi (AnalysesPanel):
- * lavorano sull'analisi attiva.
- *
- * Strumenti divisi per il risultato su cui lavorano: quelli della heatmap PMAR non
- * servono a niente senza un raster PPI, la matrice senza una connettività. Un unico
- * gate su `hasRaster` disabiliterebbe la matrice in una sessione di sola connettività.
+ * Riquadro "Analysis tools" in basso a destra, sotto il pannello Layers. Gli
+ * strumenti lavorano sulla heatmap del layer attivo (PMAR, o Markov sul frame
+ * mostrato): senza un raster restano disattivati. La matrice di connettività ha il
+ * suo bottone nella scheda del layer.
  */
-const GROUPS = [
-  {
-    key: 'pmar', titleKey: 'groupPmar', hintKey: 'hintPmar', needs: 'raster',
-    tools: [
-      { key: 'histogram',  Icon: IconChartBar,      labelKey: 'histogramBtn'  },
-      { key: 'stats',      Icon: IconChartAreaLine, labelKey: 'statsBtn'      },
-      { key: 'profile',    Icon: IconWaveSine,      labelKey: 'profileBtn'    },
-      { key: 'threshold',  Icon: IconBolt,          labelKey: 'thresholdBtn'  },
-      { key: 'csv',        Icon: IconFileTypeCsv,   labelKey: 'csvBtn'        },
-      { key: 'comparison', Icon: IconStack2,        labelKey: 'comparisonBtn' },
-    ],
-  },
-  {
-    key: 'connectivity', titleKey: 'groupConnectivity', hintKey: 'hintConnectivity', needs: 'connectivity',
-    tools: [
-      { key: 'connectivity', Icon: IconTable, labelKey: 'connectivityTitle' },
-    ],
-  },
+const TOOLS = [
+  { key: 'histogram',  Icon: IconChartBar,      labelKey: 'histogramBtn'  },
+  { key: 'stats',      Icon: IconChartAreaLine, labelKey: 'statsBtn'      },
+  { key: 'profile',    Icon: IconWaveSine,      labelKey: 'profileBtn'    },
+  { key: 'threshold',  Icon: IconBolt,          labelKey: 'thresholdBtn'  },
+  { key: 'csv',        Icon: IconFileTypeCsv,   labelKey: 'csvBtn'        },
+  { key: 'comparison', Icon: IconStack2,        labelKey: 'comparisonBtn' },
 ]
 
 const COUNT_BADGE = {
@@ -39,94 +25,50 @@ const COUNT_BADGE = {
 }
 
 export default function ToolsPanel({
-  activeMapTool,
-  onSetTool,
-  hasRaster,
-  hasConnectivity = false,
-  windowCounts = {},
-  openWindowCount = 0,
-  onCloseAll,
-  expanded,
-  onToggleExpanded,
+  activeMapTool, onSetTool, hasRaster, windowCounts = {}, openWindowCount = 0, onCloseAll,
 }) {
   const { t } = useLang()
   const c = t.toolsPanel
 
   return (
-    <div className="tools-panel">
-      <button
-        type="button"
-        className="tools-panel-head"
-        onClick={onToggleExpanded}
-        aria-expanded={expanded}
-      >
-        <IconTool size={15} />
-        <span className="tools-panel-title">{c.title}</span>
+    <Paper shadow="xl" radius="lg" className="tools-panel">
+      <Group justify="space-between" align="center" mb={2}>
+        <Text fw={700} size="md">{c.title}</Text>
         {openWindowCount > 0 && (
-          <Badge size="xs" color="red" circle style={{ fontSize: 8, minWidth: 16, height: 16, padding: 0 }}>
-            {openWindowCount}
-          </Badge>
+          <Button size="compact-xs" variant="subtle" color="red" type="button"
+                  leftSection={<IconX size={12} />} onClick={onCloseAll}>
+            {c.closeAllBtn} ({openWindowCount})
+          </Button>
         )}
-        {expanded ? <IconChevronUp size={14} /> : <IconChevronDown size={14} />}
-      </button>
-
-      {expanded && (
-        <div className="tools-panel-body">
-          {GROUPS.map(group => {
-            const enabled = group.needs === 'connectivity' ? hasConnectivity : hasRaster
-            return (
-              <section key={group.key} className="tools-panel-group">
-                <Text size="10px" fw={600} c="dimmed" tt="uppercase" style={{ letterSpacing: '0.05em' }}>
-                  {c[group.titleKey]}
-                </Text>
-                {!enabled && <Text size="10px" c="dimmed" lh={1.3}>{c[group.hintKey]}</Text>}
-                {/* Due colonne: dentro il pannello delle analisi lo spazio va alle schede. */}
-                <SimpleGrid cols={group.tools.length > 1 ? 2 : 1} spacing={5} verticalSpacing={5}>
-                {group.tools.map(({ key, Icon, labelKey }) => {
-                  const isActive = activeMapTool === key
-                  const count    = windowCounts[key] ?? 0
-                  return (
-                    <div key={key} style={{ position: 'relative' }}>
-                      <Button
-                        fullWidth
-                        size="xs"
-                        radius="md"
-                        variant={isActive ? 'filled' : 'light'}
-                        color="blue"
-                        disabled={!enabled}
-                        justify="flex-start"
-                        leftSection={<Icon size={14} />}
-                        onClick={enabled ? () => onSetTool(key) : undefined}
-                      >
-                        {c[labelKey]}
-                      </Button>
-                      {count > 0 && (
-                        <Badge size="xs" color="red" circle style={COUNT_BADGE}>{count}</Badge>
-                      )}
-                    </div>
-                  )
-                })}
-                </SimpleGrid>
-              </section>
-            )
-          })}
-
-          {openWindowCount > 0 && (
-            <Button
-              fullWidth
-              size="xs"
-              radius="md"
-              variant="subtle"
-              color="red"
-              justify="flex-start"
-              leftSection={<IconX size={14} />}
-              onClick={onCloseAll}
-            >
-              {c.closeAllBtn}
-            </Button>
-          )}
-        </div>
-      )}
-    </div>
+      </Group>
+      <Text size="10px" fw={600} c="dimmed" tt="uppercase" style={{ letterSpacing: '0.06em' }}>
+        {c.groupPmar}
+      </Text>
+      {!hasRaster && <Text size="10px" c="dimmed" lh={1.3}>{c.hintPmar}</Text>}
+      <SimpleGrid cols={3} spacing={6} verticalSpacing={6} mt={4}>
+        {TOOLS.map(({ key, Icon, labelKey }) => {
+          const count = windowCounts[key] ?? 0
+          return (
+            <div key={key} style={{ position: 'relative' }}>
+              <Button
+                fullWidth
+                size="xs"
+                radius="md"
+                px={4}
+                variant={activeMapTool === key ? 'filled' : 'light'}
+                color="blue"
+                disabled={!hasRaster}
+                leftSection={<Icon size={13} />}
+                styles={{ section: { marginInlineEnd: 4 } }}
+                onClick={hasRaster ? () => onSetTool(key) : undefined}
+              >
+                {c[labelKey]}
+              </Button>
+              {count > 0 && <Badge size="xs" color="red" circle style={COUNT_BADGE}>{count}</Badge>}
+            </div>
+          )
+        })}
+      </SimpleGrid>
+    </Paper>
   )
 }

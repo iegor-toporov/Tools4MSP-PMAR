@@ -18,3 +18,15 @@ export function defaultStartTime() {
   const pad = n => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:00`
 }
+
+// Composti noti a ChemicalDrift: deve restare allineato a CHEMICAL_COMPOUNDS in
+// processes/PMARProcess.py (il primo è il default).
+export const CHEMICAL_COMPOUNDS = [
+  'Naphthalene', 'C1-Naphthalene', 'C2-Naphthalene', 'C3-Naphthalene',
+  'Acenaphthene', 'Acenaphthylene', 'Fluorene', 'Anthracene', 'Phenanthrene',
+  'C1-Phenanthrene', 'C2-Phenanthrene', 'C3-Phenanthrene', 'Dibenzothiophene',
+  'C1-Dibenzothiophene', 'C2-Dibenzothiophene', 'C3-Dibenzothiophene',
+  'Fluoranthene', 'Pyrene', 'Chrysene', 'Benzo-a-anthracene', 'Benzo-b-fluoranthene',
+  'Benzo-k-fluoranthene', 'Benzo-a-pyrene', 'Dibenzo-ah-anthracene',
+  'Benzo-ghi-perylene', 'Indeno-123cd-pyrene', 'Econea', 'Tralopyril',
+]

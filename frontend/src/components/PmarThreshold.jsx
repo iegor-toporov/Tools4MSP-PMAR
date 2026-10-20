@@ -81,7 +81,7 @@ export const PmarThresholdModal = forwardRef(function PmarThresholdModal(
                 ].map(([label, valueRef, unit]) => (
                   <tr key={label}>
                     <td style={{ padding: '2px 8px 2px 0', fontSize: 11, color: 'var(--text-secondary)' }}>{label}</td>
-                    <td style={{ padding: '2px 0', fontSize: 11, fontWeight: 600, color: 'var(--text-primary)', textAlign: 'right', fontFamily: '"SF Mono", ui-monospace, monospace' }}>
+                    <td style={{ padding: '2px 0', fontSize: 11, fontWeight: 600, color: 'var(--text-primary)', textAlign: 'right', fontFamily: '"IBM Plex Mono", "SF Mono", ui-monospace, monospace' }}>
                       <span ref={valueRef}>—</span>
                       <span style={{ opacity: 0.6 }}>{unit}</span>
                     </td>

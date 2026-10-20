@@ -63,7 +63,7 @@ export const PmarConnectivityMatrix = forwardRef(function PmarConnectivityMatrix
         `${fileBase()}.mtx`, 'text/plain') },
   ]
 
-  const cell = { padding: '1px 4px', fontSize: 10, fontFamily: '"SF Mono", ui-monospace, monospace' }
+  const cell = { padding: '1px 4px', fontSize: 10, fontFamily: '"IBM Plex Mono", "SF Mono", ui-monospace, monospace' }
 
   return (
     <FloatingWindow ref={ref} title={c.connectivityTitle} onClose={onClose} stackIndex={stackIndex} width={460}>

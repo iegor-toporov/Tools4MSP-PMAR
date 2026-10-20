@@ -18,7 +18,7 @@ export const Process = {
   WINDFARMS:              'windfarms',
   OFFSHORE_INSTALLATIONS: 'offshore_installations',
   MSP_ZONES:              'msp_zones',
-  NATURA2000:             'natura2000',
+  SHAPEFILE_FIELDS:       'shapefile_fields',
 }
 
 /** Stable error identifiers. The UI maps these to localized text, never the reverse. */
@@ -210,7 +210,7 @@ export async function dismissJob(jobId) {
 }
 
 /**
- * Runs one of the map overlay processes (EMODnet layers, Natura 2000) for a bbox.
+ * Runs one of the map overlay processes (EMODnet layers) for a bbox.
  *
  * @param {{lon_min: number, lat_min: number, lon_max: number, lat_max: number}} bounds
  * @returns {Promise<?object>} the FeatureCollection, or null when the backend found

@@ -27,12 +27,15 @@ logger = setup_logger('markov_process', 'pmar', 'markov.log')
 # Più grossa che per il PPI: una matrice di transizione ha senso solo con abbastanza
 # particelle per cella, e con le 10 000–100 000 particelle di uno scenario a 0.05° le
 # celle sarebbero quasi tutte deboli. La tesi usa 50 particelle per cella.
-MARKOV_RESOLUTIONS = (0.25, 0.1, 0.05)
+# La risoluzione è libera in questo intervallo: con una matrice "esistente" è quella
+# della griglia di connettività da cui la si riprende.
+RES_MIN, RES_MAX   = 0.05, 5.0
 MIN_PARTICLES      = 30
 MAX_GRID_CELLS     = 200_000      # riquadro, prima di guardare dove stanno le particelle
 MAX_DOMAIN_CELLS   = 10_000       # celle con particelle: dimensione dei frame nel payload
-MAX_FRAMES         = 40           # passi Δt mostrati dal cursore (più il frame 0)
-MAX_HORIZON_DAYS   = 365
+MAX_FRAMES         = 100          # passi Δt mostrati dal cursore (più il frame 0)
+# Celle × frame: oltre, il risultato pesa decine di MB (valori, più il riferimento).
+MAX_FRAME_VALUES   = 400_000
 SHORT_DT_STAY      = 0.9          # mediana di pᵢᵢ oltre cui Δt è troppo corto (tesi, fig. 5a)
 
 SOURCES = ('uniform', 'windfarms', 'offshore_installations', 'msp_zones', 'geotiff', 'area')
@@ -57,8 +60,8 @@ PROCESS_METADATA = {
         },
         'res': {
             'title': 'Grid resolution (degrees)',
-            'description': f'Allowed values: {list(MARKOV_RESOLUTIONS)}.',
-            'schema': {'type': 'number', 'default': 0.1},
+            'description': f'Between {RES_MIN} and {RES_MAX} degrees.',
+            'schema': {'type': 'number', 'default': 0.25},
             'minOccurs': 0, 'maxOccurs': 1,
         },
         'dt_days': {
@@ -67,11 +70,25 @@ PROCESS_METADATA = {
             'schema': {'type': 'number', 'default': 10},
             'minOccurs': 0, 'maxOccurs': 1,
         },
+        'steps': {
+            'title': 'Steps',
+            'description': f'Number of Δt steps to propagate (1–{MAX_FRAMES}); the forecast '
+                           'may go beyond the simulation duration. Default 100.',
+            'schema': {'type': 'integer', 'default': MAX_FRAMES},
+            'minOccurs': 0, 'maxOccurs': 1,
+        },
         'horizon_days': {
             'title': 'Forecast horizon (days)',
-            'description': f'May exceed the simulation duration; at most {MAX_HORIZON_DAYS} '
-                           f'days and {MAX_FRAMES} steps of Δt.',
+            'description': 'Alternative to steps (older clients): steps = horizon / Δt.',
             'schema': {'type': 'number'},
+            'minOccurs': 0, 'maxOccurs': 1,
+        },
+        'bbox': {
+            'title': 'Grid bounding box',
+            'description': '[lon_min, lat_min, lon_max, lat_max] of the grid. Defaults to '
+                           'the bounds of the scenario seeding area. With the res and bbox '
+                           'of a connectivity grid the matrix is the same as that analysis.',
+            'schema': {'type': 'array', 'items': {'type': 'number'}},
             'minOccurs': 0, 'maxOccurs': 1,
         },
         'release': {
@@ -191,10 +208,7 @@ class MarkovProcessor(BaseProcessor):
         scenario_id = data.get('scenario_id')
         require_scenario(scenario_id, is_unlocked(data))
 
-        res = _number(data, 'res', 0.1, 0, 10, 'res')
-        if res not in MARKOV_RESOLUTIONS:
-            raise ProcessorExecuteError(
-                f'Risoluzione non ammessa: {res}. Valori possibili: {list(MARKOV_RESOLUTIONS)}.')
+        res = _number(data, 'res', 0.25, RES_MIN, RES_MAX, 'res')
         release = str(data.get('release') or 'single').lower()
         if release not in ('single', 'continuous'):
             raise ProcessorExecuteError(f'release non valido: {release!r}. Usare "single" o "continuous".')
@@ -209,19 +223,23 @@ class MarkovProcessor(BaseProcessor):
         dt_days = _number(data, 'dt_days', min(10.0, sim_days), step_h / 24.0, sim_days, 'dt_days')
         dt_steps = max(1, int(round(dt_days * 24.0 / step_h)))
         dt_days = dt_steps * step_h / 24.0          # quello che si usa davvero
-        horizon = _number(data, 'horizon_days', sim_days, dt_days, MAX_HORIZON_DAYS, 'horizon_days')
-        k_max = int(math.floor(horizon / dt_days + 1e-9))
-        if k_max > MAX_FRAMES:
-            raise ProcessorExecuteError(
-                f'Troppi passi: {k_max} × Δt = {k_max * dt_days:g} giorni. Il massimo è '
-                f'{MAX_FRAMES} passi: allungare Δt o accorciare l\'orizzonte.')
+        if data.get('steps') in (None, '') and data.get('horizon_days') not in (None, ''):
+            horizon = _number(data, 'horizon_days', sim_days, dt_days, MAX_FRAMES * dt_days, 'horizon_days')
+            k_max = int(math.floor(horizon / dt_days + 1e-9))
+        else:
+            k_max = int(_number(data, 'steps', MAX_FRAMES, 1, MAX_FRAMES, 'steps'))
 
-        # ── Griglia sull'area di semina ─────────────────────────────────────
-        bounds = sc.get('bounds')
+        # ── Griglia: il riquadro dato, o l'area di semina ───────────────────
+        bounds = data.get('bbox') or sc.get('bounds')
         if not bounds:
             from processes.ConnectivityProcess import _scenario_bbox
             bounds = _scenario_bbox(sc)
-        grid = mk.Grid(bounds, res)
+        if len(bounds) != 4:
+            raise ProcessorExecuteError('bbox deve essere [lon_min, lat_min, lon_max, lat_max].')
+        try:
+            grid = mk.Grid(bounds, res)
+        except ValueError:
+            raise ProcessorExecuteError(f'Bounding box non valido: {bounds}.')
         if grid.size > MAX_GRID_CELLS:
             raise ProcessorExecuteError(
                 f'Griglia troppo fitta: {grid.size} celle a {res}° su quest\'area. '
@@ -248,6 +266,11 @@ class MarkovProcessor(BaseProcessor):
             raise ProcessorExecuteError(
                 f'Il dominio ha {D} celle a {res}°, oltre il massimo di {MAX_DOMAIN_CELLS}: '
                 f'usare una risoluzione più grossa.')
+        if D * (k_max + 1) > MAX_FRAME_VALUES:
+            fit = max(1, MAX_FRAME_VALUES // D - 1)
+            raise ProcessorExecuteError(
+                f'Risultato troppo grande: {D} celle × {k_max} passi. Con questa griglia si '
+                f'arriva a {fit} passi; per averne di più usare una risoluzione più grossa.')
         logger.info(f'[Markov] {scenario_id} res={res} Δt={dt_days:g}d ({dt_steps} step) '
                     f'K={k_max} dominio={D} celle, nnz={M.nnz}, seeding={len(nc_list)}')
 
@@ -349,9 +372,17 @@ class MarkovProcessor(BaseProcessor):
             'type':         'markov',
             'scenario_id':  scenario_id,
             'n_seedings':   len(nc_list),
+            # Con lo spiaggiamento le particelle spiaggiate non hanno posizione: per la
+            # catena sono uscite dal dominio, come quelle uscite dalla griglia.
+            'beaching':     bool(sc.get('beaching', True)),
             'res':          res,
             'dt_days':      dt_days,
             'horizon_days': round(k_max * dt_days, 4),
+            'steps':        k_max,
+            # Riquadro della griglia (bordi delle celle): con res permette di rifare la
+            # stessa griglia, e di riconoscerla in una matrice di connettività.
+            'grid_bbox':    [float(grid.lon0), float(grid.lat0),
+                             float(grid.lon0 + grid.nx * res), float(grid.lat0 + grid.ny * res)],
             'sim_days':     sim_days,
             'valid_days':   valid_days,
             'release':      release,
@@ -374,8 +405,8 @@ class MarkovProcessor(BaseProcessor):
                 [float(grid.lat0 + rows.min() * res), float(grid.lon0 + cols.min() * res)],
                 [float(grid.lat0 + (rows.max() + 1) * res), float(grid.lon0 + (cols.max() + 1) * res)],
             ],
-            'label_it': f'Markov — {sc.get("label_it", scenario_id)}',
-            'label_en': f'Markov — {sc.get("label_en", scenario_id)}',
+            'label_it': f'Propagazione — {sc.get("label_it", scenario_id)}',
+            'label_en': f'Propagate — {sc.get("label_en", scenario_id)}',
             'warnings': warnings,
         }
         logger.info(f'[Markov] completato: {len(frames)} frame, validati fino al giorno '
