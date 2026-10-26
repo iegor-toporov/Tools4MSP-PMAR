@@ -142,6 +142,9 @@ PRESSURE_MODELS = {
         'needs_wind':     True,
         'needs_waves':    True,
         'needs_thermo':   True,
+        # Senza reader del fondale OpenOil usa 10 000 m ovunque: il petrolio che affonda
+        # non tocca mai il fondo, neanche dove il mare è profondo 20 m.
+        'needs_bathymetry': True,
         'needs_vertical': True,
         # Profondità massima delle correnti scaricate (fondale + 10 m, al più questa).
         'depth_cap':      200.0,
@@ -169,6 +172,9 @@ PRESSURE_MODELS = {
         'module':         'opendrift.models.larvalfish',
         'class':          'LarvalFish',
         'needs_wind':     False,
+        # Senza reader del fondale LarvalFish usa 100 m ovunque: sotto il fondale vero
+        # dove il mare è più basso, un fondo finto dove è più profondo.
+        'needs_bathymetry': True,
         'needs_vertical': True,
         # Profondità massima delle correnti scaricate (fondale + 10 m, al più questa).
         'depth_cap':      200.0,

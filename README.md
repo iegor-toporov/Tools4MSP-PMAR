@@ -857,8 +857,11 @@ miss cost 2–5 s of network):
     oil never went below 45 m, chemicals 55 m (1.7% beyond 50 m), larvae stayed at the surface.
     The Mediterranean model has 36 levels in the top 200 m and 141 to the seafloor, so the full
     column would be about four times the download for no change in the result.
-  - Open issue: the bathymetry is passed to the model as a reader only for `ChemicalDrift`;
-    `OpenOil` and `LarvalFish` use OpenDrift's default seafloor.
+  - The bathymetry is also passed to the model as a reader for all three (`needs_bathymetry`).
+    Without it OpenDrift used a fixed seafloor: 10 000 m for `OpenOil`, 100 m for `LarvalFish`.
+    In a 3-day test in the northern Adriatic (seafloor 12–36 m) the models now see the real
+    seafloor and no particle goes below it; oil stayed above 12 m and larvae at the surface,
+    so in that test the trajectories did not change.
 - **Temperature, salinity, mixed layer:** daily, surface (0–1.5 m: the first model level is at
   1.02 m in the Mediterranean). Waves and wind: the finest step available.
 
