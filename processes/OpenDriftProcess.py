@@ -11,6 +11,44 @@ from pygeoapi.process.base import BaseProcessor, ProcessorExecuteError
 _ROOT     = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT_DIR   = os.path.join(_ROOT, 'out')
 CACHE_DIR = os.path.join(_ROOT, 'cache')
+
+
+# ── Contabilità della cache delle forzanti ───────────────────────────────────
+# Quante richieste sono state servite dal disco e quante hanno richiesto un
+# download, con i byte scaricati. Serve a misurare l'efficacia della cache
+# (capitolo "Evaluation"): `PrecomputeProcess` azzera i contatori all'inizio di
+# una simulazione e li salva nel record dello scenario alla fine.
+#
+# Lo stato è di modulo, quindi per processo: è corretto per le simulazioni, che
+# girano sul worker dedicato con concorrenza 1. Non va letto da codice che
+# condivide il processo con altri task.
+_CACHE_STATS = {'hits': 0, 'misses': 0, 'miss_paths': []}
+
+
+def reset_cache_stats():
+    """Azzera i contatori della cache. Da chiamare all'inizio di una simulazione."""
+    _CACHE_STATS.update(hits=0, misses=0, miss_paths=[])
+
+
+def note_cache(hit, path=None):
+    """Registra l'esito di una ricerca in cache."""
+    if hit:
+        _CACHE_STATS['hits'] += 1
+    else:
+        _CACHE_STATS['misses'] += 1
+        if path:
+            _CACHE_STATS['miss_paths'].append(path)
+
+
+def cache_stats():
+    """Contatori correnti. I byte si misurano adesso, a download concluso."""
+    downloaded = sum(os.path.getsize(f) for f in _CACHE_STATS['miss_paths']
+                     if os.path.exists(f))
+    return {
+        'hits': _CACHE_STATS['hits'],
+        'misses': _CACHE_STATS['misses'],
+        'downloaded_mb': round(downloaded / 1e6, 1),
+    }
 _LOG_DIR  = os.path.join(_ROOT, 'logs')
 os.makedirs(OUT_DIR,   exist_ok=True)
 os.makedirs(CACHE_DIR, exist_ok=True)
@@ -20,15 +58,6 @@ from processes.logging_utils import setup_logger
 from processes.access import is_unlocked, require_unlocked
 logger = setup_logger('opendrift_process', 'opendrift', 'opendrift.log')
 
-from data.cmems_datasets import (
-    CMEMS_CURRENT_DATASETS_HOURLY,
-    CMEMS_CURRENT_DATASETS_DAILY,
-    CMEMS_WAVES_DATASETS,
-    CMEMS_BATHY_DATASETS,
-    CMEMS_THERMO_DATASETS,
-    CMEMS_WIND_DATASETS,
-    CMEMS_MLD_DATASETS,
-)
 
 # ── Available models with UI metadata ───────────────────────────────────────
 AVAILABLE_MODELS = {
@@ -144,6 +173,15 @@ PROCESS_METADATA = {
             'schema': {'type': 'number', 'default': 24},
             'minOccurs': 0, 'maxOccurs': 1,
         },
+        'access_token': {
+            'title': 'Access token',
+            'description': 'Only needed when the deployment runs in restricted mode: '
+                           'without a valid token the operations that consume substantial '
+                           'compute are refused. Removed from the payload on first read, so '
+                           'it never reaches the logs, the task queue or the simulation.',
+            'schema': {'type': 'string'},
+            'minOccurs': 0, 'maxOccurs': 1,
+        },
     },
     'outputs': {
         'trajectory': {
@@ -250,32 +288,9 @@ class OpenDriftProcessor(BaseProcessor):
                 f'start={start_time.isoformat()}, duration={duration_hours}h, particles={number}'
             )
 
-        max_depth = model_meta.get('max_depth', 0.5)
-        if model_meta.get('needs_vertical'):
-            dynamic = _get_max_depth_for_area(lon_min, lon_max, lat_min, lat_max)
-            if dynamic is not None:
-                max_depth = dynamic
-                logger.info(f'Dynamic depth for {model_name}: {max_depth:.0f} m')
-            else:
-                logger.warning(f'Bathymetry not available for {model_name}, using default {max_depth:.0f} m')
-        forcing_paths = [_get_forcing_file(lon_min, lon_max, lat_min, lat_max, start_time, end_time, max_depth=max_depth)]
-        if model_meta['needs_wind']:
-            wind_path = _get_wind_file(lon_min, lon_max, lat_min, lat_max, start_time, end_time)
-            if wind_path:
-                forcing_paths.append(wind_path)
-        if model_meta.get('needs_waves'):
-            waves_path = _get_waves_file(lon_min, lon_max, lat_min, lat_max, start_time, end_time)
-            if waves_path:
-                forcing_paths.append(waves_path)
-            else:
-                logger.warning(f'Waves not available for {model_name}: Stokes drift parametrised from wind')
-        if model_meta.get('needs_thermo'):
-            thermo_path = _get_thermo_file(lon_min, lon_max, lat_min, lat_max, start_time, end_time)
-            if thermo_path:
-                forcing_paths.append(thermo_path)
-            else:
-                logger.warning(f'T/S not available for {model_name}: weathering with constant values')
-
+        # Durata in ore: passo orario.
+        forcing_paths, _, _ = fetch_forcings(model_meta, lon_min, lon_max, lat_min, lat_max,
+                                             start_time, end_time, time_step_hours=1)
         logger.debug(f'Forcing files: {forcing_paths}')
 
         try:
@@ -295,9 +310,9 @@ class OpenDriftProcessor(BaseProcessor):
             logger.error(f'Simulation failed: {e}')
             if 'first timestep' in str(e):
                 raise ProcessorExecuteError(
-                    "La simulazione si è fermata subito: l'area di seeding è "
-                    "interamente su terraferma o fuori dal dominio dei dati CMEMS. "
-                    "Sposta il punto di rilascio in mare aperto."
+                    "The simulation stopped immediately: the seeding area is "
+                    "entirely on land, or outside the domain of the CMEMS data. "
+                    "Move the release point into open water."
                 )
             raise ProcessorExecuteError(str(e))
         except Exception as e:
@@ -392,484 +407,354 @@ def _build_model(model_name, model_meta):
     return o
 
 
-# ── Cache helpers — currents ─────────────────────────────────────────────────
+# ── Forzanti CMEMS ───────────────────────────────────────────────────────────
+#
+# Quali dataset: `data/cmems_select.plan_family` (registro + catalogo, nessun tentativo
+# a vuoto). Dove: la cache in `cache/`, indicizzata per contenimento. Come:
+# `copernicusmarine.subset` col formato a serie temporale, su un file temporaneo
+# verificato e poi rinominato, con nuovi tentativi solo per gli errori di rete.
+
+from data import cmems_select as cms
+
+# Profondità massima scaricata per i modelli verticali: oltre, il volume cresce con
+# i livelli (fino a 553 MB per 31 giorni a 4110 m) senza che le particelle ci arrivino.
+DEPTH_CAP_M = 200.0
+# Attese fra i tentativi dopo un errore di rete (s). I tentativi HTTP interni di
+# copernicusmarine (COPERNICUSMARINE_HTTPS_RETRIES, 5 di default) vengono prima.
+_RETRY_WAITS = (5, 15, 45)
+# Download contemporanei delle famiglie di uno scenario: il tempo totale diventa quello
+# del più lento invece della somma.
+_PARALLEL = 4
+_PARTIAL_DIR = os.path.join(CACHE_DIR, '.partial')
+# "Superficie" dei dataset 3D: il primo livello dei modelli sta fra 0.49 m (globale, Mar
+# Nero, IBI) e 1.02 m (Mediterraneo). Chiedere 0–0.5 m nel Mediterraneo non trova nessun
+# livello e la richiesta fallisce.
+SURFACE_DEPTH_M = 1.5
+_stats_lock = __import__('threading').Lock()
+
 
 def _cache_key(lon_min, lon_max, lat_min, lat_max, start_time, end_time, suffix='cur', max_depth=0.5, margin=5.0):
-    """Compute a stable file-system cache key for a CMEMS NetCDF download.
+    """Chiave della cache dello schema precedente (un file per richiesta identica).
 
-    Snaps the bounding box to integer degree boundaries, normalises the time range to
-    whole days, and produces both a human-readable filename label and a short MD5
-    digest to avoid collisions when labels are ambiguous.
-
-    Args:
-        lon_min / lon_max / lat_min / lat_max (float): Seeding bbox in decimal degrees.
-        start_time (datetime): Simulation start; snapped to midnight.
-        end_time (datetime): Simulation end; used to compute the number of whole days.
-        suffix (str): Tag appended to the filename (e.g. ``'cur'``, ``'wind'``, ``'wav'``).
-        max_depth (float): Maximum depth in metres; included in the key for vertical datasets.
-        margin (float): Spatial buffer in degrees added around the bbox for CMEMS download.
-
-    Returns:
-        tuple: ``(cache_path, slon_min, slon_max, slat_min, slat_max, snap_start, n_days)``
-        where *cache_path* is an absolute path under ``CACHE_DIR``.
+    Non la usa più il download; resta perché `bench/run.py` (esperimento `cachekey`)
+    la confronta con le alternative.
     """
-    # Snap bounds to integer degrees for stable cache keys
     slon_min = math.floor(lon_min)
     slon_max = math.ceil(lon_max)
     slat_min = math.floor(lat_min)
     slat_max = math.ceil(lat_max)
     snap_start = start_time.replace(hour=0, minute=0, second=0, microsecond=0)
     n_days     = math.ceil((end_time - snap_start).total_seconds() / 86400) + 1
-
     depth_tag   = f'|{max_depth:.0f}m' if max_depth > 1.0 else ''
     depth_label = f'_{int(max_depth)}m' if max_depth > 1.0 else ''
     raw    = f'{slon_min}|{slon_max}|{slat_min}|{slat_max}|{snap_start.strftime("%Y%m%d")}|{n_days}|{suffix}{depth_tag}|m{margin:.1f}'
     digest = hashlib.md5(raw.encode()).hexdigest()[:8]
-    # Human-readable label uses centre
-    clon = round((lon_min + lon_max) / 2)
-    clat = round((lat_min + lat_max) / 2)
+    clon = (slon_min + slon_max) // 2
+    clat = (slat_min + slat_max) // 2
     label  = f'{clon:+03d}_{clat:+03d}_{snap_start.strftime("%Y%m%d")}_{n_days}d_{suffix}{depth_label}_m{margin:.1f}'
-
-    return (
-        os.path.join(CACHE_DIR, f'cmems_{label}_{digest}.nc'),
-        slon_min, slon_max, slat_min, slat_max, snap_start, n_days,
-    )
+    cache_path = os.path.join(CACHE_DIR, f'cmems_{label}_{digest}.nc')
+    return (cache_path, slon_min, slon_max, slat_min, slat_max, snap_start, n_days)
 
 
-def _get_forcing_file(lon_min, lon_max, lat_min, lat_max, start_time, end_time, time_step_hours=1, max_depth=0.5, margin=5.0):
-    """Return the path to a cached CMEMS current-velocity NetCDF, downloading if absent.
-
-    Selects hourly or daily datasets depending on *time_step_hours*, then delegates to
-    :func:`_download_currents` on cache miss.  The cache key is computed via
-    :func:`_cache_key` from the snapped bbox, date range, depth, and margin.
-
-    Args:
-        lon_min / lon_max / lat_min / lat_max (float): Seeding bbox in decimal degrees.
-        start_time / end_time (datetime): Simulation time window.
-        time_step_hours (int): Requested time resolution (≥ 24 selects daily datasets).
-        max_depth (float): Maximum depth in metres for vertical models.
-        margin (float): Spatial buffer in degrees added around the bbox.
-
-    Returns:
-        str: Absolute path to the cached NetCDF file.
-    """
-    suffix = 'cur_d' if time_step_hours >= 24 else 'cur'
-    cache_path, slon_min, slon_max, slat_min, slat_max, snap_start, n_days = _cache_key(
-        lon_min, lon_max, lat_min, lat_max, start_time, end_time, suffix=suffix, max_depth=max_depth, margin=margin
-    )
-    if os.path.exists(cache_path):
-        logger.debug(f'Currents cache: HIT — {os.path.basename(cache_path)}')
-    else:
-        logger.info(
-            f'Currents cache: MISS — starting download ({n_days} days, '
-            f'{"daily" if time_step_hours >= 24 else "hourly"}, '
-            f'max_depth={max_depth:.0f}m, margin={margin}°, '
-            f'bbox=[{lon_min:.1f},{lat_min:.1f}→{lon_max:.1f},{lat_max:.1f}])'
-        )
-        _download_currents(slon_min, slon_max, slat_min, slat_max, snap_start, n_days, cache_path, time_step_hours, max_depth, margin)
-    return cache_path
+def _request_box(lon_min, lon_max, lat_min, lat_max, margin):
+    """Riquadro scaricato: l'area allineata al grado intero, più il margine. Allineare
+    fa cadere richieste vicine nello stesso file."""
+    return [math.floor(lon_min) - margin, math.floor(lat_min) - margin,
+            math.ceil(lon_max) + margin, math.ceil(lat_max) + margin]
 
 
-def _get_wind_file(lon_min, lon_max, lat_min, lat_max, start_time, end_time, margin=5.0):
-    """Return the path to a cached CMEMS wind NetCDF, downloading if absent.
-
-    Non-blocking: logs a warning and returns ``None`` on download failure, allowing the
-    calling model to degrade gracefully (e.g. no wind-driven Stokes drift).
-
-    Args:
-        lon_min / lon_max / lat_min / lat_max (float): Seeding bbox in decimal degrees.
-        start_time / end_time (datetime): Simulation time window.
-        margin (float): Spatial buffer in degrees added around the bbox.
-
-    Returns:
-        str | None: Absolute path to the cached NetCDF, or ``None`` on download failure.
-    """
-    cache_path, slon_min, slon_max, slat_min, slat_max, snap_start, n_days = _cache_key(
-        lon_min, lon_max, lat_min, lat_max, start_time, end_time, suffix='wind', margin=margin
-    )
-    if os.path.exists(cache_path):
-        logger.debug(f'Wind cache: HIT — {os.path.basename(cache_path)}')
-        return cache_path
-    logger.info(f'Wind cache: MISS — starting download ({n_days} days, margin={margin}°)')
-    try:
-        _download_wind(slon_min, slon_max, slat_min, slat_max, snap_start, n_days, cache_path, margin)
-        return cache_path
-    except Exception as e:
-        logger.warning(f'Wind download failed (non-blocking): {e}')
-        return None
+def _request_period(start_time, end_time):
+    """Giorni interi, con un giorno in più in fondo: l'ultimo passo ha sempre dati."""
+    snap_start = start_time.replace(hour=0, minute=0, second=0, microsecond=0)
+    n_days = math.ceil((end_time - snap_start).total_seconds() / 86400) + 1
+    return snap_start, snap_start + timedelta(days=n_days), n_days
 
 
-def _build_bbox(slon_min, slon_max, slat_min, slat_max, snap_start, n_days, max_depth=0.5, margin=5.0):
-    """Build the keyword-argument dict for ``copernicusmarine.subset()``.
-
-    Expands the snapped bounding box by *margin* degrees on each side and adds a depth
-    range from 0 to *max_depth* metres.  The temporal window spans *n_days* full days
-    starting from *snap_start*.
-
-    Args:
-        slon_min / slon_max / slat_min / slat_max (int): Integer-degree snapped bbox.
-        snap_start (datetime): Midnight-aligned simulation start.
-        n_days (int): Number of whole days to download.
-        max_depth (float): Maximum depth in metres.
-        margin (float): Additional spatial buffer in degrees.
-
-    Returns:
-        dict: Keyword arguments ready to be unpacked into ``copernicusmarine.subset()``.
-    """
-    snap_end = snap_start + timedelta(days=n_days)
-    return dict(
-        minimum_longitude = slon_min - margin,
-        maximum_longitude = slon_max + margin,
-        minimum_latitude  = slat_min - margin,
-        maximum_latitude  = slat_max + margin,
-        minimum_depth     = 0,
-        maximum_depth     = max_depth,
-        start_datetime    = snap_start.strftime('%Y-%m-%dT%H:%M:%S'),
-        end_datetime      = snap_end.strftime('%Y-%m-%dT%H:%M:%S'),
-    )
-
-def _download_currents(slon_min, slon_max, slat_min, slat_max, snap_start, n_days, cache_path, time_step_hours=1, max_depth=0.5, margin=5.0):
-    """Download ocean current velocity (uo, vo) from CMEMS and save to *cache_path*.
-
-    Tries each dataset in ``CMEMS_CURRENT_DATASETS_HOURLY`` (or ``_DAILY``) in order,
-    moving on to the next if the current one raises an exception.
-
-    Args:
-        slon_min / slon_max / slat_min / slat_max (int): Integer-degree snapped bbox.
-        snap_start (datetime): Midnight-aligned start date.
-        n_days (int): Number of days to download.
-        cache_path (str): Destination file path for the output NetCDF.
-        time_step_hours (int): ≥ 24 selects daily-resolution datasets.
-        max_depth (float): Maximum depth in metres.
-        margin (float): Spatial buffer in degrees.
-
-    Raises:
-        ProcessorExecuteError: If every available dataset fails to download.
-    """
-    import copernicusmarine
-    datasets = CMEMS_CURRENT_DATASETS_DAILY if time_step_hours >= 24 else CMEMS_CURRENT_DATASETS_HOURLY
-    freq_label = 'daily' if time_step_hours >= 24 else 'hourly'
-    logger.info(f'Downloading CMEMS currents ({freq_label}, 0–{max_depth:.0f}m, margin={margin}°) — {snap_start.date()} +{n_days}d → {os.path.basename(cache_path)}')
-    bbox     = _build_bbox(slon_min, slon_max, slat_min, slat_max, snap_start, n_days, max_depth, margin)
-    last_err = None
-    for ds in datasets:
-        try:
-            copernicusmarine.subset(
-                dataset_id       = ds['dataset_id'],
-                variables        = ds['variables'],
-                output_filename  = os.path.basename(cache_path),
-                output_directory = CACHE_DIR,
-                overwrite        = True,
-                **bbox,
-            )
-            logger.info(f"Currents dataset downloaded: {ds['dataset_id']}")
-            return
-        except Exception as e:
-            logger.warning(f"Currents dataset failed: {ds['dataset_id']} — {e}")
-            last_err = e
-    logger.error(f'All currents datasets failed. Last error: {last_err}')
-    raise ProcessorExecuteError(f'CMEMS currents download failed: {last_err}')
-
-
-def _download_wind(slon_min, slon_max, slat_min, slat_max, snap_start, n_days, cache_path, margin=5.0):
-    """Download 10-m wind components (eastward, northward) from CMEMS.
-
-    Depth parameters are omitted from the request as wind data is surface-only.
-    Tries datasets in ``CMEMS_WIND_DATASETS`` order.
-
-    Args:
-        slon_min / slon_max / slat_min / slat_max (int): Integer-degree snapped bbox.
-        snap_start (datetime): Midnight-aligned start date.
-        n_days (int): Number of days to download.
-        cache_path (str): Destination file path for the output NetCDF.
-        margin (float): Spatial buffer in degrees.
-
-    Raises:
-        RuntimeError: If every available wind dataset fails to download.
-    """
-    import copernicusmarine
-    logger.info(f'Downloading CMEMS wind (margin={margin}°) — {snap_start.date()} +{n_days}d → {os.path.basename(cache_path)}')
-    bbox = _build_bbox(slon_min, slon_max, slat_min, slat_max, snap_start, n_days, margin=margin)
-    bbox.pop('minimum_depth', None)
-    bbox.pop('maximum_depth', None)
-
-    for ds in CMEMS_WIND_DATASETS:
-        try:
-            copernicusmarine.subset(
-                dataset_id       = ds['dataset_id'],
-                variables        = ds['variables'],
-                output_filename  = os.path.basename(cache_path),
-                output_directory = CACHE_DIR,
-                overwrite        = True,
-                **bbox,
-            )
-            logger.info(f"Wind dataset downloaded: {ds['dataset_id']}")
-            return
-        except Exception as e:
-            logger.warning(f"Wind dataset failed: {ds['dataset_id']} — {e}")
-    raise RuntimeError('Wind dataset not available')
-
-
-# ── Cache helpers — waves (Stokes drift) ─────────────────────────────────────
-
-def _get_waves_file(lon_min, lon_max, lat_min, lat_max, start_time, end_time, margin=5.0):
-    """Return the path to a cached CMEMS Stokes-drift wave NetCDF, downloading if absent.
-
-    Non-blocking: returns ``None`` on download failure so callers can fall back to
-    wind-parameterised Stokes drift.
-
-    Args:
-        lon_min / lon_max / lat_min / lat_max (float): Seeding bbox in decimal degrees.
-        start_time / end_time (datetime): Simulation time window.
-        margin (float): Spatial buffer in degrees.
-
-    Returns:
-        str | None: Absolute path to the cached NetCDF, or ``None`` on failure.
-    """
-    cache_path, slon_min, slon_max, slat_min, slat_max, snap_start, n_days = _cache_key(
-        lon_min, lon_max, lat_min, lat_max, start_time, end_time, suffix='wav', margin=margin
-    )
-    if os.path.exists(cache_path):
-        logger.debug(f'Waves cache: HIT — {os.path.basename(cache_path)}')
-        return cache_path
-    logger.info(f'Waves cache: MISS — starting download ({n_days} days, margin={margin}°)')
-    try:
-        _download_waves(slon_min, slon_max, slat_min, slat_max, snap_start, n_days, cache_path, margin)
-        return cache_path
-    except Exception as e:
-        logger.warning(f'Waves download failed (non-blocking): {e}')
-        return None
-
-
-def _download_waves(slon_min, slon_max, slat_min, slat_max, snap_start, n_days, cache_path, margin=5.0):
-    """Download surface Stokes-drift components (VSDX, VSDY) from CMEMS wave models.
-
-    Depth parameters are omitted as Stokes drift is inherently a surface-layer quantity.
-    Tries datasets in ``CMEMS_WAVES_DATASETS`` order.
-
-    Args:
-        slon_min / slon_max / slat_min / slat_max (int): Integer-degree snapped bbox.
-        snap_start (datetime): Midnight-aligned start date.
-        n_days (int): Number of days to download.
-        cache_path (str): Destination file path for the output NetCDF.
-        margin (float): Spatial buffer in degrees.
-
-    Raises:
-        RuntimeError: If every available wave dataset fails to download.
-    """
-    import copernicusmarine
-    logger.info(f'Downloading CMEMS waves (VSDX/VSDY, margin={margin}°) — {snap_start.date()} +{n_days}d → {os.path.basename(cache_path)}')
-    bbox = _build_bbox(slon_min, slon_max, slat_min, slat_max, snap_start, n_days, max_depth=0.5, margin=margin)
-    bbox.pop('minimum_depth', None)
-    bbox.pop('maximum_depth', None)
-    last_err = None
-    for ds in CMEMS_WAVES_DATASETS:
-        try:
-            copernicusmarine.subset(
-                dataset_id       = ds['dataset_id'],
-                variables        = ds['variables'],
-                output_filename  = os.path.basename(cache_path),
-                output_directory = CACHE_DIR,
-                overwrite        = True,
-                **bbox,
-            )
-            logger.info(f"Waves dataset downloaded: {ds['dataset_id']}")
-            return
-        except Exception as e:
-            logger.warning(f"Waves dataset failed: {ds['dataset_id']} — {e}")
-            last_err = e
-    raise RuntimeError(f'No wave dataset available: {last_err}')
-
-
-# ── Cache helpers — temperature and salinity (OpenOil weathering) ────────────
-
-def _get_thermo_file(lon_min, lon_max, lat_min, lat_max, start_time, end_time, margin=5.0):
-    """Return the path to a cached CMEMS temperature/salinity NetCDF, downloading if absent.
-
-    Non-blocking: returns ``None`` on failure so OpenOil degrades to constant T/S values
-    for weathering rather than aborting the simulation.
-
-    Args:
-        lon_min / lon_max / lat_min / lat_max (float): Seeding bbox in decimal degrees.
-        start_time / end_time (datetime): Simulation time window.
-        margin (float): Spatial buffer in degrees.
-
-    Returns:
-        str | None: Absolute path to the cached NetCDF, or ``None`` on failure.
-    """
-    cache_path, slon_min, slon_max, slat_min, slat_max, snap_start, n_days = _cache_key(
-        lon_min, lon_max, lat_min, lat_max, start_time, end_time, suffix='tem', margin=margin
-    )
-    if os.path.exists(cache_path):
-        logger.debug(f'T/S cache: HIT — {os.path.basename(cache_path)}')
-        return cache_path
-    logger.info(f'T/S cache: MISS — starting download ({n_days} days, margin={margin}°)')
-    try:
-        _download_thermo(slon_min, slon_max, slat_min, slat_max, snap_start, n_days, cache_path, margin)
-        return cache_path
-    except Exception as e:
-        logger.warning(f'T/S download failed (non-blocking): {e}')
-        return None
-
-
-def _download_thermo(slon_min, slon_max, slat_min, slat_max, snap_start, n_days, cache_path, margin=5.0):
-    """Download surface temperature (thetao) and salinity (so) for OpenOil weathering.
-
-    Tries datasets with both variables first; falls back to temperature-only.
-    Salinity is used for emulsification, temperature for evaporation.
-    """
-    import copernicusmarine
-    logger.info(f'Downloading CMEMS T/S (0–0.5 m, margin={margin}°) — {snap_start.date()} +{n_days}d → {os.path.basename(cache_path)}')
-    bbox = _build_bbox(slon_min, slon_max, slat_min, slat_max, snap_start, n_days, max_depth=0.5, margin=margin)
-    last_err = None
-    for ds in CMEMS_THERMO_DATASETS:
-        try:
-            copernicusmarine.subset(
-                dataset_id       = ds['dataset_id'],
-                variables        = ds['variables'],
-                output_filename  = os.path.basename(cache_path),
-                output_directory = CACHE_DIR,
-                overwrite        = True,
-                **bbox,
-            )
-            logger.info(f"T/S dataset downloaded: {ds['dataset_id']} — variables: {ds['variables']}")
-            return
-        except Exception as e:
-            logger.warning(f"T/S dataset failed: {ds['dataset_id']} — {e}")
-            last_err = e
-    raise RuntimeError(f'No T/S dataset available: {last_err}')
-
-
-def _get_mld_file(lon_min, lon_max, lat_min, lat_max, start_time, end_time, margin=5.0):
-    """Path of a cached CMEMS mixed-layer thickness NetCDF (mlotst), or None.
-
-    Used by ChemicalDrift for vertical mixing. Non-blocking: without it OpenDrift
-    falls back to a constant mixed layer.
-    """
-    cache_path, slon_min, slon_max, slat_min, slat_max, snap_start, n_days = _cache_key(
-        lon_min, lon_max, lat_min, lat_max, start_time, end_time, suffix='mld', margin=margin
-    )
-    if os.path.exists(cache_path):
-        return cache_path
-    import copernicusmarine
-    logger.info(f'MLD cache: MISS — starting download ({n_days} days, margin={margin}°)')
-    bbox = _build_bbox(slon_min, slon_max, slat_min, slat_max, snap_start, n_days, margin=margin)
-    # Campo bidimensionale: niente intervallo di profondità.
-    bbox.pop('minimum_depth', None)
-    bbox.pop('maximum_depth', None)
-    for ds in CMEMS_MLD_DATASETS:
-        try:
-            copernicusmarine.subset(
-                dataset_id       = ds['dataset_id'],
-                variables        = ds['variables'],
-                output_filename  = os.path.basename(cache_path),
-                output_directory = CACHE_DIR,
-                overwrite        = True,
-                **bbox,
-            )
-            logger.info(f"MLD dataset downloaded: {ds['dataset_id']}")
-            return cache_path
-        except Exception as e:
-            logger.warning(f"MLD dataset failed: {ds['dataset_id']} — {e}")
-    logger.warning('MLD not available: constant mixed layer')
-    return None
-
-
-def _get_bathymetry_file(lon_min, lon_max, lat_min, lat_max, margin=5.0):
-    """Path of the cached static bathymetry (deptho) for the area, or None."""
-    if _get_max_depth_for_area(lon_min, lon_max, lat_min, lat_max, margin) is None:
-        return None
-    slon_min, slon_max = math.floor(lon_min), math.ceil(lon_max)
-    slat_min, slat_max = math.floor(lat_min), math.ceil(lat_max)
-    raw    = f'{slon_min}|{slon_max}|{slat_min}|{slat_max}|bathy|m{margin:.1f}'
+def _file_name(family, entry, box, t0, n_days, depth_max):
+    """Nome del file in cache. I token (`cur`, `wind`, `wav`, `tem`, `mld`, `bathy`,
+    `<n>d`) sono quelli che legge `bench/run.py` (esperimento `cachedir`)."""
+    import json as _json
+    raw = _json.dumps([entry['dataset_id'], entry['variables'], box,
+                       t0.isoformat() if t0 else None, n_days, depth_max])
     digest = hashlib.md5(raw.encode()).hexdigest()[:8]
-    clon   = round((lon_min + lon_max) / 2)
-    clat   = round((lat_min + lat_max) / 2)
-    path = os.path.join(CACHE_DIR, f'cmems_{clon:+03d}_{clat:+03d}_bathy_m{margin:.1f}_{digest}.nc')
-    return path if os.path.exists(path) else None
+    clon = int(math.floor((box[0] + box[2]) / 2))
+    clat = int(math.floor((box[1] + box[3]) / 2))
+    parts = ['cmems', f'{clon:+03d}', f'{clat:+03d}']
+    if t0 is not None:
+        parts += [t0.strftime('%Y%m%d'), f'{n_days}d']
+    parts.append({'sal': 'tem'}.get(family, family))
+    if family == 'sal':
+        parts.append('so')
+    parts.append(entry['basin'])
+    if depth_max and depth_max > 1:
+        parts.append(f'{int(depth_max)}m')
+    parts.append(digest)
+    return os.path.join(CACHE_DIR, '_'.join(parts) + '.nc')
 
 
-# ── Cache helpers — static bathymetry (maximum area depth) ───────────────────
+def _subset(entry, box, t0, t1, depth, tmp_path):
+    """`copernicusmarine.subset` con nuovi tentativi sugli errori di rete.
 
-def _get_max_depth_for_area(lon_min, lon_max, lat_min, lat_max, margin=5.0):
-    """Return the maximum seafloor depth (m) + 10 m buffer for the given area.
-
-    Uses a static cached NetCDF (geographic key only, no temporal fields).
-    Returns None on failure — non-blocking.
-    """
-    slon_min = math.floor(lon_min)
-    slon_max = math.ceil(lon_max)
-    slat_min = math.floor(lat_min)
-    slat_max = math.ceil(lat_max)
-
-    raw    = f'{slon_min}|{slon_max}|{slat_min}|{slat_max}|bathy|m{margin:.1f}'
-    digest = hashlib.md5(raw.encode()).hexdigest()[:8]
-    clon   = round((lon_min + lon_max) / 2)
-    clat   = round((lat_min + lat_max) / 2)
-    cache_path = os.path.join(CACHE_DIR, f'cmems_{clon:+03d}_{clat:+03d}_bathy_m{margin:.1f}_{digest}.nc')
-
-    if os.path.exists(cache_path):
-        logger.debug(f'Bathymetry cache: HIT — {os.path.basename(cache_path)}')
-    else:
-        logger.info(f'Bathymetry cache: MISS — starting download (margin={margin}°, bbox=[{slon_min},{slat_min}→{slon_max},{slat_max}])')
-        try:
-            _download_bathymetry(slon_min, slon_max, slat_min, slat_max, cache_path, margin)
-        except Exception as e:
-            logger.warning(f'Bathymetry download failed (non-blocking): {e}')
-            return None
-
-    try:
-        import netCDF4 as nc4
-        ds  = nc4.Dataset(cache_path)
-        dep = ds.variables['deptho'][:]
-        ds.close()
-        max_d = float(np.nanmax(dep)) + 10.0
-        logger.info(f'Maximum area depth: {max_d - 10:.0f} m + 10 m buffer = {max_d:.0f} m')
-        return max_d
-    except Exception as e:
-        logger.warning(f'Bathymetry read failed: {e}')
-        return None
-
-
-def _download_bathymetry(slon_min, slon_max, slat_min, slat_max, cache_path, margin=5.0):
-    """Download static seafloor depth (deptho) from a CMEMS bathymetry dataset.
-
-    Requests the ``deptho`` variable without time or depth dimensions.  Tries datasets
-    in ``CMEMS_BATHY_DATASETS`` order.
-
-    Args:
-        slon_min / slon_max / slat_min / slat_max (int): Integer-degree snapped bbox.
-        cache_path (str): Destination file path for the output NetCDF.
-        margin (float): Spatial buffer in degrees.
-
-    Raises:
-        RuntimeError: If every available bathymetry dataset fails to download.
+    Prima col formato a serie temporale, più rapido per aree piccole e periodi lunghi
+    (misurato: 157 s contro 317 s); se il dataset non lo offre, col formato scelto
+    dalla libreria.
     """
     import copernicusmarine
-    logger.info(f'Downloading CMEMS bathymetry (deptho, margin={margin}°) → {os.path.basename(cache_path)}')
-    geo_bbox = dict(
-        minimum_longitude = slon_min - margin,
-        maximum_longitude = slon_max + margin,
-        minimum_latitude  = slat_min - margin,
-        maximum_latitude  = slat_max + margin,
-    )
-    last_err = None
-    for ds in CMEMS_BATHY_DATASETS:
+    kw = dict(dataset_id=entry['dataset_id'], variables=entry['variables'],
+              minimum_longitude=box[0], maximum_longitude=box[2],
+              minimum_latitude=box[1], maximum_latitude=box[3],
+              output_filename=os.path.basename(tmp_path), output_directory=os.path.dirname(tmp_path),
+              overwrite=True, disable_progress_bar=True,
+              # I punti di griglia che racchiudono la richiesta: per la superficie (0–0.5 m)
+              # il primo livello del modello anche quando è più giù (Med: 1.02 m), e ai
+              # bordi del riquadro le celle che lo coprono tutto.
+              coordinates_selection_method='outside')
+    if t0 is not None:
+        kw.update(start_datetime=t0.strftime('%Y-%m-%dT%H:%M:%S'),
+                  end_datetime=t1.strftime('%Y-%m-%dT%H:%M:%S'))
+    if depth is not None:
+        kw.update(minimum_depth=depth[0], maximum_depth=depth[1])
+    service = 'arco-time-series' if entry['kind'] != 'static' else None
+    waits = list(_RETRY_WAITS)
+    while True:
         try:
-            copernicusmarine.subset(
-                dataset_id       = ds['dataset_id'],
-                variables        = ds['variables'],
-                output_filename  = os.path.basename(cache_path),
-                output_directory = CACHE_DIR,
-                overwrite        = True,
-                **geo_bbox,
-            )
-            logger.info(f"Bathymetry dataset downloaded: {ds['dataset_id']}")
+            copernicusmarine.subset(service=service, **kw)
             return
-        except Exception as e:
-            logger.warning(f"Bathymetry dataset failed: {ds['dataset_id']} — {e}")
-            last_err = e
-    raise RuntimeError(f'No bathymetry dataset available: {last_err}')
+        except Exception as e:                                  # noqa: BLE001
+            name = type(e).__name__
+            if service and ('Service' in name or 'service' in str(e).lower()):
+                logger.info(f'{entry["dataset_id"]}: no {service} service, using the default one')
+                service = None
+                continue
+            if cms.is_permanent(e) or not waits:
+                raise
+            wait = waits.pop(0)
+            logger.warning(f'{entry["dataset_id"]}: {name}: {str(e)[:160]} — retrying in {wait}s')
+            __import__('time').sleep(wait)
+
+
+class _NoData(ValueError):
+    """Il file scaricato non ha nessun valore valido nel riquadro."""
+
+
+def _validate(path, entry, need0, need1, require_full):
+    """Il file si apre, ha le variabili, non è tutto NaN e copre il periodo.
+
+    Ritorna (inizio, fine) del file, o (None, None) per i campi statici.
+    """
+    import xarray as xr
+    import pandas as pd
+    with xr.open_dataset(path) as ds:
+        missing = [v for v in entry['variables'] if v not in ds.variables]
+        if missing:
+            raise ValueError(f'variables {missing} missing in {os.path.basename(path)}')
+        var = ds[entry['variables'][0]]
+        first = var.isel(time=0) if 'time' in var.dims else var
+        if not np.isfinite(first.values).any():
+            raise _NoData(f'{os.path.basename(path)}: no valid value (area on land or outside the dataset?)')
+        if 'time' not in ds.coords or need0 is None:
+            return None, None
+        tmin = pd.Timestamp(ds['time'].values.min()).to_pydatetime()
+        tmax = pd.Timestamp(ds['time'].values.max()).to_pydatetime()
+    step = timedelta(hours=entry['step_h'] or 24)
+    if tmin > need0 + step or tmax < need1 - step:
+        msg = f'{entry["dataset_id"]} covers {tmin} → {tmax}, the simulation needs {need0} → {need1}'
+        if require_full:
+            raise ValueError(msg)
+        logger.warning(msg)
+    return tmin, tmax
+
+
+def _fetch_entry(family, entry, box, t0, t1, n_days, need0, need1, *, vertical,
+                 depth_max, require_full):
+    """Percorso di un file con i dati di un dataset: dalla cache o scaricato e validato."""
+    dmax = None
+    if entry['dims'] == '3D' and family in ('cur', 'tem', 'sal'):
+        dmax = depth_max if (family == 'cur' and vertical) else SURFACE_DEPTH_M
+    depth = (0, dmax) if dmax is not None else None
+    hit = cms.find_cached(entry['dataset_id'], entry['variables'], box,
+                          need0 if family != 'bathy' else None, need1, dmax)
+    if hit:
+        with _stats_lock:
+            note_cache(True)
+        logger.info(f'{family}: cache HIT {os.path.basename(hit)} ({entry["dataset_id"]})')
+        return hit
+    path = _file_name(family, entry, box, t0, n_days, dmax)
+    with cms.download_lock(os.path.basename(path)):
+        hit = cms.find_cached(entry['dataset_id'], entry['variables'], box,
+                              need0 if family != 'bathy' else None, need1, dmax)
+        if hit:                                   # scaricato da un altro processo
+            return hit
+        os.makedirs(_PARTIAL_DIR, exist_ok=True)
+        tmp = os.path.join(_PARTIAL_DIR, os.path.basename(path))
+        started = __import__('time').monotonic()
+        logger.info(f'{family}: downloading {entry["dataset_id"]} box={box} '
+                    f'{t0.date() if t0 else "static"}+{n_days if t0 else 0}d depth={depth}')
+        try:
+            _subset(entry, box, t0, t1, depth, tmp)
+            tmin, tmax = _validate(tmp, entry, need0 if t0 else None, need1,
+                                   require_full=require_full)
+            os.replace(tmp, path)
+        finally:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        cms.record_cached(path, {
+            'family': family, 'dataset_id': entry['dataset_id'], 'variables': entry['variables'],
+            'basin': entry['basin'], 'bbox': box, 'depth_max': dmax,
+            'time': [tmin.isoformat(), tmax.isoformat()] if tmin else None,
+        })
+        with _stats_lock:
+            note_cache(False, path)
+        secs = __import__('time').monotonic() - started
+        mb = os.path.getsize(path) / 1e6
+        logger.info(f'{family}: downloaded {entry["dataset_id"]} {mb:.1f} MB in {secs:.0f}s '
+                    f'({mb / max(secs, 1e-3):.2f} MB/s)')
+        return path
+
+
+def _fetch_family(family, box, t0, t1, n_days, need0, need1, *, hourly, vertical,
+                  depth_max, catalog, required):
+    """Scarica (o prende dalla cache) i file di una famiglia di variabili.
+
+    Un bacino regionale il cui file non ha dati nel riquadro (l'estensione del catalogo
+    è un rettangolo, e può includere mare che quel modello non simula) si esclude e la
+    scelta si rifà senza di lui: costa un download a vuoto, non la simulazione.
+
+    Returns:
+        tuple: (percorsi, provenienza). Senza dataset disponibili: errore se la famiglia
+        è indispensabile (correnti), altrimenti liste vuote.
+    """
+    excluded = set()
+    while True:
+        choices = cms.plan_family(family, box, need0, need1, hourly=hourly, vertical=vertical,
+                                  catalog=catalog, exclude=excluded)
+        if not choices:
+            msg = f'No CMEMS {family} dataset covers {box} for {need0} → {need1}'
+            if required:
+                raise ProcessorExecuteError(msg)
+            logger.warning(msg)
+            return [], []
+        single = len(choices) == 1 or len({c['basin'] for c in choices}) == len(choices)
+        paths, empty = [], None
+        for entry in choices:
+            try:
+                paths.append(_fetch_entry(family, entry, box, t0, t1, n_days, need0, need1,
+                                          vertical=vertical, depth_max=depth_max,
+                                          require_full=(family == 'cur' and single)))
+            except _NoData as e:
+                if entry['basin'] == 'glo':
+                    raise
+                logger.warning(f'{family}: {entry["dataset_id"]} has no data here ({e}); '
+                               f'choosing again without basin {entry["basin"]}')
+                empty = entry['basin']
+                break
+        if empty is None:
+            return paths, [cms.describe_choice(e) for e in choices]
+        excluded.add(empty)
+
+
+def _max_depth_from(paths, box):
+    """Profondità massima del fondale (m) nel riquadro, dai file di batimetria."""
+    import xarray as xr
+    best = None
+    for p in paths:
+        try:
+            with xr.open_dataset(p) as ds:
+                d = ds['deptho']
+                lon = 'longitude' if 'longitude' in d.dims else 'lon'
+                lat = 'latitude' if 'latitude' in d.dims else 'lat'
+                sub = d.sel({lon: slice(box[0], box[2]), lat: slice(box[1], box[3])})
+                v = float(np.nanmax(sub.values)) if sub.size else None
+        except Exception as e:                                  # noqa: BLE001
+            logger.warning(f'Bathymetry read failed ({os.path.basename(p)}): {e}')
+            continue
+        if v is not None and np.isfinite(v):
+            best = v if best is None else max(best, v)
+    return best
+
+
+def fetch_forcings(model_meta, lon_min, lon_max, lat_min, lat_max, start_time, end_time,
+                   time_step_hours=1, margin=5.0, label=''):
+    """Tutte le forzanti di una simulazione, in parallelo.
+
+    Args:
+        model_meta: voce di `PRESSURE_MODELS` (o `AVAILABLE_MODELS`): `needs_wind`,
+            `needs_waves`, `needs_thermo`, `needs_mld`, `needs_bathymetry`,
+            `needs_vertical`, `max_depth`, `depth_cap`.
+        lon_min … lat_max: area di semina.
+        start_time, end_time: periodo simulato.
+
+    Returns:
+        tuple: (percorsi per OpenDrift, correnti prima; provenienza per famiglia;
+        profondità massima scaricata in m).
+
+    Raises:
+        ProcessorExecuteError: se mancano le correnti.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    catalog = cms.load_catalog()
+    box = _request_box(lon_min, lon_max, lat_min, lat_max, margin)
+    t0, t1, n_days = _request_period(start_time, end_time)
+    hourly = time_step_hours < 24
+    vertical = bool(model_meta.get('needs_vertical'))
+    common = dict(hourly=hourly, vertical=vertical, catalog=catalog)
+    tag = f'[{label}] ' if label else ''
+
+    # Batimetria prima: dà la profondità delle correnti dei modelli verticali.
+    max_depth = model_meta.get('max_depth', 0.5)
+    bathy_paths, provenance = [], {}
+    if vertical or model_meta.get('needs_bathymetry'):
+        try:
+            bathy_paths, provenance['bathy'] = _fetch_family(
+                'bathy', box, None, None, 0, None, None, depth_max=None, required=False, **common)
+        except Exception as e:                                  # noqa: BLE001
+            logger.warning(f'{tag}Bathymetry not available: {e}')
+        if vertical:
+            cap = float(model_meta.get('depth_cap', DEPTH_CAP_M))
+            seafloor = _max_depth_from(bathy_paths, box)
+            max_depth = min(seafloor + 10.0, cap) if seafloor is not None else min(max_depth, cap)
+            logger.info(f'{tag}Currents depth: 0–{max_depth:.0f} m '
+                        f'(seafloor {seafloor if seafloor is None else round(seafloor)} m, cap {cap:.0f} m)')
+
+    families = ['cur']
+    if model_meta.get('needs_wind'):
+        families.append('wind')
+    if model_meta.get('needs_waves'):
+        families.append('wav')
+    if model_meta.get('needs_thermo'):
+        families += ['tem', 'sal']
+    if model_meta.get('needs_mld'):
+        families.append('mld')
+
+    results = {}
+    with ThreadPoolExecutor(min(_PARALLEL, len(families))) as ex:
+        futures = {f: ex.submit(_fetch_family, f, box, t0, t1, n_days, start_time, end_time,
+                                depth_max=max_depth, required=(f == 'cur'), **common)
+                   for f in families}
+        for f, fut in futures.items():
+            try:
+                results[f] = fut.result()
+            except ProcessorExecuteError:
+                raise
+            except Exception as e:                              # noqa: BLE001
+                if f == 'cur':
+                    raise ProcessorExecuteError(f'CMEMS currents download failed: {e}')
+                logger.warning(f'{tag}{f} not available, the model uses its fallback: {e}')
+                results[f] = ([], [])
+
+    paths = []
+    for f in families:
+        p, prov = results[f]
+        paths += p
+        if prov:
+            provenance[f] = prov
+    if model_meta.get('needs_bathymetry'):
+        paths += bathy_paths
+    try:
+        cms.enforce_limit()
+    except Exception as e:                                      # noqa: BLE001
+        logger.warning(f'Cache eviction failed: {e}')
+    return paths, provenance, max_depth
 
 
 # ── Trajectory reader ────────────────────────────────────────────────────────

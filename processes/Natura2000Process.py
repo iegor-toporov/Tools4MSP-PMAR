@@ -16,7 +16,7 @@ PROCESS_METADATA = {
     'description': {
         'en': 'Returns EMODnet Natura 2000 marine site polygons for a given bounding box.'
     },
-    'jobControlOptions': ['sync-execute'],
+    'jobControlOptions': ['sync-execute', 'async-execute'],
     'keywords': ['natura2000', 'emodnet', 'geojson', 'protected areas'],
     'inputs': {
         'lon_min': {'schema': {'type': 'number'}, 'minOccurs': 1, 'maxOccurs': 1},
@@ -68,7 +68,7 @@ class Natura2000Processor(BaseProcessor):
             lon_max = float(data['lon_max'])
             lat_max = float(data['lat_max'])
         except (KeyError, TypeError, ValueError) as e:
-            raise ProcessorExecuteError(f'Parametri bbox non validi: {e}')
+            raise ProcessorExecuteError(f'Invalid bbox parameters: {e}')
 
         study_area = [lon_min, lat_min, lon_max, lat_max]
         logger.info(f'Natura 2000 query: bbox={study_area}')

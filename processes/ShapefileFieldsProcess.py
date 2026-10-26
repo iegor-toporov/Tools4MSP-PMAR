@@ -21,7 +21,7 @@ PROCESS_METADATA = {
         'en': 'Lists the attribute columns of an uploaded shapefile (ZIP), with a few '
               'sample values each, and its number of polygons.'
     },
-    'jobControlOptions': ['sync-execute'],
+    'jobControlOptions': ['sync-execute', 'async-execute'],
     'keywords': ['shapefile', 'attributes', 'connectivity'],
     'inputs': {
         'shapefile_b64': {
@@ -46,7 +46,7 @@ class ShapefileFieldsProcessor(BaseProcessor):
 
     def execute(self, data):
         if not data.get('shapefile_b64'):
-            raise ProcessorExecuteError('Fornire shapefile_b64.')
+            raise ProcessorExecuteError('Provide shapefile_b64.')
         os.environ.pop('PROJ_LIB', None)
         os.environ.pop('PROJ_DATA', None)
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -57,7 +57,7 @@ class ShapefileFieldsProcessor(BaseProcessor):
                 raise
             except Exception as e:
                 logger.warning(f'[ShapefileFields] lettura fallita: {e}')
-                raise ProcessorExecuteError('Shapefile non leggibile: serve uno ZIP con .shp, .shx e .dbf.')
+                raise ProcessorExecuteError('Shapefile not readable: a ZIP containing .shp, .shx and .dbf is required.')
         columns = [
             {'name': c,
              'samples': [str(v) for v in gdf[c].dropna().unique()[:SAMPLE_VALUES]],

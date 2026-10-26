@@ -136,6 +136,15 @@ PROCESS_METADATA = {
             'schema': {'type': 'array', 'items': {'type': 'number'}},
             'minOccurs': 0, 'maxOccurs': 1,
         },
+        'access_token': {
+            'title': 'Access token',
+            'description': 'Only needed when the deployment runs in restricted mode: '
+                           'without a valid token the operations that consume substantial '
+                           'compute are refused. Removed from the payload on first read, so '
+                           'it never reaches the logs, the task queue or the simulation.',
+            'schema': {'type': 'string'},
+            'minOccurs': 0, 'maxOccurs': 1,
+        },
     },
     'outputs': {
         'result': {
@@ -149,13 +158,13 @@ PROCESS_METADATA = {
 def _load_scenario(scenario_id):
     """Carica i metadata di uno scenario pre-calcolato e i path dei suoi NetCDF."""
     if not scenario_id:
-        raise ProcessorExecuteError('Fornire scenario_id.')
+        raise ProcessorExecuteError('Provide scenario_id.')
     if not str(scenario_id).startswith('custom_'):
-        raise ProcessorExecuteError(f'Scenario sconosciuto: {scenario_id!r}')
+        raise ProcessorExecuteError(f'Unknown scenario: {scenario_id!r}')
 
     meta_path = os.path.join(SCENARIOS_DIR, f'{scenario_id}.json')
     if not os.path.exists(meta_path):
-        raise ProcessorExecuteError(f'Scenario custom non trovato: {scenario_id!r}')
+        raise ProcessorExecuteError(f'Custom scenario not found: {scenario_id!r}')
     with open(meta_path) as f:
         sc = json.load(f)
 
@@ -166,7 +175,7 @@ def _load_scenario(scenario_id):
         path = os.path.join(SCENARIOS_DIR, fn)
         if not os.path.exists(path):
             raise ProcessorExecuteError(
-                f'Scenario "{scenario_id}" non ancora pre-calcolato (manca {fn}).'
+                f'Scenario "{scenario_id}" has not been pre-computed yet ({fn} is missing).'
             )
         nc_list.append(path)
     return sc, nc_list
@@ -177,7 +186,7 @@ def _scenario_bbox(sc):
     shp = sc.get('shapefile')
     if not shp or not os.path.exists(shp):
         raise ProcessorExecuteError(
-            'Lo scenario non ha un\'area di semina sul disco: fornire un bbox esplicito.'
+            'The scenario has no seeding area on disk: provide an explicit bbox.'
         )
     b = gpd.read_file(shp).to_crs('EPSG:4326').total_bounds
     return [float(b[0]), float(b[1]), float(b[2]), float(b[3])]
@@ -198,7 +207,7 @@ def _make_grid_polygons(res, bbox):
 
     if not (GRID_RES_MIN <= res <= GRID_RES_MAX):
         raise ProcessorExecuteError(
-            f'Risoluzione non ammessa: {res}°. Usare un valore fra {GRID_RES_MIN}° e {GRID_RES_MAX}°.'
+            f'Resolution not allowed: {res}°. Use a value between {GRID_RES_MIN}° and {GRID_RES_MAX}°.'
         )
     lon_min, lat_min, lon_max, lat_max = align_bbox(bbox, res)
 
@@ -207,8 +216,8 @@ def _make_grid_polygons(res, bbox):
     estimate = math.ceil((lon_max - lon_min) / res) * math.ceil((lat_max - lat_min) / res)
     if estimate > MAX_POLYGONS * 4:
         raise ProcessorExecuteError(
-            f'Griglia troppo fitta: ~{estimate} celle per {res}° su quest\'area. '
-            f'Usare una risoluzione più grossa o un bbox più piccolo.'
+            f'Grid too fine: ~{estimate} cells at {res}° over this area. '
+            f'Use a coarser resolution or a smaller bbox.'
         )
 
     grid = make_grid(res=res, study_area=[lon_min, lat_min, lon_max, lat_max])
@@ -216,12 +225,12 @@ def _make_grid_polygons(res, bbox):
     gdf = gdf[['geometry']].set_crs('EPSG:4326', allow_override=True).reset_index(drop=True)
     if gdf.empty:
         raise ProcessorExecuteError(
-            'Nessuna cella di mare nel bounding box indicato: è tutto terraferma?'
+            'No sea cell in the given bounding box: is it all land?'
         )
     if len(gdf) > MAX_POLYGONS:
         raise ProcessorExecuteError(
-            f'La griglia produce {len(gdf)} celle di mare, oltre il massimo di '
-            f'{MAX_POLYGONS}: usare una risoluzione più grossa.'
+            f'The grid yields {len(gdf)} sea cells, above the maximum of '
+            f'{MAX_POLYGONS}: use a coarser resolution.'
         )
 
     # Etichette r<riga>c<colonna> calcolate sui bounds *reali* della griglia: per
@@ -244,7 +253,7 @@ def align_bbox(bbox, res):
     descrive le stesse celle di una previsione con gli stessi res e bbox."""
     lon_min, lat_min, lon_max, lat_max = (float(v) for v in bbox)
     if lon_max <= lon_min or lat_max <= lat_min:
-        raise ProcessorExecuteError(f'Bounding box non valido: {bbox}.')
+        raise ProcessorExecuteError(f'Invalid bounding box: {bbox}.')
     snap_lo = lambda v: math.floor(v / res + 1e-9) * res
     snap_hi = lambda v: math.ceil(v / res - 1e-9) * res
     return [round(snap_lo(lon_min), 6), round(snap_lo(lat_min), 6),
@@ -256,19 +265,19 @@ def _seeding_area_polygons(sc):
     multipoligono diventano nodi distinti, come le aree di un network di MPA."""
     shp = sc.get('shapefile')
     if not shp or not os.path.exists(shp):
-        raise ProcessorExecuteError('Lo scenario non ha un\'area di semina sul disco.')
+        raise ProcessorExecuteError('The scenario has no seeding area on disk.')
     gdf = gpd.read_file(shp).to_crs('EPSG:4326')
     gdf = gdf[~gdf.geometry.isna() & ~gdf.geometry.is_empty]
     parts = gdf.explode(index_parts=False).reset_index(drop=True)
     parts = parts[parts.geometry.geom_type == 'Polygon'].reset_index(drop=True)
     if len(parts) < 2:
         raise ProcessorExecuteError(
-            'L\'area di semina ha un solo poligono: per la connettività servono almeno '
-            'due nodi. Caricare uno shapefile o generare una griglia.'
+            'The seeding area has a single polygon: connectivity needs at least '
+            'two nodes. Upload a shapefile or generate a grid.'
         )
     if len(parts) > MAX_POLYGONS:
         raise ProcessorExecuteError(
-            f'Troppi poligoni nell\'area di semina ({len(parts)}): il massimo è {MAX_POLYGONS}.'
+            f'Too many polygons in the seeding area ({len(parts)}): the maximum is {MAX_POLYGONS}.'
         )
     labels = [f'#{i}' for i in range(len(parts))]
     out = parts[['geometry']].copy()
@@ -343,13 +352,13 @@ def _read_polygons(data, tmpdir, label_field):
 
     gdf = gdf[~gdf.geometry.isna() & ~gdf.geometry.is_empty].reset_index(drop=True)
     if gdf.empty:
-        raise ProcessorExecuteError('Lo shapefile non contiene geometrie valide.')
+        raise ProcessorExecuteError('The shapefile contains no valid geometry.')
     if len(gdf) > MAX_POLYGONS:
         raise ProcessorExecuteError(
-            f'Troppi poligoni ({len(gdf)}): il massimo supportato è {MAX_POLYGONS}.'
+            f'Too many polygons ({len(gdf)}): the maximum supported is {MAX_POLYGONS}.'
         )
     if not gdf.geometry.geom_type.isin(['Polygon', 'MultiPolygon']).all():
-        raise ProcessorExecuteError('Lo shapefile deve contenere solo poligoni.')
+        raise ProcessorExecuteError('The shapefile must contain polygons only.')
 
     # Etichette dei nodi. node_id è anche la garanzia che cm_grid abbia sempre una
     # colonna non geometrica: PMAR la usa per riconoscere la cella buffer e senza
@@ -358,7 +367,7 @@ def _read_polygons(data, tmpdir, label_field):
         labels = gdf[label_field].astype(str).tolist()
     elif label_field:
         raise ProcessorExecuteError(
-            f'Colonna {label_field!r} assente. Disponibili: '
+            f'Column {label_field!r} not found. Available: '
             f'{[c for c in gdf.columns if c != "geometry"]}'
         )
     else:
@@ -471,7 +480,7 @@ class ConnectivityProcessor(BaseProcessor):
 
         if mode not in ('passage', 'transition'):
             raise ProcessorExecuteError(
-                f'mode non valido: {mode!r}. Usare "passage" o "transition".'
+                f'Invalid mode: {mode!r}. Use "passage" or "transition".'
             )
 
         sc, nc_list = _load_scenario(scenario_id)
@@ -493,7 +502,7 @@ class ConnectivityProcessor(BaseProcessor):
                 grid_bbox = data.get('bbox') or _scenario_bbox(sc)
                 if len(grid_bbox) != 4:
                     raise ProcessorExecuteError(
-                        'bbox deve essere [lon_min, lat_min, lon_max, lat_max].'
+                        'bbox must be [lon_min, lat_min, lon_max, lat_max].'
                     )
                 grid_bbox = align_bbox(grid_bbox, grid_res)
                 gdf, labels = _make_grid_polygons(grid_res, grid_bbox)
@@ -502,8 +511,8 @@ class ConnectivityProcessor(BaseProcessor):
                             f'{len(gdf)} celle di mare')
             else:
                 raise ProcessorExecuteError(
-                    'Fornire i poligoni (shapefile_b64 o geojson) oppure grid_res '
-                    'per generare una griglia.'
+                    'Provide the polygons (shapefile_b64 or geojson), or grid_res '
+                    'to generate a grid.'
                 )
             n_nodes = len(gdf)
 
@@ -602,9 +611,9 @@ class ConnectivityProcessor(BaseProcessor):
                 ))
             if int(released.sum()) == 0:
                 raise ProcessorExecuteError(
-                    'Nessuna particella dello scenario si trova dentro i poligoni '
-                    'forniti al tempo 0: la connettività non è calcolabile. Verifica '
-                    'che i poligoni ricadano nell\'area di seeding dello scenario.'
+                    'No particle of the scenario lies inside the supplied polygons '
+                    'at time 0, so connectivity cannot be computed. Check that the '
+                    'polygons fall within the seeding area of the scenario.'
                 )
 
             result = {

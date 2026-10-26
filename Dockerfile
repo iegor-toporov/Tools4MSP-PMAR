@@ -61,6 +61,7 @@ COPY data/ ./data/
 COPY processes/ ./processes/
 COPY pygeoapi-config.yml ./
 COPY scripts/entrypoint.sh ./scripts/entrypoint.sh
+COPY scripts/check_cmems_catalog.py scripts/prefetch_cmems.py ./scripts/
 RUN sed -i 's/\r$//' /app/scripts/entrypoint.sh && chmod +x /app/scripts/entrypoint.sh
 COPY worker/ ./worker/
 

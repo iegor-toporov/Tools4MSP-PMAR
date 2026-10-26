@@ -16,7 +16,7 @@ PROCESS_METADATA = {
     'description': {
         'en': 'Returns EMODnet offshore installation features for a given bounding box.'
     },
-    'jobControlOptions': ['sync-execute'],
+    'jobControlOptions': ['sync-execute', 'async-execute'],
     'keywords': ['offshore', 'installations', 'emodnet', 'geojson'],
     'inputs': {
         'lon_min': {'schema': {'type': 'number'}, 'minOccurs': 1, 'maxOccurs': 1},
@@ -68,7 +68,7 @@ class OffshoreInstallationsProcessor(BaseProcessor):
             lon_max = float(data['lon_max'])
             lat_max = float(data['lat_max'])
         except (KeyError, TypeError, ValueError) as e:
-            raise ProcessorExecuteError(f'Parametri bbox non validi: {e}')
+            raise ProcessorExecuteError(f'Invalid bbox parameters: {e}')
 
         study_area = [lon_min, lat_min, lon_max, lat_max]
         logger.info(f'Offshore installations query: bbox={study_area}')

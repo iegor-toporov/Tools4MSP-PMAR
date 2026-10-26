@@ -21,6 +21,10 @@ if [ "${1:-}" = "celery" ]; then
     exec celery "$@"
 fi
 
+# Catalogo CMEMS: aggiornato e controllato in background, senza ritardare l'avvio.
+# Avvisi nel log se un dataset del registro sparisce o va in ritiro.
+python /app/scripts/check_cmems_catalog.py &
+
 # Generate OpenAPI spec from the fixed config (solo per il backend gunicorn)
 pygeoapi openapi generate "$PYGEOAPI_CONFIG" --output-file "$PYGEOAPI_OPENAPI"
 

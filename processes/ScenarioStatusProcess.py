@@ -26,7 +26,7 @@ PROCESS_METADATA = {
     'description': {
         'en': 'Returns the pre-computation status for each defined PMAR scenario.'
     },
-    'jobControlOptions': ['sync-execute'],
+    'jobControlOptions': ['sync-execute', 'async-execute'],
     'keywords': ['pmar', 'scenario', 'status'],
     'inputs': {
         'area_id': {
@@ -47,6 +47,15 @@ PROCESS_METADATA = {
             'title': 'Remove a failed scenario',
             'description': 'Id of a failed scenario to delete (JSON, shapefile). Requires full '
                            'access; scenarios that are ready, queued or running are refused.',
+            'schema': {'type': 'string'},
+            'minOccurs': 0, 'maxOccurs': 1,
+        },
+        'access_token': {
+            'title': 'Access token',
+            'description': 'Only needed when the deployment runs in restricted mode: '
+                           'without a valid token the operations that consume substantial '
+                           'compute are refused. Removed from the payload on first read, so '
+                           'it never reaches the logs, the task queue or the simulation.',
             'schema': {'type': 'string'},
             'minOccurs': 0, 'maxOccurs': 1,
         },
@@ -272,6 +281,9 @@ class ScenarioStatusProcessor(BaseProcessor):
                     'area_en':         sc.get('area_en', ''),
                     'pressure':        sc['pressure'],
                     'chemical_compound': sc.get('chemical_compound'),
+                    # Dataset CMEMS usati, per famiglia (correnti, vento, …): la provenienza
+                    # mostrata nel riassunto. Assente negli scenari precedenti.
+                    'forcing_datasets': sc.get('forcing_datasets'),
                     'pnum':            sc['pnum'],
                     # Only per-polygon seeding gives every polygon the same sampling
                     # effort, so the UI needs this to tell which scenarios are sound

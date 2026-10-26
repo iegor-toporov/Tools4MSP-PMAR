@@ -43,6 +43,9 @@ docker-compose.override.yml
 # Master's thesis — written locally, not part of the application
 thesis/
 
+# Benchmarks for thesis - local
+bench/
+
 
 # Shapefile di test per la connettività — dati generati, si rifanno con
 # tests/make_test_shapefiles.py

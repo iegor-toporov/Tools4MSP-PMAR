@@ -74,6 +74,15 @@ PROCESS_METADATA = {
             'schema': {'type': 'array', 'items': {'type': 'number'}},
             'minOccurs': 0, 'maxOccurs': 1,
         },
+        'access_token': {
+            'title': 'Access token',
+            'description': 'Only needed when the deployment runs in restricted mode: '
+                           'without a valid token the operations that consume substantial '
+                           'compute are refused. Removed from the payload on first read, so '
+                           'it never reaches the logs, the task queue or the simulation.',
+            'schema': {'type': 'string'},
+            'minOccurs': 0, 'maxOccurs': 1,
+        },
     },
     'outputs': {
         'result': {
@@ -93,9 +102,9 @@ def _number(data, key, default, lo, hi, name):
     try:
         v = float(data.get(key) if data.get(key) not in (None, '') else default)
     except (TypeError, ValueError):
-        raise ProcessorExecuteError(f'{name} non valido: {data.get(key)!r}.')
+        raise ProcessorExecuteError(f'Invalid {name}: {data.get(key)!r}.')
     if not (lo <= v <= hi):
-        raise ProcessorExecuteError(f'{name} fuori intervallo: {v} (ammesso {lo}–{hi}).')
+        raise ProcessorExecuteError(f'{name} out of range: {v} (allowed {lo}-{hi}).')
     return v
 
 
@@ -135,15 +144,15 @@ class MarkovProcessor(BaseProcessor):
             from processes.ConnectivityProcess import _scenario_bbox
             bounds = _scenario_bbox(sc)
         if len(bounds) != 4:
-            raise ProcessorExecuteError('bbox deve essere [lon_min, lat_min, lon_max, lat_max].')
+            raise ProcessorExecuteError('bbox must be [lon_min, lat_min, lon_max, lat_max].')
         try:
             grid = mk.Grid(bounds, res)
         except ValueError:
-            raise ProcessorExecuteError(f'Bounding box non valido: {bounds}.')
+            raise ProcessorExecuteError(f'Invalid bounding box: {bounds}.')
         if grid.size > MAX_GRID_CELLS:
             raise ProcessorExecuteError(
-                f'Griglia troppo fitta: {grid.size} celle a {res}° su quest\'area. '
-                f'Usare una risoluzione più grossa.')
+                f'Grid too fine: {grid.size} cells at {res}° over this area. '
+                f'Use a coarser resolution.')
 
         # ── Matrice di transizione: posizioni a t₀ e dopo Δt ──────────────────
         per_seed = []
@@ -151,18 +160,18 @@ class MarkovProcessor(BaseProcessor):
             cells = _positions(nc, [0, dt_steps], grid)
             if dt_steps not in cells:
                 raise ProcessorExecuteError(
-                    f'Δt di {dt_days:g} giorni supera la durata di un seeding della simulazione.')
+                    f'A Delta t of {dt_days:g} days exceeds the duration of one release of the simulation.')
             per_seed.append(cells)
         try:
             M, dom, Ni = mk.transition_matrix([c[0] for c in per_seed],
                                               [c[dt_steps] for c in per_seed], grid.size)
         except ValueError:
-            raise ProcessorExecuteError('Nessuna particella dello scenario cade nella griglia a t₀.')
+            raise ProcessorExecuteError('No particle of the scenario falls inside the grid at t0.')
         D = len(dom)
         if D > MAX_DOMAIN_CELLS:
             raise ProcessorExecuteError(
-                f'Il dominio ha {D} celle a {res}°, oltre il massimo di {MAX_DOMAIN_CELLS}: '
-                f'usare una risoluzione più grossa.')
+                f'The domain has {D} cells at {res}°, above the maximum of {MAX_DOMAIN_CELLS}: '
+                f'use a coarser resolution.')
         # Sempre 100 multipli di Δt, salvo griglie così fitte da superare il payload.
         k_max = max(1, min(MAX_STEPS, MAX_FRAME_VALUES // D - 1))
         logger.info(f'[Markov] {scenario_id} res={res} Δt={dt_days:g}d ({dt_steps} step) '

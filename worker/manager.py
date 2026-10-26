@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 from datetime import datetime, timezone
 from http import HTTPStatus
@@ -14,6 +15,8 @@ from pygeoapi.process.base import (
     JobResultNotFoundError,
 )
 from pygeoapi.util import JobStatus, RequestedResponse, Subscriber
+
+LOGGER = logging.getLogger(__name__)
 
 _TTL = 7 * 24 * 3600  # 7 days
 
@@ -224,6 +227,40 @@ class CeleryManager(BaseManager):
             return mimetype, json.loads(result_str)
         except (json.JSONDecodeError, TypeError):
             return mimetype, result_str
+
+    # ── Sync execution ───────────────────────────────────────────────────
+
+    def _execute_handler_sync(self,
+                              p: BaseProcessor,
+                              job_id: str,
+                              data_dict: dict,
+                              requested_outputs: Optional[dict] = None,
+                              subscriber: Optional[Subscriber] = None,
+                              requested_response: Optional[RequestedResponse] = RequestedResponse.raw.value  # noqa
+                              ) -> Tuple[str, Any, JobStatus]:
+        """Esegue il processo in linea, e salva il risultato come fa il ramo asincrono.
+
+        `BaseManager._execute_handler_sync` scrive l'output su disco solo se il manager
+        ha `output_dir`, e non lo mette mai nel record del job: un'esecuzione sincrona
+        lasciava quindi un job `successful` il cui `/results` rispondeva
+        ``JobResultNotFound``. Qui si delega al comportamento di base e si aggiunge il
+        payload in Redis, così le due modalità lasciano lo stesso record.
+        """
+        mimetype, outputs, status = super()._execute_handler_sync(
+            p, job_id, data_dict, requested_outputs, subscriber, requested_response)
+
+        if status == JobStatus.successful:
+            try:
+                self.update_job(job_id, {
+                    'mimetype': mimetype or 'application/json',
+                    'result': json.dumps(outputs),
+                })
+            except (TypeError, ValueError):
+                # Output non serializzabile (es. bytes): il job resta valido, il
+                # risultato è già stato restituito nel corpo della risposta.
+                LOGGER.warning(f'[{job_id}] sync result not JSON-serialisable, not stored')
+
+        return mimetype, outputs, status
 
     # ── Async dispatch → Celery ──────────────────────────────────────────
 

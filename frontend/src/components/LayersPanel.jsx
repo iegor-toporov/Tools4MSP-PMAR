@@ -7,6 +7,7 @@ import { IconEye, IconEyeOff, IconTrash, IconPencil, IconDownload, IconX,
          IconInfoCircle, IconChevronDown, IconTable } from '@tabler/icons-react'
 import { useLang } from '../LanguageContext'
 import { clampFrame, frameDay } from '../markov/frames'
+import { forcingLabel } from '../scenarios/forcing'
 
 export const MAX_ANALYSES = 10
 
@@ -331,6 +332,7 @@ function Description({ an }) {
     [a.particles, sc.pnum?.toLocaleString()],
     [a.seedings,  sc.seedings > 1 ? `${sc.seedings}× / ${sc.tshift} d` : null],
     [a.timeStep,  sc.time_step_hours != null ? `${sc.time_step_hours} h` : null],
+    [t.analysis.summary.forcing, sc.forcing_datasets ? forcingLabel(sc, t.analysis.forcingLabels) : null],
     // Assente nelle analisi salvate prima dell'opzione: non si mostra.
     [p.labelBeaching, sc.beaching === undefined ? null : sc.beaching === false ? a.no : a.yes],
   ]

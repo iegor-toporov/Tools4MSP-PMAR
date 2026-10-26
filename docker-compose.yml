@@ -16,6 +16,9 @@ services:
       - ./cache:/app/cache
       - ./out:/app/out
       - ./scenarios:/app/scenarios
+      # Harness dei benchmark: il codice entra e i CSV dei risultati escono.
+      # Montato, non copiato nell'immagine, così le misure restano sull'host.
+      - ./bench:/app/bench
     expose:
       - "5001"
     networks:

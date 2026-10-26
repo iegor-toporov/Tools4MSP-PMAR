@@ -16,7 +16,7 @@ PROCESS_METADATA = {
     'description': {
         'en': 'Returns EMODnet offshore wind farm polygons for a given bounding box.'
     },
-    'jobControlOptions': ['sync-execute'],
+    'jobControlOptions': ['sync-execute', 'async-execute'],
     'keywords': ['windfarms', 'emodnet', 'geojson'],
     'inputs': {
         'lon_min': {'schema': {'type': 'number'}, 'minOccurs': 1, 'maxOccurs': 1},

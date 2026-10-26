@@ -324,6 +324,12 @@ export const translations = {
       layerTitle: 'Titolo del layer',
       runLabels:  { run: 'Avvia analisi', running: 'Analisi in corso…', stop: 'Interrompi', stopping: 'Interruzione in corso…' },
       summary:    { simulation: 'Simulazione', bbox: 'Riquadro', forcing: 'Forzanti' },
+      forcingLabels: {
+        unknown: 'CMEMS', hourly: 'orarie', daily: 'giornaliere', hours: 'ogni {h} h',
+        reanalysis: 'reanalisi', forecast: 'analisi',
+        basins: { med: 'Mediterraneo', blk: 'Mar Nero', ibi: 'Iberia-Biscaglia-Irlanda',
+                  nws: 'Piattaforma nord-occidentale', bal: 'Baltico', glo: 'Globale' },
+      },
       sources: {
         uniform:           'Uniforme',
         uniformDesc:       'Nessun peso: tutte le particelle contano allo stesso modo',
@@ -836,6 +842,12 @@ export const translations = {
       layerTitle: 'Layer title',
       runLabels:  { run: 'Run analysis', running: 'Analysis running…', stop: 'Stop', stopping: 'Stopping…' },
       summary:    { simulation: 'Simulation', bbox: 'Bounding box', forcing: 'Forcing' },
+      forcingLabels: {
+        unknown: 'CMEMS', hourly: 'hourly', daily: 'daily', hours: 'every {h} h',
+        reanalysis: 'reanalysis', forecast: 'analysis',
+        basins: { med: 'Mediterranean', blk: 'Black Sea', ibi: 'Iberia-Biscay-Ireland',
+                  nws: 'North-West Shelf', bal: 'Baltic', glo: 'Global' },
+      },
       sources: {
         uniform:           'Uniform',
         uniformDesc:       'No weighting — every particle counts the same',

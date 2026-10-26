@@ -3,6 +3,7 @@ import glob
 import io
 import json
 import os
+import resource
 import shutil
 import uuid
 import time as _time
@@ -20,10 +21,10 @@ from processes.PMARProcess import (
     ensure_t4msp_shapefile, _fetch_t4msp_areas,
 )
 from processes.OpenDriftProcess import (
-    _get_forcing_file, _get_wind_file, _get_waves_file, _get_thermo_file,
-    _get_max_depth_for_area, _get_mld_file, _get_bathymetry_file,
-    _build_model, OUT_DIR,
+    fetch_forcings, _request_box,
+    _build_model, OUT_DIR, reset_cache_stats, cache_stats,
 )
+from data import cmems_select as cms
 from processes.logging_utils import setup_logger
 from processes.access import is_unlocked, require_unlocked
 from processes import scenario_state as state
@@ -152,6 +153,15 @@ PROCESS_METADATA = {
             'schema': {'type': 'integer', 'minimum': 1, 'maximum': 365, 'default': 30},
             'minOccurs': 0, 'maxOccurs': 1,
         },
+        'access_token': {
+            'title': 'Access token',
+            'description': 'Only needed when the deployment runs in restricted mode: '
+                           'without a valid token the operations that consume substantial '
+                           'compute are refused. Removed from the payload on first read, so '
+                           'it never reaches the logs, the task queue or the simulation.',
+            'schema': {'type': 'string'},
+            'minOccurs': 0, 'maxOccurs': 1,
+        },
     },
     'outputs': {
         'result': {
@@ -250,7 +260,7 @@ def _build_custom_scenario(data, shp_path=None, area_label=None, job_id=None):
         compound = data.get('chemical_compound') or CHEMICAL_COMPOUNDS[0]
         if compound not in CHEMICAL_COMPOUNDS:
             raise ProcessorExecuteError(
-                f'Composto non supportato: {compound!r}. Valori possibili: {list(CHEMICAL_COMPOUNDS)}.')
+                f'Unsupported compound: {compound!r}. Allowed values: {list(CHEMICAL_COMPOUNDS)}.')
 
     duration_days   = int(data.get('duration_days', 30))
     pnum            = min(int(data.get('pnum', 1000)), 100000)
@@ -296,8 +306,8 @@ def _describe_custom_scenario(data, custom_id, shp_path, area_label, job_id, pre
     # (seed_from_geopandas), mentre una matrice di connettività confronta le righe
     # fra loro: con uno sforzo di campionamento diverso per poligono le probabilità
     # di passaggio dei poligoni piccoli sarebbero stimate su pochissime particelle e
-    # non confrontabili con le altre. La tesi rilascia perciò lo stesso numero di
-    # particelle in ogni poligono, e questa modalità riproduce quella scelta.
+    # non confrontabili con le altre. Questa modalità rilascia perciò lo stesso numero
+    # di particelle in ogni poligono.
     # I bounds dell'area di semina vengono registrati qui una volta sola: servono
     # alla UI per pre-compilare il riquadro della griglia di connettività, e
     # rileggere lo shapefile a ogni chiamata di stato costerebbe troppo.
@@ -315,8 +325,8 @@ def _describe_custom_scenario(data, custom_id, shp_path, area_label, job_id, pre
         total = pnum_per_polygon * n_polygons
         if total > 100000:
             raise ProcessorExecuteError(
-                f'{pnum_per_polygon} particelle × {n_polygons} poligoni = {total}: '
-                f'oltre il limite di 100000 particelle per scenario.'
+                f'{pnum_per_polygon} particles x {n_polygons} polygons = {total}: '
+                f'above the limit of 100000 particles per scenario.'
             )
         seeding_mode = 'per_polygon'
         pnum         = total  # il totale effettivo, così la scheda scenario non mente
@@ -329,6 +339,17 @@ def _describe_custom_scenario(data, custom_id, shp_path, area_label, job_id, pre
 
     seedings = max(1, min(int(data.get('seedings', 1)), 12))
     tshift   = max(1, min(int(data.get('tshift', 30)), 365))
+
+    # Ci sono correnti CMEMS per quest'area e questo periodo? Meglio saperlo ora che
+    # dopo la coda. Col catalogo salvato, senza rete (se manca, il controllo si salta).
+    t_first = datetime.fromisoformat(start_time_str)
+    t_last  = t_first + timedelta(days=tshift * (seedings - 1) + duration_days)
+    problem = cms.coverage_problem(
+        _request_box(bounds[0], bounds[2], bounds[1], bounds[3], cmems_margin), t_first, t_last,
+        hourly=time_step_hours < 24, vertical=bool(PRESSURE_MODELS[pressure].get('needs_vertical')),
+        catalog=cms.load_catalog(allow_refresh=False))
+    if problem:
+        raise ProcessorExecuteError(problem)
 
     sc = {
         'scenario_id':      custom_id,
@@ -351,8 +372,8 @@ def _describe_custom_scenario(data, custom_id, shp_path, area_label, job_id, pre
         'description':      description,
         'seedings':         seedings,
         'tshift':           tshift,
-        # Senza spiaggiamento il tracciante è conservativo, come nella tesi (Paper III):
-        # è la condizione perché le matrici di transizione per la Markov sommino a 1.
+        # Senza spiaggiamento il tracciante è conservativo: è la condizione perché le
+        # matrici di transizione delle catene di Markov sommino a 1.
         'beaching':         _as_bool(data.get('beaching', True)),
         'nc_filename':      f'{custom_id}_s0.nc',
         'nc_filenames':     [f'{custom_id}_s{n}.nc' for n in range(seedings)],
@@ -369,6 +390,24 @@ def _describe_custom_scenario(data, custom_id, shp_path, area_label, job_id, pre
 
     logger.info(f'[PrecomputeProcess] Custom scenario created: {custom_id}, label={label!r}')
     return sc, custom_id, shp_path
+
+
+def _accumulate_timing(scenario_id, peak_rss_mb=None, **seconds):
+    """Somma i tempi di fase nel record dello scenario.
+
+    Uno scenario multi-seeding esegue più run, quindi i tempi si accumulano e il
+    picco di memoria è il massimo fra le run. Serve a misurare il costo della
+    fase 1 e a giustificare il limite di una simulazione per volta.
+    """
+    sc = state.read_scenario(scenario_id)
+    if sc is None:                      # eliminato nel frattempo (Stop)
+        return
+    timing = dict(sc.get('timing') or {})
+    for key, value in seconds.items():
+        timing[key] = round(timing.get(key, 0.0) + value, 1)
+    if peak_rss_mb is not None:
+        timing['peak_rss_mb'] = max(timing.get('peak_rss_mb', 0), round(peak_rss_mb))
+    state.update_scenario(scenario_id, timing=timing)
 
 
 def _run_scenario(scenario_id, sc, shp_path):
@@ -410,50 +449,17 @@ def _run_scenario(scenario_id, sc, shp_path):
 
     logger.info(f'[{scenario_id}] bounds={bounds.tolist()}, cmems_margin={cmems_margin}°')
 
-    pm_cfg    = PRESSURE_MODELS[pressure]
-    max_depth = pm_cfg.get('max_depth', 0.5)
-    if pm_cfg.get('needs_vertical'):
-        dynamic = _get_max_depth_for_area(
-            bounds[0], bounds[2], bounds[1], bounds[3], cmems_margin
-        )
-        if dynamic is not None:
-            max_depth = dynamic
-            logger.info(f'[{scenario_id}] Dynamic depth: {max_depth:.0f} m')
-        else:
-            logger.warning(f'[{scenario_id}] Bathymetry not available, using default {max_depth:.0f} m')
-    forcing_paths = [_get_forcing_file(
-        bounds[0], bounds[2], bounds[1], bounds[3],
-        start_time, end_time, time_step_hours, max_depth, cmems_margin,
-    )]
-    if pm_cfg['needs_wind']:
-        wind_path = _get_wind_file(bounds[0], bounds[2], bounds[1], bounds[3], start_time, end_time, cmems_margin)
-        if wind_path:
-            forcing_paths.append(wind_path)
-        else:
-            logger.warning(f'[{scenario_id}] Wind not available, currents only')
-    if pm_cfg.get('needs_waves'):
-        waves_path = _get_waves_file(bounds[0], bounds[2], bounds[1], bounds[3], start_time, end_time, cmems_margin)
-        if waves_path:
-            forcing_paths.append(waves_path)
-        else:
-            logger.warning(f'[{scenario_id}] Waves not available: Stokes drift parametrised from wind')
-    if pm_cfg.get('needs_thermo'):
-        thermo_path = _get_thermo_file(bounds[0], bounds[2], bounds[1], bounds[3], start_time, end_time, cmems_margin)
-        if thermo_path:
-            forcing_paths.append(thermo_path)
-        else:
-            logger.warning(f'[{scenario_id}] T/S not available: weathering with constant values')
+    _t_forcing = _time.monotonic()
+    pm_cfg = PRESSURE_MODELS[pressure]
+    # Tutte le forzanti in parallelo, coi dataset scelti dal catalogo (OpenDriftProcess).
+    forcing_paths, provenance, max_depth = fetch_forcings(
+        pm_cfg, bounds[0], bounds[2], bounds[1], bounds[3],
+        start_time, end_time, time_step_hours, cmems_margin, label=scenario_id)
+    _record_forcing(scenario_id, provenance)
 
-    if pm_cfg.get('needs_mld'):
-        mld_path = _get_mld_file(bounds[0], bounds[2], bounds[1], bounds[3], start_time, end_time, cmems_margin)
-        if mld_path:
-            forcing_paths.append(mld_path)
-    if pm_cfg.get('needs_bathymetry'):
-        bathy_path = _get_bathymetry_file(bounds[0], bounds[2], bounds[1], bounds[3], cmems_margin)
-        if bathy_path:
-            forcing_paths.append(bathy_path)
-
-    logger.info(f'[{scenario_id}] Forcing files: {forcing_paths}')
+    forcing_s = _time.monotonic() - _t_forcing
+    logger.info(f'[{scenario_id}] Forcing files: {forcing_paths} '
+                f'({forcing_s:.1f}s, {cache_stats()})')
 
     os.environ.pop('PROJ_LIB', None)
     os.environ.pop('PROJ_DATA', None)
@@ -528,17 +534,62 @@ def _run_scenario(scenario_id, sc, shp_path):
         finally:
             stop_progress.set()
             _progress_thread.join()
-        elapsed = (_time.monotonic() - t0) / 60
-        logger.info(f'[{scenario_id}] Simulation completed in {elapsed:.1f} minutes')
+        integration_s = _time.monotonic() - t0
+        logger.info(f'[{scenario_id}] Simulation completed in {integration_s / 60:.1f} minutes')
 
+        _t_write = _time.monotonic()
         shutil.move(tmp_nc, nc_output)
-        logger.info(f'[{scenario_id}] NC saved: {nc_output}')
+        write_s = _time.monotonic() - _t_write
+        logger.info(f'[{scenario_id}] NC saved: {nc_output} ({write_s:.1f}s)')
+
+        # ru_maxrss è in kilobyte su Linux, in byte su macOS; i container sono Linux.
+        peak_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+        _accumulate_timing(scenario_id, forcing_s=forcing_s,
+                           integration_s=integration_s, write_s=write_s,
+                           peak_rss_mb=peak_mb)
 
     except Exception as e:
         logger.error(f'[{scenario_id}] Failed: {e}', exc_info=True)
         if os.path.exists(tmp_nc):
             os.remove(tmp_nc)
         raise
+
+
+def _record_forcing(scenario_id, provenance):
+    """Annota nel JSON dello scenario i dataset CMEMS usati, per famiglia (provenienza
+    mostrata nell'interfaccia). Con più seeding si uniscono."""
+    sc = state.read_scenario(scenario_id) or {}
+    merged = dict(sc.get('forcing_datasets') or {})
+    for family, items in provenance.items():
+        have = {d['dataset_id'] for d in merged.get(family, [])}
+        merged[family] = merged.get(family, []) + [d for d in items if d['dataset_id'] not in have]
+    state.update_scenario(scenario_id, forcing_datasets=merged)
+
+
+def _prefetch_multi_seeding(scenario_id, sc, shp_path):
+    """Con più seeding, un solo download per l'intervallo di tutti.
+
+    Ogni seeding poi trova le sue forzanti in cache, perché la cache si cerca per
+    contenimento. Solo se i seeding coprono almeno metà dell'intervallo: con seeding
+    distanti si scaricherebbero mesi che nessuno usa.
+    """
+    seedings, tshift = sc.get('seedings', 1), sc.get('tshift', 30)
+    duration = sc['duration_days']
+    span = tshift * (seedings - 1) + duration
+    if seedings < 2 or seedings * duration < 0.5 * span:
+        return
+    start = datetime.fromisoformat(sc['start_time'])
+    bounds = gpd.read_file(shp_path).to_crs('EPSG:4326').total_bounds
+    logger.info(f'[{scenario_id}] Forcing for all {seedings} seedings at once ({span} days)')
+    try:
+        _, provenance, _ = fetch_forcings(
+            PRESSURE_MODELS[sc['pressure']], bounds[0], bounds[2], bounds[1], bounds[3],
+            start, start + timedelta(days=span), sc['time_step_hours'],
+            float(sc.get('cmems_margin', 5.0)), label=scenario_id)
+        _record_forcing(scenario_id, provenance)
+    except Exception as e:                                      # noqa: BLE001
+        # Non bloccante: ogni seeding riprova per conto suo.
+        logger.warning(f'[{scenario_id}] Forcing prefetch failed, per seeding instead: {e}')
 
 
 def _run_multi_scenario(scenario_id, sc, shp_path):
@@ -557,6 +608,8 @@ def _run_multi_scenario(scenario_id, sc, shp_path):
     seedings = sc.get('seedings', 1)
     tshift   = sc.get('tshift', 30)
     nc_filenames = sc.get('nc_filenames', [sc['nc_filename']])
+    if not all(os.path.exists(os.path.join(SCENARIOS_DIR, f)) for f in nc_filenames):
+        _prefetch_multi_seeding(scenario_id, sc, shp_path)
 
     for n in range(seedings):
         nc_path = os.path.join(SCENARIOS_DIR, nc_filenames[n])
@@ -658,6 +711,10 @@ class PrecomputeProcessor(BaseProcessor):
                                    progress={'done': 0, 'total': sc.get('seedings', 1)})
         logger.info(f'[PrecomputeProcess] Starting pre-computation for scenario: {scenario_id}')
 
+        # Contatori della cache azzerati per scenario, non per seeding: ciò che
+        # interessa è quanto l'intera simulazione ha dovuto scaricare.
+        reset_cache_stats()
+
         try:
             _run_multi_scenario(scenario_id, sc, shp_path)
         except Exception as e:
@@ -674,7 +731,8 @@ class PrecomputeProcessor(BaseProcessor):
             raise
 
         sc = state.update_scenario(scenario_id, state=state.READY, progress=None,
-                                   finished_at=state.now_iso()) or sc
+                                   finished_at=state.now_iso(),
+                                   forcing=cache_stats()) or sc
         logger.info(f'[PrecomputeProcess] Pre-computation complete: {sc["nc_filenames"]}')
 
         return 'application/json', {

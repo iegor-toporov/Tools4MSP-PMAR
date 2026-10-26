@@ -33,7 +33,8 @@ DTO-PMAR/
 │   ├── ShapefileFieldsProcess.py        # OGC API process: columns of an uploaded shapefile (polygon labels)
 │   └── logging_utils.py                 # Shared log handler with line-count rotation
 ├── data/
-│   ├── cmems_datasets.py                # CMEMS dataset constants (dataset IDs, variables)
+│   ├── cmems_datasets.py                # Registry of the CMEMS datasets (basin, family, step, 2D/3D)
+│   ├── cmems_select.py                  # CMEMS catalogue, dataset choice, forcing cache index
 │   └── emodnet_fetch.py                 # Shared EMODnet WFS fetch functions with 7-day pickle cache
 ├── worker/
 │   ├── app.py                           # Celery application: queues, time limits, visibility timeout
@@ -68,6 +69,8 @@ DTO-PMAR/
 ├── scripts/
 │   ├── start.sh                         # Dev: regenerate OpenAPI spec and start pygeoapi
 │   ├── entrypoint.sh                    # Docker entrypoint for backend container
+│   ├── check_cmems_catalog.py           # Checks the CMEMS dataset registry against the catalogue
+│   ├── prefetch_cmems.py                # Downloads the forcing of given scenarios in advance (demo)
 │   └── init-letsencrypt.sh              # Let's Encrypt certificate bootstrap helper
 ├── cache/
 │   ├── cmems_*_cur_*.nc                 # Ocean currents
@@ -172,7 +175,8 @@ PUBLIC_SCENARIOS=custom_927fb7ae,custom_xxxxxxxx,custom_yyyyyyyy
 
 The check runs in the backend (`processes/access.py`), not only in the UI: a request sent
 straight to the API without the token fails with `ACCESS_DENIED`. The token travels as the
-`access_token` input, is removed from the inputs as soon as it is read, and never reaches logs
+`access_token` input — declared in the process description, so a client can find it without
+reading this file — is removed from the inputs as soon as it is read, and never reaches logs
 or the job records in Redis. In the UI, the *New simulation* form is replaced by a token field;
 the token is kept in `sessionStorage`, so it survives a reload and is gone when the tab is
 closed. A *Lock* button returns to visitor mode.
@@ -365,7 +369,7 @@ simulation has beaching on.
 ## Precompute process
 
 **Endpoint:** `POST /processes/precompute/execution`  
-**Execution mode:** asynchronous (`Prefer: respond-async`)
+**Execution mode:** asynchronous only — a POST without `Prefer` also creates a job
 
 Runs an OpenDrift simulation, saves the trajectory as `scenarios/custom_<id>.nc`, and writes metadata to `scenarios/custom_<id>.json`.
 
@@ -616,7 +620,7 @@ pmar_<pressure>_<YYYYMMDD>-<YYYYMMDD>_p<pnum>[_<use_source>].tif
 ## Connectivity process
 
 **Endpoint:** `POST /processes/connectivity/execution`  
-**Execution mode:** asynchronous (`Prefer: respond-async`)
+**Execution mode:** synchronous, or asynchronous with `Prefer: respond-async`
 
 Builds a connectivity matrix between areas from the Lagrangian trajectories of a precomputed
 scenario, and derives its graph metrics. The metrics are **not**
@@ -816,50 +820,120 @@ All four accept `lon_min`, `lat_min`, `lon_max`, `lat_max` as inputs.
 
 ## CMEMS data
 
-Ocean currents, wind, waves, temperature/salinity, and bathymetry are downloaded automatically from the Copernicus Marine Service and cached in `cache/`. All files are keyed on the seeding area bounding box, CMEMS margin, start date, and duration. The download bbox is `seeding_bounds ± cmems_margin`.
+Currents, wind, waves, temperature, salinity, mixed-layer depth and bathymetry come from the
+Copernicus Marine Service and are cached in `cache/`.
 
-**Currents** (all models):
+### Which dataset
 
-| Priority | Dataset | Coverage |
+`data/cmems_datasets.py` is a **registry**: for every dataset, its basin, variable family,
+product type (`anfc` analysis-forecast or `my` reanalysis), time step and 2D/3D. Where and when
+each one has data is read from the CMEMS catalogue (`copernicusmarine.describe`), saved in
+`cache/cmems_catalog.json` and refreshed once a day. The catalogue is needed because
+analysis-forecast products are rolling windows of about two years (Mediterranean from 2024-08,
+Black Sea from 2024-10), reanalyses end a few weeks ago, and CMEMS renames and retires versions.
+
+`data/cmems_select.plan_family` then picks, without trying datasets one after the other (each
+miss cost 2–5 s of network):
+
+- **Basin.** The regional basin that covers the area (Mediterranean, Black Sea,
+  Iberia-Biscay-Ireland, North-West Shelf, Baltic); the global product fills what the regional
+  ones leave uncovered (more than 5% of the area), as PMAR's `select_spatial_domain` does.
+  A basin that covers the area on its own is used alone. A basin's extent is the catalogue's
+  rectangle clipped to the extent in the registry (the same as PMAR's): the rectangle alone can
+  include sea the model does not simulate. The North-West Shelf reanalysis reaches 40°N and
+  13°E, so an Adriatic area used to pick it and get a file with no values. If a regional file
+  still turns out empty, that basin is excluded and the choice is made again.
+- **Period.** The dataset whose period covers the simulation; where both cover it, the
+  analysis-forecast, served about twice as fast as the reanalysis. If none covers
+  it all (e.g. across the end of the reanalysis), two datasets of the same basin, one for the
+  start and one for the end.
+- **Currents by model.** Surface models (tracer, plastic): hourly 2D. Models moving vertically
+  (larvae, oil, chemical): daily 3D down to the seafloor + 10 m, at most 200 m (`depth_cap` in
+  `PRESSURE_MODELS`; before, up to 4110 m and 553 MB for 31 days). Hourly 3D exists only from
+  October 2025, and is heavier.
+  - Why 200 m is enough: OpenDrift's vertical interpolation clamps a particle's depth to the
+    reader's levels, so a particle below the deepest downloaded level moves with the currents
+    of that level (it is not frozen or lost). In 10-day runs over the Ionian (seafloor ~3300 m)
+    oil never went below 45 m, chemicals 55 m (1.7% beyond 50 m), larvae stayed at the surface.
+    The Mediterranean model has 36 levels in the top 200 m and 141 to the seafloor, so the full
+    column would be about four times the download for no change in the result.
+  - Open issue: the bathymetry is passed to the model as a reader only for `ChemicalDrift`;
+    `OpenOil` and `LarvalFish` use OpenDrift's default seafloor.
+- **Temperature, salinity, mixed layer:** daily, surface (0–1.5 m: the first model level is at
+  1.02 m in the Mediterranean). Waves and wind: the finest step available.
+
+Main datasets (Mediterranean; the other basins follow the same pattern):
+
+| Family | Analysis-forecast | Reanalysis |
 |---|---|---|
-| 1 | `cmems_mod_med_phy-cur_anfc_0.042deg_PT1H-m` | Mediterranean, hourly |
-| 2 | `cmems_mod_glo_phy-cur_anfc_0.083deg_P1D-m` | Global, daily |
-| 3 | `cmems_mod_glo_phy_my_0.083deg_P1D-m` | Global, daily (reanalysis) |
+| Currents, surface | `cmems_mod_med_phy-cur_anfc_4.2km-2D_PT1H-m` | `cmems_mod_med_phy-cur_my_4.2km_PT1H-m` |
+| Currents, 3D | `cmems_mod_med_phy-cur_anfc_4.2km_P1D-m` | `cmems_mod_med_phy-cur_my_4.2km_P1D-m` |
+| Temperature / salinity | `cmems_mod_med_phy-tem_anfc_4.2km_P1D-m` / `…-sal_anfc_…` | `cmems_mod_med_phy-temp_my_4.2km_P1D-m` / `…-sal_my_…` |
+| Mixed layer | `cmems_mod_med_phy-mld_anfc_4.2km_P1D-m` | `cmems_mod_med_phy-mld_my_4.2km_P1D-m` |
+| Waves (Stokes drift) | `cmems_mod_med_wav_anfc_4.2km_PT1H-i` | `cmems_mod_med_wav_my_4.2km_PT1H-i` |
+| Wind (global) | `cmems_obs-wind_glo_phy_nrt_l4_0.125deg_PT1H` | `cmems_obs-wind_glo_phy_my_l4_0.125deg_PT1H` |
+| Bathymetry | `cmems_mod_med_phy_anfc_4.2km_static` | |
 
-**Wind** (`PlastDrift`, `OpenOil`):
+The datasets used are recorded in the scenario (`forcing_datasets`) and shown in the summaries
+as *Forcing*, e.g. "CMEMS Mediterranean 4.2 km · hourly · analysis".
 
-| Priority | Dataset |
-|---|---|
-| 1 | `cmems_obs-wind_med_phy_nrt_l4_0.125deg_PT1H` |
-| 2 | `cmems_obs-wind_glo_phy_nrt_l4_0.125deg_PT1H` |
-| 3 | `cmems_obs-wind_glo_phy_my_l4_0.125deg_PT1H` |
+When a simulation is **submitted**, the saved catalogue tells at once whether currents exist for
+its area and period: a date with no data comes back as a 400 with the available period, instead
+of failing after the queue.
 
-**Waves — Stokes drift** (`PlastDrift`, `OpenOil`):
+`scripts/check_cmems_catalog.py` checks the registry against the catalogue: missing datasets,
+missing variables, versions about to be retired (same IDs afterwards). It runs at backend start
+and writes to the log; run it by hand with
+`docker compose exec backend python scripts/check_cmems_catalog.py`. The check of 26/10/2026
+found that five of the previous IDs no longer existed, among them the Mediterranean hourly
+currents: every Mediterranean simulation had silently fallen back to global daily currents.
 
-| Priority | Dataset |
-|---|---|
-| 1 | `cmems_mod_med_wav_anfc_4.2km_PT1H-i` |
-| 2 | `cmems_mod_glo_wav_anfc_0.083deg_PT3H-i` |
-| 3 | `cmems_mod_glo_wav_my_0.2deg_PT3H-i` |
+### How it is downloaded
 
-**Temperature & salinity** (`OpenOil` weathering, `ChemicalDrift`):
+`OpenDriftProcess.fetch_forcings`, used by precompute, the live PMAR path and the OpenDrift
+process:
 
-| Priority | Dataset | Variables |
-|---|---|---|
-| 1 | `cmems_mod_glo_phy_anfc_0.083deg_P1D-m` | thetao, so |
-| 2 | `cmems_mod_glo_phy_my_0.083deg_P1D-m` | thetao, so |
-| 3–5 | Mediterranean / global temperature-only products | thetao |
+- **In parallel.** Bathymetry first (it sets the depth), then all the other families together
+  (4 at a time): the time is that of the slowest download, not the sum.
+- **Time-series format.** `subset(service="arco-time-series")`, faster for small areas and long
+  periods (measured 157 s against 317 s for the same 60 MB), with
+  `coordinates_selection_method="outside"`.
+- **Retries** only on network errors (5, 15, 45 s), on top of copernicusmarine's own HTTP
+  retries; a missing dataset or variable is not retried.
+- **Atomic.** Downloaded into `cache/.partial/`, checked (it opens, has the variables, not all
+  NaN, covers the period), then renamed. An interrupted download never becomes a cached file.
+  A file lock prevents two processes from downloading the same piece.
+- **Multi-seeding.** One download for the whole span of the seedings (when they cover at least
+  half of it); each seeding then finds its forcing in the cache.
 
-**Mixed layer depth** (`ChemicalDrift`): `mlotst` from `cmems_mod_med_phy-mld_anfc_4.2km_P1D-m`,
-then the global analysis and reanalysis (`CMEMS_MLD_DATASETS`); non-blocking, OpenDrift's fallback
-(50 m) is used without it. `ChemicalDrift` also reads the cached bathymetry file as
-`sea_floor_depth_below_sea_level`.
+Bandwidth to CMEMS is the bottleneck: 0.04–0.5 MB/s, measured on a 4.5° × 4° Adriatic box over
+30 days (Mediterranean hourly surface currents: 60 MB, 2–5 minutes; global daily: 0.7 MB, 7 s).
+Splitting a month into four weeks downloaded in parallel was slower (270 s against 143 s), so
+each family is one request.
 
-**Bathymetry** (`LarvalFish`, `OpenOil`, `ChemicalDrift` — models with vertical mixing):
+### Cache
 
-The `deptho` (seafloor depth) field is downloaded once per geographic area from a static CMEMS dataset (`cmems_mod_med_phy_anfc_4.2km_static` or global equivalent) and permanently cached. `maximum_depth` for the currents download is set to `max(deptho) + 10 m` instead of a fixed value, ensuring full water-column coverage in deep areas and avoiding over-downloading in shallow ones. If the bathymetry download fails the fixed default is used as fallback.
+Every file `cache/cmems_*.nc` has a `.json` next to it: dataset, variables, box, period, depth.
+A request is served by **any file that contains it** (same dataset and variables, larger box,
+longer period, deeper), not only by an identical one: a 2-day simulation inside a 4-day file
+starts with no download. The downloaded box is aligned to whole degrees plus the margin, so
+nearby requests fall in the same file.
 
-Wind and waves downloads are non-blocking: if the dataset is unavailable the simulation continues with currents only (OpenDrift falls back to parametric Stokes drift from wind).
+The cache is kept under `CMEMS_CACHE_MAX_GB` (default 20 GB) by removing the least recently used
+files; nothing used in the last two hours is removed. Files from before this scheme have no
+index: they are not reused (they do not say which dataset they came from) and are the first to go.
+
+`scripts/prefetch_cmems.py` downloads in advance the forcing of the scenarios in
+`PUBLIC_SCENARIOS` (or those given), e.g. before a demo:
+`docker compose exec simulation-worker python scripts/prefetch_cmems.py`.
+
+Wind and waves are non-blocking: if they are unavailable the simulation continues with currents
+only (OpenDrift falls back to parametric Stokes drift from wind).
+
+### Tests
+
+`python3 -m unittest tests.test_cmems_select`: dataset choice and cache index with a fake
+catalogue, no network.
 
 **ChemicalDrift.** The `chemical` tracer runs OpenDrift's `ChemicalDrift` with the settings of the
 PMAR library (`pmar.py`): vertical mixing (`windspeed_Large1994`), sediment resuspension and
@@ -867,8 +941,7 @@ desorption, volatilisation and degradation (`OverallRateConstants`), then
 `init_chemical_compound(compound)`, `init_species()` and `init_transfer_rates()`. Its readers are
 added **without lazy loading**: `ChemicalDrift.prepare_run` reads `.variables` of every reader, which
 initialises a lazy reader outside the environment, so the currents never enter the priority list
-and every particle is deactivated at the first step with "Missing variables". In the
-Mediterranean the temperature product has no salinity, so salinity uses OpenDrift's fallback (34).
+and every particle is deactivated at the first step with "Missing variables".
 
 ## Frontend API client
 

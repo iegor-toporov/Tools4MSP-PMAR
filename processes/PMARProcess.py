@@ -20,8 +20,7 @@ from datetime import datetime, timedelta
 
 from pygeoapi.process.base import BaseProcessor, ProcessorExecuteError
 from processes.OpenDriftProcess import (
-    _get_forcing_file, _get_wind_file, _get_waves_file, _get_thermo_file,
-    _get_max_depth_for_area,
+    fetch_forcings,
     _build_model, _ROOT, _LOG_DIR, OUT_DIR, CACHE_DIR,
 )
 from data.emodnet_fetch import (
@@ -144,6 +143,8 @@ PRESSURE_MODELS = {
         'needs_waves':    True,
         'needs_thermo':   True,
         'needs_vertical': True,
+        # Profondità massima delle correnti scaricate (fondale + 10 m, al più questa).
+        'depth_cap':      200.0,
         'max_depth':      50.0,
         'label_it':       'Idrocarburi',
         'label_en':       'Hydrocarbons',
@@ -158,6 +159,8 @@ PRESSURE_MODELS = {
         'needs_mld':      True,
         'needs_bathymetry': True,
         'needs_vertical': True,
+        # Profondità massima delle correnti scaricate (fondale + 10 m, al più questa).
+        'depth_cap':      200.0,
         'max_depth':      50.0,
         'label_it':       'Sostanze chimiche',
         'label_en':       'Chemicals',
@@ -167,6 +170,8 @@ PRESSURE_MODELS = {
         'class':          'LarvalFish',
         'needs_wind':     False,
         'needs_vertical': True,
+        # Profondità massima delle correnti scaricate (fondale + 10 m, al più questa).
+        'depth_cap':      200.0,
         'max_depth':      200.0,
         'label_it':       'Larve di pesce',
         'label_en':       'Fish larvae',
@@ -264,6 +269,15 @@ PROCESS_METADATA = {
             'schema': {'type': 'number', 'default': 1.0},
             'minOccurs': 0, 'maxOccurs': 1,
         },
+        'access_token': {
+            'title': 'Access token',
+            'description': 'Only needed when the deployment runs in restricted mode: '
+                           'without a valid token the operations that consume substantial '
+                           'compute are refused. Removed from the payload on first read, so '
+                           'it never reaches the logs, the task queue or the simulation.',
+            'schema': {'type': 'string'},
+            'minOccurs': 0, 'maxOccurs': 1,
+        },
     },
     'outputs': {
         'result': {
@@ -357,22 +371,22 @@ class PMARProcessor(BaseProcessor):
             # ── Scenario mode: usa traiettorie pre-calcolate ──────────────
             if scenario_id:
                 if not scenario_id.startswith('custom_'):
-                    raise ProcessorExecuteError(f'Scenario sconosciuto: {scenario_id!r}')
+                    raise ProcessorExecuteError(f'Unknown scenario: {scenario_id!r}')
                 meta_path = os.path.join(SCENARIOS_DIR, f'{scenario_id}.json')
                 if not os.path.exists(meta_path):
-                    raise ProcessorExecuteError(f'Scenario custom non trovato: {scenario_id!r}')
+                    raise ProcessorExecuteError(f'Custom scenario not found: {scenario_id!r}')
                 with open(meta_path) as f:
                     sc = json.load(f)
                 shp_path = sc['shapefile']
                 if not os.path.exists(shp_path):
-                    raise ProcessorExecuteError(f'Shapefile per {scenario_id!r} non trovato.')
+                    raise ProcessorExecuteError(f'Shapefile for {scenario_id!r} not found.')
 
                 nc_filenames = sc.get('nc_filenames') or [sc['nc_filename']]
                 for fn in nc_filenames:
                     if not os.path.exists(os.path.join(SCENARIOS_DIR, fn)):
                         raise ProcessorExecuteError(
-                            f'Scenario "{scenario_id}" non ancora pre-calcolato (manca {fn}). '
-                            f'Clicca Calcola nel pannello.'
+                            f'Scenario "{scenario_id}" has not been pre-computed yet ({fn} is missing). '
+                            f'Use Pre-compute in the panel.'
                         )
                 pressure   = sc['pressure']
                 res        = _check_res(data.get('res', DEFAULT_RES))
@@ -426,38 +440,10 @@ class PMARProcessor(BaseProcessor):
                     f'start={start_time.isoformat()}, bounds={bounds.tolist()}'
                 )
 
-                pm_cfg    = PRESSURE_MODELS[pressure]
-                max_depth = pm_cfg.get('max_depth', 0.5)
-                if pm_cfg.get('needs_vertical'):
-                    dynamic = _get_max_depth_for_area(bounds[0], bounds[2], bounds[1], bounds[3])
-                    if dynamic is not None:
-                        max_depth = dynamic
-                        logger.info(f'Profondità dinamica per {pressure}: {max_depth:.0f} m')
-                    else:
-                        logger.warning(f'Batimetria non disponibile per {pressure}, uso default {max_depth:.0f} m')
-                forcing_paths = [_get_forcing_file(
-                    bounds[0], bounds[2], bounds[1], bounds[3],
-                    start_time, end_time, time_step_hours, max_depth,
-                )]
-                if pm_cfg['needs_wind']:
-                    wind_path = _get_wind_file(bounds[0], bounds[2], bounds[1], bounds[3], start_time, end_time)
-                    if wind_path:
-                        forcing_paths.append(wind_path)
-                    else:
-                        logger.warning(f'Vento non disponibile per {pressure}: simulazione solo a correnti')
-                if pm_cfg.get('needs_waves'):
-                    waves_path = _get_waves_file(bounds[0], bounds[2], bounds[1], bounds[3], start_time, end_time)
-                    if waves_path:
-                        forcing_paths.append(waves_path)
-                    else:
-                        logger.warning(f'Onde non disponibili per {pressure}: deriva di Stokes parametrizzata dal vento')
-                if pm_cfg.get('needs_thermo'):
-                    thermo_path = _get_thermo_file(bounds[0], bounds[2], bounds[1], bounds[3], start_time, end_time)
-                    if thermo_path:
-                        forcing_paths.append(thermo_path)
-                    else:
-                        logger.warning(f'T/S non disponibili per {pressure}: weathering con valori costanti')
-
+                pm_cfg = PRESSURE_MODELS[pressure]
+                forcing_paths, _, _ = fetch_forcings(
+                    pm_cfg, bounds[0], bounds[2], bounds[1], bounds[3],
+                    start_time, end_time, time_step_hours, margin=5.0, label='PMAR')
                 logger.debug(f'Forcing files: {forcing_paths}')
 
                 o = _build_model(pm_cfg['class'], {**pm_cfg, 'compound': CHEMICAL_COMPOUNDS[0]})
@@ -486,8 +472,8 @@ class PMARProcessor(BaseProcessor):
                     logger.error(f'PMAR fallita: {e}', exc_info=True)
                     if 'first timestep' in str(e):
                         raise ProcessorExecuteError(
-                            "Nessun dato CMEMS nell'area selezionata. "
-                            "Sposta l'area in mare aperto."
+                            "No CMEMS data in the selected area. "
+                            "Move the area into open water."
                         )
                     raise ProcessorExecuteError(str(e))
                 except Exception as e:
@@ -574,7 +560,7 @@ class PMARProcessor(BaseProcessor):
                 elif use_source == 'geotiff':
                     if not geotiff_b64:
                         raise ProcessorExecuteError(
-                            'use_source="geotiff" richiede geotiff_b64.'
+                            'use_source="geotiff" requires geotiff_b64.'
                         )
                     logger.info('Caricamento GeoTIFF come layer sorgente...')
                     use_raster = _geotiff_to_use_raster(geotiff_b64, p.grid)
@@ -630,7 +616,7 @@ class PMARProcessor(BaseProcessor):
                 map_bounds, colorbar_dark_b64, colorbar_light_b64, vmin, vmax = _raster_to_png(h)
                 if map_bounds is None:
                     raise ProcessorExecuteError(
-                        'Nessuna particella ha attraversato le aree selezionate.'
+                        'No particle passed through the selected areas.'
                     )
                 geotiff_result_b64 = _histogram_to_geotiff(h)
 
@@ -763,10 +749,10 @@ def _resolve_shapefile(geojson_input, shapefile_b64, tmpdir):
             zf.extractall(tmpdir)
         shp_files = glob.glob(os.path.join(tmpdir, '**', '*.shp'), recursive=True)
         if not shp_files:
-            raise ProcessorExecuteError('Nessun file .shp trovato nello ZIP.')
+            raise ProcessorExecuteError('No .shp file found in the ZIP.')
         return shp_files[0]
 
-    raise ProcessorExecuteError('Fornire geojson oppure shapefile_b64.')
+    raise ProcessorExecuteError('Provide geojson or shapefile_b64.')
 
 
 def _histogram_to_geotiff(h):
@@ -857,7 +843,7 @@ def _check_res(value):
         res = None
     if res not in PMAR_RESOLUTIONS:
         raise ProcessorExecuteError(
-            f'Risoluzione non ammessa: {value}. Valori possibili: {list(PMAR_RESOLUTIONS)}.'
+            f'Resolution not allowed: {value}. Allowed values: {list(PMAR_RESOLUTIONS)}.'
         )
     return res
 

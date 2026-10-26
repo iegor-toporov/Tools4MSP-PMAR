@@ -13,6 +13,7 @@ import { Process, ACCESS_DENIED, executeSync, executeAsync,
 import { formatSeedShape, geometryPolygonCount, seedShapePolygonCount,
          seedShapeToGeoJSON } from '../geometry/seedShape'
 import { CHEMICAL_COMPOUNDS } from '../constants'
+import { forcingLabel } from '../scenarios/forcing'
 import PolygonDrawControls from './PolygonDrawControls'
 import SimulationJobs from './SimulationJobs'
 import { LABEL_STYLES, InfoTip, SectionLabel, SummaryRows, lbl } from './ui'
@@ -177,7 +178,7 @@ export default function PmarPanel({
   // stesso numero in ogni poligono, come serve alla connettività).
   const [distribution,   setDistribution]   = useState('even')
   const [pnumPerPolygon, setPnumPerPolygon] = useState('500')
-  // Tracciante conservativo per Propagate (come la tesi): niente spiaggiamento.
+  // Tracciante conservativo per Propagate: niente spiaggiamento.
   const [noBeaching,     setNoBeaching]     = useState(false)
   const [seedings,      setSeedings]      = useState('3')
   const [tshift,        setTshift]        = useState('30')
@@ -450,6 +451,7 @@ export default function PmarPanel({
       start_time: s.start_time, duration_days: s.duration_days, pnum: s.pnum,
       seedings: s.seedings, tshift: s.tshift, time_step_hours: s.time_step_hours,
       beaching: s.beaching, bounds: s.bounds, cmems_margin: s.cmems_margin,
+      forcing_datasets: s.forcing_datasets,
     }
   }
 
@@ -583,6 +585,7 @@ export default function PmarPanel({
                       [p.labelTimeStep,     `${selected.time_step_hours} h`],
                       [p.labelMultiSeeding, selected.seedings > 1 ? `${selected.seedings}× / ${selected.tshift} d` : null],
                       [p.labelBeaching,     selected.beaching === false ? t.analyses.no : t.analyses.yes],
+                      [t.analysis.summary.forcing, selected.forcing_datasets ? forcingLabel(selected, t.analysis.forcingLabels) : null],
                     ]}
                     description={selected.description}
                   />
@@ -869,7 +872,7 @@ export default function PmarPanel({
                   [t.analysis.summary.simulation, scenarioLabel],
                   [t.analysis.summary.bbox,       sc.bounds ? formatBbox(sc.bounds) : null],
                   [sim.tracerType,                tracerOf(sc)],
-                  [t.analysis.summary.forcing,    'CMEMS'],
+                  [t.analysis.summary.forcing,    forcingLabel(sc, t.analysis.forcingLabels)],
                   [p.labelStart,                  sc.start_time],
                   [p.labelDuration,               `${sc.duration_days} d`],
                   [p.labelParticles,              sc.pnum?.toLocaleString()],
