@@ -241,7 +241,7 @@ PROCESS_METADATA = {
         },
         'res': {
             'title': 'Output grid resolution in degrees',
-            'description': 'Allowed values: 0.1, 0.05.',
+            'description': 'Any value between 0.05 and 5 degrees.',
             'schema': {'type': 'number', 'default': 0.1},
             'minOccurs': 0, 'maxOccurs': 1,
         },
@@ -834,11 +834,11 @@ def _make_colorbar_png(norm, cmap, text_color):
     return base64.b64encode(buf.getvalue()).decode('utf-8')
 
 
-# Risoluzioni ammesse per la griglia dell'analisi (gradi). Deve restare allineato a
-# RESOLUTIONS in frontend/src/components/PmarPanel.jsx. Il limite vale anche lato API:
-# con il link pubblico della demo, una griglia molto fine su un'area grande
-# occuperebbe il worker a lungo.
-PMAR_RESOLUTIONS = (0.1, 0.05)
+# Risoluzione della griglia dell'analisi (gradi), libera fra questi limiti. Deve restare
+# allineato a PMAR_RES_MIN / PMAR_RES_MAX in frontend/src/components/analysis/
+# DispersalSection.jsx. Il minimo vale anche lato API: con il link pubblico della demo,
+# una griglia molto fine su un'area grande occuperebbe il worker a lungo.
+PMAR_RES_MIN, PMAR_RES_MAX = 0.05, 5.0
 DEFAULT_RES = 0.1
 
 
@@ -847,9 +847,9 @@ def _check_res(value):
         res = float(value)
     except (TypeError, ValueError):
         res = None
-    if res not in PMAR_RESOLUTIONS:
+    if res is None or not (PMAR_RES_MIN <= res <= PMAR_RES_MAX):
         raise ProcessorExecuteError(
-            f'Resolution not allowed: {value}. Allowed values: {list(PMAR_RESOLUTIONS)}.'
+            f'Resolution not allowed: {value}. Use a value between {PMAR_RES_MIN}° and {PMAR_RES_MAX}°.'
         )
     return res
 

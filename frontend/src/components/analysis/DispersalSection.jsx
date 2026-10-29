@@ -1,14 +1,12 @@
 import { useEffect, useState } from 'react'
-import { Stack, Text, TextInput, NativeSelect, SegmentedControl, Collapse, Group, UnstyledButton } from '@mantine/core'
+import { Stack, Text, TextInput, SegmentedControl, Collapse, Group, UnstyledButton } from '@mantine/core'
 import { IconChevronDown } from '@tabler/icons-react'
 import { LABEL_STYLES, SectionLabel, lbl } from '../ui'
 import RunButton from './RunButton'
 
-// Deve restare allineato a PMAR_RESOLUTIONS in processes/PMARProcess.py
-const RESOLUTIONS = [
-  { value: '0.1',  label: '0.1°'  },
-  { value: '0.05', label: '0.05°' },
-]
+// Deve restare allineato a PMAR_RES_MIN / PMAR_RES_MAX in processes/PMARProcess.py
+export const PMAR_RES_MIN = 0.05
+export const PMAR_RES_MAX = 5
 
 // σ è la deviazione standard tra i seeding (chiave `std` nel risultato).
 const INDICATORS = ['ppi', 'max', 'q90', 'std']
@@ -30,6 +28,8 @@ export default function DispersalSection({
   const [margin, setMargin]       = useState('1')
   const [advanced, setAdvanced]   = useState(false)
   const multi = sc?.seedings > 1
+  const resNum = parseFloat(res)
+  const resOk  = resNum >= PMAR_RES_MIN && resNum <= PMAR_RES_MAX
 
   // Una simulazione a seeding singolo ha solo PPI.
   useEffect(() => { if (!multi) setIndicator('ppi') }, [multi])
@@ -40,13 +40,13 @@ export default function DispersalSection({
 
   const indLabel = t.pmarControls[{ ppi: 'indicatorDensity', max: 'indicatorMax', q90: 'indicatorQ90', std: 'indicatorStd' }[indicator]]
   const autoTitle = [indLabel, p.useSources[useSource], scenarioLabel].filter(Boolean).join(' · ')
-  const canRun = ready && !loading && !analysesFull && (useSource !== 'geotiff' || !!geotiff.b64)
+  const canRun = ready && !loading && !analysesFull && resOk && (useSource !== 'geotiff' || !!geotiff.b64)
 
   function run() {
     if (!canRun) return
     onRun({
       scenario_id: scenarioId,
-      res: parseFloat(res),
+      res: resNum,
       margin: marginValue,
       geotiff_b64: useSource === 'geotiff' ? geotiff.b64 : null,
       indicator,
@@ -54,7 +54,7 @@ export default function DispersalSection({
       info: {
         scenario: scenarioInfo(),
         params: {
-          use_source: useSource, res: parseFloat(res), margin: marginValue, indicator,
+          use_source: useSource, res: resNum, margin: marginValue, indicator,
           ...(useSource === 'geotiff' ? { geotiff_name: geotiff.name } : {}),
         },
       },
@@ -72,6 +72,10 @@ export default function DispersalSection({
         <SectionLabel tip={p.tooltips.sectionUse}>{d.source}</SectionLabel>
         <div style={{ marginTop: 6 }}>{sourcePicker}</div>
       </div>
+
+      <TextInput type="number" size="xs" label={lbl(t.analysis.grid.resolution, p.tooltips.labelRes)}
+                 value={res} min={PMAR_RES_MIN} max={PMAR_RES_MAX} step="0.01" placeholder="0.1"
+                 onChange={e => setRes(e.target.value)} styles={LABEL_STYLES} />
 
       <div>
         <SectionLabel>{d.indicators}</SectionLabel>
@@ -100,8 +104,6 @@ export default function DispersalSection({
       </UnstyledButton>
       <Collapse expanded={advanced}>
         <Stack gap="xs">
-          <NativeSelect size="xs" label={lbl(p.labelRes, p.tooltips.labelRes)} value={res}
-                        onChange={e => setRes(e.target.value)} data={RESOLUTIONS} styles={LABEL_STYLES} />
           <TextInput type="number" size="xs" label={lbl(p.labelMargin, p.tooltips.labelMargin)}
                      value={margin} min="0" max="20" step="any"
                      onChange={e => setMargin(e.target.value)} styles={LABEL_STYLES} />
@@ -110,7 +112,9 @@ export default function DispersalSection({
 
       <RunButton labels={t.analysis.runLabels} loading={loading} stopping={stopping} onStop={onStop}
                  disabled={!canRun} onRun={run} limitNote={limitNote}
-                 hint={!sc ? p.hintNoScenario : useSource === 'geotiff' && !geotiff.b64 ? d.needTiff : null} />
+                 hint={!sc ? p.hintNoScenario
+                       : !resOk ? t.analysis.connectivity.resRange.replace('{min}', PMAR_RES_MIN).replace('{max}', PMAR_RES_MAX)
+                       : useSource === 'geotiff' && !geotiff.b64 ? d.needTiff : null} />
     </Stack>
   )
 }

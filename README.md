@@ -313,7 +313,7 @@ weighted by the source layer at their release point (`pmar` process).
 |---|---|---|
 | Source layer | `Uniform`, EMODnet `Wind farms`, `Offshore installations`, `MSP aquaculture zones`, `Custom` (GeoTIFF upload) | `Uniform` |
 | Indicator | `PPI`; with a multi-seeding simulation also `MAX`, `Q90`, `σ` (across seedings) | `PPI` |
-| Grid resolution (Advanced) | 0.1°, 0.05° | 0.1° |
+| Grid resolution | any value between 0.05° and 5° | 0.1° |
 | Study area margin (Advanced) | 0–20° | 1° |
 
 The chosen indicator is the one the layer shows and downloads.
@@ -530,7 +530,7 @@ Runs PMAR density analysis on a precomputed scenario trajectory.
 | Parameter | Description | Default |
 |---|---|---|
 | `scenario_id` | ID of a precomputed scenario (`custom_<id>`) | — |
-| `res` | Grid resolution in degrees: 0.1 or 0.05 (other values are refused) | 0.1 |
+| `res` | Grid resolution in degrees, between 0.05 and 5 (other values are refused) | 0.1 |
 | `margin` | Degrees added beyond the seeding bbox to define the study area | 1.0 |
 | `use_source` | Weighting layer: `none`, `windfarms`, `offshore_installations`, `msp_zones`, `geotiff` | `none` |
 | `geotiff_b64` | Base64-encoded GeoTIFF for custom weighting (when `use_source=geotiff`) | — |
