@@ -1,0 +1,8 @@
+scenario_id,label,pressure,pnum,duration_days,time_step_hours,seedings,particle_steps,wall_s,us_per_particle_step,mb,forcing_s,integration_s,write_s,peak_rss_mb
+?,NAS - Winter,generic,10000,90,1,1,21600000,210.6,9.75,118.14,,,,
+?,NAS - Summer,generic,10000,90,1,1,21600000,224.3,10.38,152.36,,,,
+?,Black Sea - Macroplastic - Sum,plastic,10000,90,1,1,21600000,300.2,13.9,379.35,,,,
+?,Black Sea - Macroplastic - Win,plastic,10000,90,1,1,21600000,327.0,15.14,435.1,,,,
+?,Black Sea - macroplastic,plastic,10000,90,1,1,21600000,348.3,16.13,435.17,,,,
+?,Azores - RAMPA - Summer,generic,24000,90,1,1,51840000,512.4,9.88,403.5,,,,
+?,Azores - RAMPA - Winter,generic,24000,90,1,1,51840000,508.1,9.8,393.39,,,,

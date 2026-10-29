@@ -1,0 +1,11 @@
+variation,predicted,requests,key_downloads,containment_downloads,key_hit_rate,containment_hit_rate
+identical request repeated,no variation,200,1,1,0.995,0.995
+start hour varies,key,200,2,1,0.99,0.995
+area moves within one degree cell,key,200,1,1,0.995,0.995
+area moves across degree cells,neither,200,58,24,0.71,0.88
+start day varies over a month,neither,200,30,30,0.85,0.85
+duration varies (7/14/30 d),containment,200,3,2,0.985,0.99
+shorter period after a 30-day one,containment,201,24,1,0.8806,0.995
+narrower margin after a wide one,containment,201,4,1,0.9801,0.995
+surface after a 200 m request,containment,201,2,1,0.99,0.995
+"periods lengthening, 7 to 30 days",neither,200,200,200,0.0,0.0

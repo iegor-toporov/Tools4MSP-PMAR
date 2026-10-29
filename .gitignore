@@ -16,6 +16,10 @@ cache/*
 !cache/.gitkeep
 scenarios/*
 !scenarios/.gitkeep
+# the Adriatic basin polygon used by bench/adriatic_campaign.py is published
+!scenarios/shapefiles/
+scenarios/shapefiles/*
+!scenarios/shapefiles/adriatico_t4msp.*
 
 # pygeoapi generated
 pygeoapi-openapi.yml
@@ -43,8 +47,13 @@ docker-compose.override.yml
 # Master's thesis — written locally, not part of the application
 thesis/
 
-# Benchmarks for thesis - local
-bench/
+# Benchmarks for the thesis: the harness, the baseline script and the result
+# CSVs are published; downloaded forcing and generated outputs are not.
+bench/baseline/forcing.nc
+bench/baseline/trajectories.nc
+bench/baseline/density.tif
+bench/adriatic.geojson
+bench/**/__pycache__/
 
 
 # Shapefile di test per la connettività — dati generati, si rifanno con

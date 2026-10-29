@@ -1,0 +1,7 @@
+variation,expected,requests,distinct_downloads,hit_rate
+identical request repeated,none,200,1,0.995
+start hour varies,absorbed by design,200,2,0.99
+area moves within one degree cell,absorbed by design,200,1,0.995
+area moves across degree cells,not absorbed,200,58,0.71
+start day varies over a month,not absorbed,200,30,0.85
+duration varies (7/14/30 d),not absorbed,200,3,0.985
