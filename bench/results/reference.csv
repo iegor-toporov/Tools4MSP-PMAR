@@ -1,0 +1,11 @@
+name,scenario_id,pressure,pnum,releases,output_steps,particle_steps,client_s,run_s,forcing_s,integration_s,write_s,downloaded_mb,hits,misses,peak_rss_mb,size_mb,run
+M,custom_e4f2e106,generic,10000,1,720,7200000,,7496.4,7411.7,68.3,0.1,218.6,0,1,5086,70.3,record
+S,custom_64978f32,generic,1000,1,168,168000,,35.0,15.8,2.6,0.0,0.0,2,0,3073,1.8,record
+L,custom_e3f0da47,generic,13850,4,540,29916000,,547.4,0.0,529.0,0.7,0.0,5,0,4503,307.8,record
+M,custom_25dfde23,generic,10000,1,720,7200000,85.3,83.8,0.1,66.4,0.2,0.0,1,0,4377,70.3,1
+S,custom_34673957,generic,1000,1,168,168000,10.2,9.6,6.9,2.6,0.0,0.0,2,0,4701,1.8,1
+M,custom_3e268862,generic,10000,1,720,7200000,68.0,67.1,0.1,66.8,0.1,0.0,1,0,5027,70.3,2
+S,custom_bc439994,generic,1000,1,168,168000,9.2,8.7,6.0,2.5,0.0,0.0,2,0,5123,1.8,2
+M-1000,custom_03460224,generic,1000,1,720,720000,21.2,20.5,0.0,20.4,0.0,0.0,1,0,5123,7.1,sweep
+M-2500,custom_263eefd6,generic,2500,1,720,1800000,28.2,28.0,0.0,27.9,0.0,0.0,1,0,5123,17.5,sweep
+M-5000,custom_9f288993,generic,5000,1,720,3600000,41.4,41.2,0.0,41.0,0.1,0.0,1,0,5123,35.0,sweep

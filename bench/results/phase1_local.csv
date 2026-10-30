@@ -1,9 +1,0 @@
-scenario_id,label,pressure,pnum,duration_days,time_step_hours,seedings,particle_steps,wall_s,us_per_particle_step,mb,forcing_s,integration_s,write_s,peak_rss_mb
-custom_2be83f8a,Test 3,generic,1000,30,1,1,720000,18.8,26.09,,,,,
-custom_5e06fa48,Test 2,generic,1000,30,1,1,720000,34.9,48.44,,,,,
-custom_f7892148,Test connectivity Markov 1.1,generic,7500,30,1,1,5400000,44.4,8.23,,,,,
-custom_06f73ba1,Test simulations 1.0,generic,10000,30,1,1,7200000,51.6,7.17,,,,,
-custom_32210377,Test simulations 1.1,generic,10000,30,1,1,7200000,42.8,5.95,,,,,
-custom_6254491e,Test connectivity Markov 1.0,generic,10000,30,1,1,7200000,67.9,9.42,,,,,
-custom_662ed3bf,Veneto + Liguria,generic,10000,30,1,1,7200000,64.3,8.93,,,,,
-custom_8f27a9eb,Test markov 2.0,generic,10022,30,1,1,7215840,78.0,10.81,,,,,

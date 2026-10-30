@@ -404,6 +404,147 @@ def exp_convergence(args):
     write_csv(args.out, rows)
 
 
+def exp_load(args):
+    """Response times as the number of simultaneous users grows.
+
+    Two sweeps, both against the local service only. Predictions, fixed before
+    the runs:
+
+      synchronous   c clients each send `--requests` synchronous requests at
+                    the same time. The API runs gevent workers, so latency
+                    should stay nearly flat while throughput rises.
+      analyses      c analysis jobs are submitted at once. The analysis queue
+                    has three slots, so jobs 1-3 should start at once and the
+                    rest should wait in steps of one service time per three
+                    jobs. The job record's created/started/finished times
+                    separate the wait in the queue from the service itself:
+                    the client polls every half second and records when the
+                    job first reports running, because the job record's own
+                    `started` field is written when the job is created.
+                    While each burst runs, a probe keeps sending synchronous
+                    requests, to see whether the queue slows down the API.
+
+    Never point this at a shared deployment: it is a load test.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+
+    # The proxy allows each client address 5 requests per second, so load sent
+    # through it from one machine would only measure that limit. Run this from a
+    # container on the stack's network instead, against the API process itself:
+    #   docker run --rm --network dto-pmar_internal -v "$PWD/bench:/bench" \
+    #     -e BENCH_BASE=http://backend:5001 --entrypoint python \
+    #     dto-pmar-backend -u /bench/run.py load
+    api = Api()
+    from urllib.parse import urlparse
+    if urlparse(api.base).hostname not in ('localhost', '127.0.0.1', 'backend'):
+        raise SystemExit('refusing to run a load test against a non-local service')
+
+    def run_tracked(pid, inputs, poll=0.5):
+        """Submit, then poll: returns (status, wait_s, service_s, total_s)."""
+        t0 = time.monotonic()
+        job, _ = api.submit(pid, inputs)
+        t_run = None
+        while True:
+            _, _, d = api._json(f'{api.base}/jobs/{job}?f=json', timeout=60)
+            st = d.get('status')
+            now = time.monotonic()
+            if t_run is None and st != 'accepted':
+                t_run = now
+            if st in ('successful', 'failed', 'dismissed'):
+                return st, t_run - t0, now - t_run, now - t0
+            time.sleep(poll)
+
+    # The default probe is the process list, which the API layer answers on its
+    # own. The scenario listing also asks an external service for its area list,
+    # so its latency follows that service as well as this one.
+    def sync_once():
+        t = time.monotonic()
+        if args.probe == 'processes':
+            api._json(f'{api.base}/processes?f=json', timeout=120)
+        else:
+            api._json(f'{api.base}/processes/scenario_status/execution',
+                      json.dumps({'inputs': {}}).encode(),
+                      {'Content-Type': 'application/json'}, timeout=120)
+        return time.monotonic() - t
+
+    def sync_or_none():
+        try:
+            return sync_once()
+        except Exception:
+            return None
+
+    def pct(vals, q):
+        v = sorted(vals)
+        return v[min(len(v) - 1, int(round(q * (len(v) - 1))))]
+
+    rows_sync, rows_jobs = [], []
+
+    # ---- synchronous sweep
+    for c in args.sync_levels:
+        t0 = time.monotonic()
+        with ThreadPoolExecutor(c) as ex:
+            res = list(ex.map(lambda _: sync_or_none(), range(c * args.requests)))
+        span = time.monotonic() - t0
+        lat = [x for x in res if x is not None]
+        med, iqr = summarise(lat)
+        rows_sync.append({'clients': c, 'requests': len(res), 'errors': len(res) - len(lat),
+                          'median_ms': round(med * 1000, 1),
+                          'iqr_ms': round(iqr * 1000, 1) if iqr is not None else '',
+                          'p95_ms': round(pct(lat, 0.95) * 1000, 1),
+                          'throughput_rps': round(len(lat) / span, 1)})
+        r = rows_sync[-1]
+        print(f"  sync  c={c:>3}  median {r['median_ms']:>6} ms  p95 {r['p95_ms']:>6} ms  "
+              f"{r['throughput_rps']:>6} req/s")
+
+    # ---- analysis sweep, with a synchronous probe running alongside
+    job_inputs = {'scenario_id': args.scenario, 'grid_res': 0.5, 'mode': 'transition'}
+    for rep in range(args.repeat):
+        for c in args.job_levels:
+            stop, probe, probe_err = threading.Event(), [], []
+
+            def prober():
+                while not stop.is_set():
+                    x = sync_or_none()
+                    (probe if x is not None else probe_err).append(x)
+                    time.sleep(0.2)
+
+            th = threading.Thread(target=prober, daemon=True)
+            th.start()
+            t0 = time.monotonic()
+            try:
+                with ThreadPoolExecutor(c) as ex:
+                    results = list(ex.map(lambda _: run_tracked('connectivity', job_inputs),
+                                          range(c)))
+            finally:
+                stop.set(); th.join()
+            span = time.monotonic() - t0
+            waits = [r[1] for r in results]
+            services = [r[2] for r in results]
+            ends = [r[3] for r in results]
+            ok = sum(1 for r in results if r[0] == 'successful')
+            pm, pi = summarise(probe) if probe else (None, None)
+            rows_jobs.append({
+                'repeat': rep, 'jobs': c, 'successful': ok,
+                'wait_s_median': round(statistics.median(waits), 2) if waits else '',
+                'wait_s_max': round(max(waits), 2) if waits else '',
+                'service_s_median': round(statistics.median(services), 2) if services else '',
+                'end_to_end_s_median': round(statistics.median(ends), 2),
+                'makespan_s': round(span, 1),
+                'probe_ms_median': round(pm * 1000, 1) if pm else '',
+                'probe_ms_iqr': round(pi * 1000, 1) if pi is not None else '',
+                'probe_n': len(probe),
+                'probe_errors': len(probe_err),
+            })
+            r = rows_jobs[-1]
+            print(f"  jobs  rep={rep} c={c:>3}  ok {ok}/{c}  wait med {r['wait_s_median']:>6}s "
+                  f"max {r['wait_s_max']:>6}s  service {r['service_s_median']:>6}s  "
+                  f"makespan {r['makespan_s']:>6}s  probe {r['probe_ms_median']} ms")
+
+    write_csv(args.out + '_sync', rows_sync)
+    write_csv(args.out + '_jobs', rows_jobs)
+
+
 def exp_validation(args):
     """Decompose the propagation error: noise floor, hold-out, seasonality.
 
@@ -853,10 +994,149 @@ def exp_analyses(args):
                      'wall_s_median': round(med, 2) if med else '',
                      'wall_s_spread': round(spread, 2) if spread is not None else '',
                      'payload_mb': size if size is not None else ''})
-        print(f'  {pid:14} {label:18} {med if med is None else round(med, 2):>6}s  '
+        print(f'  {pid:14} {label:18} {"rejected" if med is None else round(med, 2):>6}s  '
               f'{units:>6} units  payload {size} MB')
-    write_csv('analyses', rows)
+    write_csv(args.out, rows)
 
+
+# ───────────────────────────── reference scenarios ─────────────────────────
+#
+# Chapter 6 reports every simulation-side measurement on the same small set of
+# scenarios, so a reader meets three names and finds them everywhere. S is the
+# configuration of the script baseline; M is a month over the whole basin; L is
+# the convergence campaign of ch. 5 (bench/adriatic_campaign.py), which already
+# has a recorded run and is not repeated here. July 2024 is chosen because no
+# forcing for it was cached, so the first run of S and of M is a cold one.
+
+S_BOX = [[12.4, 44.6], [13.0, 44.6], [13.0, 45.0], [12.4, 45.0], [12.4, 44.6]]
+
+REFERENCE = {
+    'S':  dict(area='box', pressure='generic', pnum=1000, duration_days=7,
+               time_step_hours=1, start_time='2024-07-01T00:00:00', cmems_margin=2.0),
+    'M':  dict(area='basin', pressure='generic', pnum=10000, duration_days=30,
+               time_step_hours=1, start_time='2024-07-01T00:00:00', cmems_margin=0),
+    'Mp': dict(area='basin', pressure='plastic', pnum=10000, duration_days=30,
+               time_step_hours=1, start_time='2024-07-01T00:00:00', cmems_margin=0),
+}
+
+
+def reference_inputs(name, pnum=None):
+    """Precompute inputs for reference scenario *name*, optionally with another pnum."""
+    spec = dict(REFERENCE[name])
+    if spec.pop('area') == 'box':
+        geo = json.dumps({'type': 'Polygon', 'coordinates': [S_BOX]})
+    else:
+        # -I leaves the script's own folder off the path, so add it.
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from adriatic_campaign import polygon
+        geo = polygon()
+    if pnum is not None:
+        spec['pnum'] = pnum
+    return {**spec, 'geojson': geo, 'beaching': False, 'area_name': 'Adriatic',
+            'label': f'reference {name} {spec["pnum"]}'}
+
+
+def run_reference(api, name, pnum=None, wait=14400):
+    """Run one reference simulation; returns a row built from its own record."""
+    inputs = reference_inputs(name, pnum)
+    t0 = time.monotonic()
+    job, _ = api.submit('precompute', inputs)
+    rec = api.wait(job, limit=wait)
+    wall = time.monotonic() - t0
+    if rec.get('status') != 'successful':
+        print(f'  {name}: {rec.get("status")} {rec.get("message", "")[:200]}')
+        return None
+    row = record_row(api.results(job).get('scenario_id'), name)
+    row['client_s'] = round(wall, 1)
+    return row
+
+
+def record_row(sid, name):
+    """A reference row built from a scenario's own record, however it was run."""
+    sc = json.load(open(os.path.join(SCENARIOS, f'{sid}.json')))
+    t, f = sc.get('timing') or {}, sc.get('forcing') or {}
+    nc = sc.get('nc_filenames') or [sc['nc_filename']]
+    size = sum(os.path.getsize(os.path.join(SCENARIOS, n)) for n in nc) / 1e6
+    steps = int(sc['duration_days'] * 24 / sc['time_step_hours'])
+    releases = len(nc)
+    run_s = (datetime.fromisoformat(sc['finished_at'])
+             - datetime.fromisoformat(sc['started_at'])).total_seconds()
+    return {'name': name, 'scenario_id': sid, 'pressure': sc['pressure'],
+            'pnum': sc['pnum'], 'releases': releases, 'output_steps': steps,
+            'particle_steps': sc['pnum'] * steps * releases,
+            'client_s': '', 'run_s': round(run_s, 1),
+            'forcing_s': t.get('forcing_s', ''), 'integration_s': t.get('integration_s', ''),
+            'write_s': t.get('write_s', ''), 'downloaded_mb': f.get('downloaded_mb', ''),
+            'hits': f.get('hits', ''), 'misses': f.get('misses', ''),
+            'peak_rss_mb': t.get('peak_rss_mb', ''), 'size_mb': round(size, 1)}
+
+
+def exp_reference(args):
+    """Phase-1 cost of the reference scenarios, cold and warm, and a particle sweep.
+
+    Each named scenario runs twice in a row. Whether a run was cold is not
+    assumed: the record says how many megabytes it downloaded. The sweep varies
+    only the particle count of M, on a warm cache, to separate the fixed cost of
+    a run from the cost per particle-step.
+    """
+    api = Api()
+    rows = []
+    # Runs made earlier, e.g. a cold run whose download outlasted the harness,
+    # are read back from their records as NAME=scenario_id.
+    for item in args.records:
+        name, sid = item.split('=')
+        r = record_row(sid, name)
+        r['run'] = 'record'
+        rows.append(r)
+        print(f"  {name} from record {sid}: {r['run_s']}s  forcing {r['forcing_s']}s  "
+              f"{r['downloaded_mb']} MB")
+    for rep in (1, 2):
+        for name in args.names:
+            r = run_reference(api, name)
+            if r:
+                r['run'] = rep
+                rows.append(r)
+                print(f"  {name} run {rep}: {r['run_s']}s  forcing {r['forcing_s']}s  "
+                      f"integration {r['integration_s']}s  {r['downloaded_mb']} MB  "
+                      f"{r['size_mb']} MB on disk")
+    for pnum in args.sweep:
+        r = run_reference(api, 'M', pnum=pnum)
+        if r:
+            r['name'], r['run'] = f'M-{pnum}', 'sweep'
+            rows.append(r)
+            print(f"  M with {pnum}: {r['run_s']}s  integration {r['integration_s']}s")
+    write_csv(args.out, rows)
+    print('  NOTE: the sweep scenarios can be removed afterwards; S, M and Mp are '
+          'the reference scenarios of ch. 6')
+
+
+
+def exp_sparsity(args):
+    """Fill of the transition matrix: non-zero entries against nodes.
+
+    Dense storage is 8 bytes per entry; coordinate-sparse storage is 16 bytes
+    per non-zero entry (a value and two indices).
+    """
+    api = Api()
+    rows = []
+    for item in args.cases:
+        name, sid, grid = item.split(':')
+        rec, res, _ = api.run('connectivity', {'scenario_id': sid, 'grid_res': float(grid),
+                                               'mode': 'transition'})
+        if rec.get('status') != 'successful':
+            print(f'  {name} {grid}: {rec.get("status")} {rec.get("message", "")[:120]}')
+            continue
+        m = res['matrix']
+        n = len(m)
+        nnz = sum(1 for row in m for v in row if v)
+        rows.append({'name': name, 'scenario_id': sid, 'grid_deg': grid, 'nodes': n,
+                     'non_zero': nnz, 'fill': round(nnz / (n * n), 4),
+                     'dense_kb': round(n * n * 8 / 1024, 1),
+                     'sparse_kb': round(nnz * 16 / 1024, 1)})
+        r = rows[-1]
+        print(f"  {name} {grid}: {n} nodes, {nnz} non-zero, fill {r['fill']:.1%}, "
+              f"{r['dense_kb']} KB dense, {r['sparse_kb']} KB sparse")
+    write_csv(args.out, rows)
 
 def exp_isolation(args):
     """NFR2: does a running simulation degrade the latency of short requests?
@@ -870,14 +1150,20 @@ def exp_isolation(args):
     print('  baseline (idle) ...')
     base = api.latency(*probe, n=args.probes)
 
-    print(f'  submitting simulation: {args.pnum} particles, {args.days} days ...')
     geo = json.dumps({'type': 'Polygon', 'coordinates': [[
         [12.4, 44.6], [13.4, 44.6], [13.4, 45.2], [12.4, 45.2], [12.4, 44.6]]]})
-    job, _ = api.submit('precompute', {
-        'geojson': geo, 'pressure': 'generic', 'pnum': args.pnum,
-        'duration_days': args.days, 'time_step_hours': 1, 'cmems_margin': 2.0,
-        'label': 'bench-isolation', 'area_name': 'bench',
-    })
+    if args.reference:
+        # A reference scenario of ch. 6, on a warm cache, so that the worker is
+        # integrating rather than waiting on a download while the probes run.
+        print(f'  submitting reference scenario {args.reference} ...')
+        job, _ = api.submit('precompute', reference_inputs(args.reference))
+    else:
+        print(f'  submitting simulation: {args.pnum} particles, {args.days} days ...')
+        job, _ = api.submit('precompute', {
+            'geojson': geo, 'pressure': 'generic', 'pnum': args.pnum,
+            'duration_days': args.days, 'time_step_hours': 1, 'cmems_margin': 2.0,
+            'label': 'bench-isolation', 'area_name': 'bench',
+        })
     time.sleep(args.settle)
     print('  probing under load ...')
     under = api.latency(*probe, n=args.probes)
@@ -901,7 +1187,7 @@ def exp_isolation(args):
         {'condition': 'simulation running', 'probes': len(under),
          'median_ms': round(um * 1000, 1), 'spread_ms': round(us * 1000, 1) if us else ''},
     ]
-    write_csv('isolation', rows)
+    write_csv(args.out, rows)
     print(f'  idle   median {bm * 1000:.0f} ms')
     print(f'  loaded median {um * 1000:.0f} ms   ratio {um / bm:.2f}x')
     print(f'  second simulation status while first runs: {queued_status} '
@@ -979,10 +1265,13 @@ EXPERIMENTS = {
     'containment': (exp_containment, 'offline', 'what the containment lookup absorbs that the key could not'),
     'forcing':  (exp_forcing,  'net',     'cold forcing retrieval against requested volume'),
     'convergence': (exp_convergence, 'offline', 'propagated vs simulated distributions over horizons'),
+    'load':     (exp_load,     'api',     'response times as the number of simultaneous users grows'),
     'validation': (exp_validation, 'offline', 'noise floor, hold-out and time-varying decomposition of the propagation error'),
     'cachedir': (exp_cachedir, 'offline', 'composition of the forcing cache'),
     'analyses': (exp_analyses, 'api',     'phase-2 cost per analysis family'),
     'isolation': (exp_isolation, 'sim',   'NFR2: latency under simulation load'),
+    'sparsity': (exp_sparsity, 'api',    'fill of the transition matrix'),
+    'reference': (exp_reference, 'sim',  'phase-1 cost of the reference scenarios, cold and warm'),
     'phase1':   (exp_phase1,   'offline', 'phase-1 wall time from scenario records'),
 }
 
@@ -1006,6 +1295,24 @@ def main():
             s.add_argument('--seed', type=int, default=20261028)
             s.add_argument('--out', default='convergence',
                            help='CSV basename, so separate sweeps do not overwrite')
+        if name == 'reference':
+            s.add_argument('--names', nargs='*', default=['S', 'M', 'Mp'])
+            s.add_argument('--records', nargs='*', default=[],
+                           help='NAME=scenario_id of runs already on disk')
+            s.add_argument('--sweep', type=int, nargs='*', default=[1000, 2500, 5000])
+            s.add_argument('--out', default='reference')
+        if name == 'sparsity':
+            s.add_argument('--cases', nargs='+', required=True,
+                           help='NAME:scenario_id:grid_deg')
+            s.add_argument('--out', default='sparsity')
+        if name == 'load':
+            s.add_argument('--scenario', default='custom_e4f2e106')  # scenario M
+            s.add_argument('--sync-levels', type=int, nargs='+', default=[1, 2, 4, 8, 16, 32])
+            s.add_argument('--job-levels', type=int, nargs='+', default=[1, 2, 4, 8, 16])
+            s.add_argument('--requests', type=int, default=20)
+            s.add_argument('--repeat', type=int, default=3)
+            s.add_argument('--probe', choices=['processes', 'scenario_status'], default='processes')
+            s.add_argument('--out', default='load')
         if name == 'validation':
             s.add_argument('--scenarios', nargs='+', required=True)
             s.add_argument('--res', type=float, default=0.25)
@@ -1020,8 +1327,9 @@ def main():
                            choices=['surface', '3-D'])
             s.add_argument('--out', default='forcing')
         if name == 'analyses':
-            s.add_argument('--scenario', default='custom_06f73ba1')
+            s.add_argument('--scenario', default='custom_e4f2e106')  # scenario M
             s.add_argument('--repeat', type=int, default=3)
+            s.add_argument('--out', default='analyses')
         if name == 'phase1':
             s.add_argument('--remote', default=None,
                            help='base URL of a deployment, e.g. https://<deployment-host>')
@@ -1030,6 +1338,8 @@ def main():
             s.add_argument('--pnum', type=int, default=5000)
             s.add_argument('--days', type=int, default=20)
             s.add_argument('--settle', type=int, default=25)
+            s.add_argument('--reference', choices=sorted(REFERENCE), default=None)
+            s.add_argument('--out', default='isolation')
     args = ap.parse_args()
     fn, cost, help_ = EXPERIMENTS[args.cmd]
     print(f'[{args.cmd}] {help_}  ({cost})')

@@ -1,0 +1,4 @@
+name,scenario_id,grid_deg,nodes,non_zero,fill,dense_kb,sparse_kb
+S,custom_64978f32,0.25,6,12,0.3333,0.3,0.2
+M,custom_e4f2e106,0.5,134,908,0.0506,140.3,14.2
+L,custom_e3f0da47,0.5,134,4305,0.2398,140.3,67.3

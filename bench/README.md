@@ -33,7 +33,17 @@ python3 bench/run.py storage
 | `phase1` | none | Phase-1 wall time from scenario records, local or `--remote` |
 | `analyses` | seconds each | Phase-2 wall time and payload size per analysis family |
 | `isolation` | minutes | Whether a running simulation degrades short-request latency (NFR2) |
+| `load` | minutes | Response times as the number of simultaneous users and analyses grows. Run it from a container on the stack's network, against the API process (see `exp_load`) |
+| `reference` | hours | Phases of the reference scenarios S, M and L (ch. 6), with an empty and a full cache, and a particle sweep on M. `--records NAME=id` reads back runs already on disk |
+| `sparsity` | seconds | Fill of the transition matrix of each reference scenario |
 | `forcing` | **network** | Cold forcing retrieval against requested volume |
+
+Run the experiments that use the service one at a time. On a machine with about 7.6 GB
+for the containers, a simulation of M together with an analysis of L exceeds the memory.
+
+`figures.py` draws the figures of chapter 6 from `results/` and the trajectory files of S, M
+and L; its header gives the command. `reference/` holds the release areas of S and of the
+Adriatic basin as zipped shapefiles, which the interface can load directly.
 
 `none` means the experiment reads artefacts already on disk, or computes over a synthetic
 request sequence. Those can be re-run freely. The others consume the service.

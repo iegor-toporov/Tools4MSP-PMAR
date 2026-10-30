@@ -1,0 +1,12 @@
+process,config,scenario,units,repeats,wall_s_median,wall_s_spread,payload_mb
+pmar,res=0.1,custom_e4f2e106,8100,3,22.2,0.04,0.22
+pmar,res=0.05,custom_e4f2e106,32400,3,22.19,0.08,0.38
+connectivity,passage grid=0.5,custom_e4f2e106,134,3,9.08,1.06,1.47
+connectivity,passage grid=0.25,custom_e4f2e106,,3,,,
+connectivity,transition grid=0.5,custom_e4f2e106,134,3,8.1,0.05,1.47
+connectivity,transition grid=0.25,custom_e4f2e106,,3,,,
+markov,res=0.5,custom_e4f2e106,98,3,1.03,0.02,0.08
+markov,res=0.25,custom_e4f2e106,325,3,1.02,0.0,0.29
+markov,res=0.1,custom_e4f2e106,1720,3,1.03,0.01,1.63
+markov,dt=1d,custom_e4f2e106,315,3,1.03,0.0,0.25
+markov,dt=10d,custom_e4f2e106,330,3,1.02,0.01,0.3

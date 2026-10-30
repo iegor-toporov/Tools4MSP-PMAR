@@ -32,9 +32,10 @@ import numpy as np
 # Release area. Drawn on a map in the platform; here, coordinates.
 AREA = [(12.4, 44.6), (13.0, 44.6), (13.0, 45.0), (12.4, 45.0)]
 
-START_TIME = datetime(2026, 10, 1)
-DURATION_DAYS = 3
-N_PARTICLES = 500
+# Scenario S of the evaluation chapter.
+START_TIME = datetime(2024, 7, 1)
+DURATION_DAYS = 7
+N_PARTICLES = 1000
 TIME_STEP_H = 1
 
 # Analysis grid.
@@ -42,12 +43,10 @@ RESOLUTION = 0.05          # degrees
 STUDY_MARGIN = 1.0         # degrees around the release area
 
 # Forcing. The product identifier has to be known: it is not discoverable from
-# the task, and it is not stable. The identifier this script was first written
-# with, 'cmems_mod_med_phy-cur_anfc_0.042deg_PT1H-m', was retired upstream and
-# now raises DatasetNotFound; the line below is its replacement, found by
-# searching the catalogue by hand. It is also a 2D product, so the depth
-# arguments the previous one needed have to be dropped.
-DATASET_ID = 'cmems_mod_med_phy-cur_anfc_4.2km-2D_PT1H-m'
+# the task, and it depends on the period. Analysis-forecast products cover the
+# recent past, reanalysis products the years before; for July 2024 it is the
+# Mediterranean reanalysis, the product the platform chooses for scenario S.
+DATASET_ID = 'cmems_mod_med_phy-cur_my_4.2km_PT1H-m'
 VARIABLES = ['uo', 'vo']
 FORCING_MARGIN = 2.0       # degrees of ocean data around the release area
 
