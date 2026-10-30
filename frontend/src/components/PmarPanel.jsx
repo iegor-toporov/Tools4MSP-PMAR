@@ -14,6 +14,7 @@ import { formatSeedShape, geometryPolygonCount, seedShapePolygonCount,
          seedShapeToGeoJSON } from '../geometry/seedShape'
 import { CHEMICAL_COMPOUNDS } from '../constants'
 import { forcingLabel } from '../scenarios/forcing'
+import { MAX_RELEASES, MIN_RELEASES, formatDay, releaseSchedule } from '../scenarios/releases'
 import PolygonDrawControls from './PolygonDrawControls'
 import SimulationJobs from './SimulationJobs'
 import { LABEL_STYLES, InfoTip, SectionLabel, SummaryRows, lbl } from './ui'
@@ -43,18 +44,6 @@ const NC_BYTES_PER_STEP = { generic: 40, plastic: 60, oil: 160, chemical: 120, l
 const MAX_PARTICLES = 100000
 // Particelle per poligono: il backend porta i valori fuori da [1, 20000] dentro l'intervallo.
 const MAX_PER_POLYGON = 20000
-
-function computeDateRange(startDate, seedings, tshift, locale) {
-  try {
-    const start = new Date(startDate)
-    const last  = new Date(start)
-    last.setDate(last.getDate() + (parseInt(seedings) - 1) * parseInt(tshift))
-    const fmt = d => d.toLocaleDateString(locale, { day: '2-digit', month: '2-digit', year: 'numeric' })
-    return `${fmt(start)} → ${fmt(last)}`
-  } catch {
-    return ''
-  }
-}
 
 function defaultStartDate() {
   const d = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000)
@@ -109,10 +98,82 @@ function SimulationLock({ a, value, onChange, onUnlock, pending, error }) {
   )
 }
 
+const BOX_STYLE = { background: 'var(--modal-bg)', border: '1px solid var(--modal-divider)' }
+const CELL = { padding: '2px 6px', textAlign: 'right' }
+const HEAD = { ...CELL, fontWeight: 600, color: 'var(--mantine-color-dimmed)',
+               borderBottom: '1px solid var(--modal-divider)' }
+
+/**
+ * Multi seeding in un riquadro: l'interruttore, le due impostazioni e il
+ * calendario dei rilasci che ne risulta, con le date vere di inizio e fine.
+ */
+function MultiSeedingBox({ p, locale, enabled, onToggle, releases, onReleases,
+                           shift, onShift, startDate, duration }) {
+  const schedule = enabled ? releaseSchedule(startDate, duration, releases, shift) : []
+  const fmt = d => formatDay(d, locale)
+  const days = schedule.length ? Math.round((schedule[0].end - schedule[0].start) / 86400000) : 0
+  return (
+    <Paper p="xs" radius="sm" style={BOX_STYLE}>
+      <Stack gap="xs">
+        <Switch
+          size="xs"
+          label={lbl(p.multiSeedingToggle, p.tooltips.multiSeeding)}
+          checked={enabled}
+          onChange={e => onToggle(e.currentTarget.checked)}
+        />
+        {enabled && (
+          <>
+            <Group grow gap="xs" align="flex-start">
+              <TextInput type="number" size="xs" label={lbl(p.seedingsLabel, p.tooltips.seedingsCount)}
+                         value={releases} min={MIN_RELEASES} max={MAX_RELEASES}
+                         onChange={e => onReleases(e.target.value)} styles={LABEL_STYLES} />
+              <TextInput type="number" size="xs" label={lbl(p.tshiftLabel, p.tooltips.tshift)}
+                         value={shift} min="1" max="365"
+                         onChange={e => onShift(e.target.value)} styles={LABEL_STYLES} />
+            </Group>
+            {schedule.length > 0 && (
+              <>
+                <ScrollArea.Autosize mah={170} type="auto">
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11,
+                                  fontVariantNumeric: 'tabular-nums' }}>
+                    <thead>
+                      <tr>
+                        <th style={{ ...HEAD, textAlign: 'left' }}>{p.releaseCol}</th>
+                        <th style={HEAD}>{p.releaseStart}</th>
+                        <th style={HEAD}>{p.releaseEnd}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {schedule.map(r => (
+                        <tr key={r.n}>
+                          <td style={{ ...CELL, textAlign: 'left' }}>{r.n}</td>
+                          <td style={CELL}>{fmt(r.start)}</td>
+                          <td style={CELL}>{fmt(r.end)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </ScrollArea.Autosize>
+                <Text size="10px" c="dimmed">
+                  {p.releasesSummary
+                    .replace('{n}', schedule.length)
+                    .replace('{d}', days)
+                    .replace('{from}', fmt(schedule[0].start))
+                    .replace('{to}', fmt(schedule[schedule.length - 1].end))}
+                </Text>
+              </>
+            )}
+          </>
+        )}
+      </Stack>
+    </Paper>
+  )
+}
+
 /** Riquadro grigio coi dati di una simulazione. */
 function ScenarioCard({ rows, description }) {
   return (
-    <Paper p="xs" radius="sm" style={{ background: 'var(--modal-bg)', border: '1px solid var(--modal-divider)' }}>
+    <Paper p="xs" radius="sm" style={BOX_STYLE}>
       <Stack gap={4}>
         <SummaryRows rows={rows} />
         {description && (
@@ -583,7 +644,7 @@ export default function PmarPanel({
                       [p.labelDuration,     `${selected.duration_days} d`],
                       [p.labelParticles,    selected.pnum?.toLocaleString()],
                       [p.labelTimeStep,     `${selected.time_step_hours} h`],
-                      [p.labelMultiSeeding, selected.seedings > 1 ? `${selected.seedings}× / ${selected.tshift} d` : null],
+                      [p.labelMultiSeeding, selected.seedings > 1 ? p.releasesShort.replace('{n}', selected.seedings).replace('{s}', selected.tshift) : null],
                       [p.labelBeaching,     selected.beaching === false ? t.analyses.no : t.analyses.yes],
                       [t.analysis.summary.forcing, selected.forcing_datasets ? forcingLabel(selected, t.analysis.forcingLabels) : null],
                     ]}
@@ -808,28 +869,18 @@ export default function PmarPanel({
                 </UnstyledButton>
                 <Collapse expanded={showAdvanced}>
                   <Stack gap="xs">
-                    <Switch
-                      size="xs"
-                      label={lbl(p.multiSeedingToggle, p.tooltips.multiSeeding)}
-                      checked={multiSeeding}
-                      onChange={e => setMultiSeeding(e.currentTarget.checked)}
+                    <MultiSeedingBox
+                      p={p}
+                      locale={t.controls.locale}
+                      enabled={multiSeeding}
+                      onToggle={setMultiSeeding}
+                      releases={seedings}
+                      onReleases={setSeedings}
+                      shift={tshift}
+                      onShift={setTshift}
+                      startDate={startDate}
+                      duration={durationDays}
                     />
-                    {multiSeeding && (
-                      <Stack gap="xs">
-                        <Group grow gap="xs" align="flex-start">
-                          <TextInput type="number" size="xs" label={lbl(p.seedingsLabel, p.tooltips.seedingsCount)}
-                                     value={seedings} min="2" max="12"
-                                     onChange={e => setSeedings(e.target.value)} styles={LABEL_STYLES} />
-                          <TextInput type="number" size="xs" label={lbl(p.tshiftLabel, p.tooltips.tshift)}
-                                     value={tshift} min="1" max="365"
-                                     onChange={e => setTshift(e.target.value)} styles={LABEL_STYLES} />
-                        </Group>
-                        <Text size="10px" c="dimmed" ta="center">
-                          {computeDateRange(startDate, seedings, tshift, t.controls.locale)}
-                          {' · '}{sim.seedingsSummary.replace('{n}', seedings).replace('{d}', tshift)}
-                        </Text>
-                      </Stack>
-                    )}
                     <TextInput type="number" size="xs" label={lbl(p.labelCmemsMargin, p.tooltips.labelCmemsMargin)}
                                value={cmemsMargin} min="0" max="20" step="any"
                                onChange={e => setCmemsMargin(e.target.value)} styles={LABEL_STYLES} />
@@ -881,7 +932,7 @@ export default function PmarPanel({
                   [p.labelSeedingPerPoly,         sc.seeding_mode === 'per_polygon'
                     ? `${sc.pnum_per_polygon?.toLocaleString()} × ${sc.n_polygons}` : null],
                   [p.labelTimeStep,               `${sc.time_step_hours} h`],
-                  [p.labelMultiSeeding,           sc.seedings > 1 ? `${sc.seedings}× / ${sc.tshift} d` : t.analyses.no],
+                  [p.labelMultiSeeding,           sc.seedings > 1 ? p.releasesShort.replace('{n}', sc.seedings).replace('{s}', sc.tshift) : t.analyses.no],
                 ]}
                 description={sc.description}
               />
