@@ -41,8 +41,14 @@ os.makedirs(SCENARIOS_SHP_DIR, exist_ok=True)
 T4MSP_AREAS_URL = 'https://api.tools4msp.eu/api/v2/domainareas/?format=json'
 T4MSP_AREA_URL  = 'https://api.tools4msp.eu/api/v2/domainareas/{area_id}/?format=json'
 
-_T4MSP_CACHE: dict = {'areas': None, 'ts': 0.0}
+_T4MSP_CACHE: dict = {'areas': None, 'ts': 0.0, 'failed_ts': 0.0}
 _T4MSP_CACHE_TTL   = 3600  # seconds TODO
+# L'elenco aree è accessorio, ma viaggia nella stessa risposta dell'elenco
+# scenari: se Tools4MSP non risponde, non deve rallentare ogni richiesta.
+# Dopo un errore si riprova solo passato _T4MSP_RETRY_AFTER, e si aspetta al
+# massimo _T4MSP_TIMEOUT.
+_T4MSP_TIMEOUT     = 4     # seconds
+_T4MSP_RETRY_AFTER = 60    # seconds
 
 
 def _fetch_t4msp_areas() -> list:
@@ -51,6 +57,8 @@ def _fetch_t4msp_areas() -> list:
     Returns a list of ``{id, label}`` dicts sourced from the Tools4MSP REST API.
     The result is stored in the module-level ``_T4MSP_CACHE`` dict; on network failure,
     returns the stale cache if available, or an empty list on first-call failure.
+    A failure is remembered for ``_T4MSP_RETRY_AFTER`` seconds, during which the API
+    is not asked again.
 
     Returns:
         list[dict]: Area descriptors, each containing at least ``id`` and ``label``.
@@ -59,17 +67,19 @@ def _fetch_t4msp_areas() -> list:
     now = _t.time()
     if _T4MSP_CACHE['areas'] is not None and (now - _T4MSP_CACHE['ts']) < _T4MSP_CACHE_TTL:
         return _T4MSP_CACHE['areas']
+    if (now - _T4MSP_CACHE['failed_ts']) < _T4MSP_RETRY_AFTER:
+        return _T4MSP_CACHE['areas'] or []
     try:
-        with _u.urlopen(T4MSP_AREAS_URL, timeout=15) as resp:
+        with _u.urlopen(T4MSP_AREAS_URL, timeout=_T4MSP_TIMEOUT) as resp:
             areas = json.loads(resp.read())
         _T4MSP_CACHE['areas'] = areas
         _T4MSP_CACHE['ts']    = now
     except Exception as e:
+        _T4MSP_CACHE['failed_ts'] = now
         import logging
-        logging.getLogger('pmar_process').warning(f'[T4MSP] Impossibile caricare aree: {e}')
-        if _T4MSP_CACHE['areas'] is None:
-            return []
-    return _T4MSP_CACHE['areas']
+        logging.getLogger('pmar_process').warning(
+            f'[T4MSP] Impossibile caricare aree: {e}; nuovo tentativo tra {_T4MSP_RETRY_AFTER} s')
+    return _T4MSP_CACHE['areas'] or []
 
 
 def ensure_t4msp_shapefile(area_id: int) -> str:

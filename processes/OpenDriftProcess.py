@@ -426,6 +426,35 @@ _RETRY_WAITS = (5, 15, 45)
 # del più lento invece della somma.
 _PARALLEL = 4
 _PARTIAL_DIR = os.path.join(CACHE_DIR, '.partial')
+# Download in corso in questo processo. Se il job viene annullato, il processo si
+# chiude di colpo (worker/tasks.py) e questi file a metà vanno tolti prima.
+ACTIVE_PARTIALS: set = set()
+# Un file a metà più vecchio del limite di un task non appartiene a nessun task vivo.
+_STALE_PARTIAL_S = 13 * 3600
+
+
+def remove_active_partials():
+    """Remove the half-written files of this process's downloads in progress."""
+    import glob
+    for tmp in list(ACTIVE_PARTIALS):
+        for f in glob.glob(tmp + '*'):            # copernicusmarine aggiunge un suffisso
+            try:
+                os.remove(f)
+            except OSError:
+                pass
+
+
+def _clear_stale_partials():
+    """Remove half-written files left by downloads that can no longer be running."""
+    import time
+    now = time.time()
+    for name in os.listdir(_PARTIAL_DIR):
+        f = os.path.join(_PARTIAL_DIR, name)
+        try:
+            if now - os.path.getmtime(f) > _STALE_PARTIAL_S:
+                os.remove(f)
+        except OSError:
+            pass
 # "Superficie" dei dataset 3D: il primo livello dei modelli sta fra 0.49 m (globale, Mar
 # Nero, IBI) e 1.02 m (Mediterraneo). Chiedere 0–0.5 m nel Mediterraneo non trova nessun
 # livello e la richiesta fallisce.
@@ -586,7 +615,9 @@ def _fetch_entry(family, entry, box, t0, t1, n_days, need0, need1, *, vertical,
         if hit:                                   # scaricato da un altro processo
             return hit
         os.makedirs(_PARTIAL_DIR, exist_ok=True)
+        _clear_stale_partials()
         tmp = os.path.join(_PARTIAL_DIR, os.path.basename(path))
+        ACTIVE_PARTIALS.add(tmp)
         started = __import__('time').monotonic()
         logger.info(f'{family}: downloading {entry["dataset_id"]} box={box} '
                     f'{t0.date() if t0 else "static"}+{n_days if t0 else 0}d depth={depth}')
@@ -596,6 +627,7 @@ def _fetch_entry(family, entry, box, t0, t1, n_days, need0, need1, *, vertical,
                                    require_full=require_full)
             os.replace(tmp, path)
         finally:
+            ACTIVE_PARTIALS.discard(tmp)
             if os.path.exists(tmp):
                 os.remove(tmp)
         cms.record_cached(path, {

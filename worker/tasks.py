@@ -1,6 +1,7 @@
 import importlib
 import json
 import os
+import threading
 from datetime import datetime, timezone
 
 import redis as redis_client
@@ -53,7 +54,7 @@ def run_simulation(self, job_id: str, process_class_path: str, data_dict: dict):
     alla cieca da Celery. Lo scenario viene segnato come fallito all'avvio del worker
     (vedi :func:`_recover_simulations`) e l'utente decide se rilanciarla.
     """
-    return _run(job_id, process_class_path, data_dict)
+    return _run(job_id, process_class_path, data_dict, stop_on_dismiss=True)
 
 
 @worker_init.connect
@@ -95,7 +96,35 @@ def _recover_simulations(sender=None, **kwargs):
         print(f'[worker] simulazioni in coda rimesse in testa: {restored}', flush=True)
 
 
-def _run(job_id: str, process_class_path: str, data_dict: dict):
+def _stop_when_dismissed(job_id: str, scenario_id, done: threading.Event, interval=2.0):
+    """Close this process as soon as its job is dismissed.
+
+    Stop revokes the Celery task with ``terminate=True``, but in tests this did not
+    stop the process running the simulation: the job was marked as dismissed while
+    the download and the computation went on to the end, and kept the only
+    simulation slot busy. Here the process checks the job state in Redis itself. When
+    the job is dismissed it removes the scenario files and its half-written
+    downloads, then exits at once: the download threads die with it, and Celery
+    starts a new process, which frees the slot.
+    """
+    while not done.wait(interval):
+        try:
+            if _redis.hget(_key(job_id), 'status') != 'dismissed':
+                continue
+        except Exception:                     # Redis non raggiungibile: si riprova
+            continue
+        try:
+            if scenario_id:
+                from processes import scenario_state
+                scenario_state.remove_scenario_files(scenario_id)
+            from processes.OpenDriftProcess import remove_active_partials
+            remove_active_partials()
+        finally:
+            print(f'[worker] job {job_id} annullato: processo chiuso', flush=True)
+            os._exit(0)
+
+
+def _run(job_id: str, process_class_path: str, data_dict: dict, stop_on_dismiss=False):
     """Execute a pygeoapi processor inside a Celery worker and persist the result to Redis.
 
     Dynamically imports the processor class identified by *process_class_path*, calls its
@@ -121,6 +150,10 @@ def _run(job_id: str, process_class_path: str, data_dict: dict):
             scenario_state.remove_scenario_files(data_dict['scenario_id'])
         return None
     _set_status(job_id, 'running')
+    done = threading.Event()
+    if stop_on_dismiss:
+        threading.Thread(target=_stop_when_dismissed, daemon=True,
+                         args=(job_id, data_dict.get('scenario_id'), done)).start()
     try:
         module_path, class_name = process_class_path.rsplit('.', 1)
         mod = importlib.import_module(module_path)
@@ -143,3 +176,5 @@ def _run(job_id: str, process_class_path: str, data_dict: dict):
     except Exception as exc:
         _set_status(job_id, 'failed', message=str(exc))
         raise
+    finally:
+        done.set()

@@ -1,11 +1,13 @@
 import glob
 import json
 import os
+import time
 import urllib.request as _u
 
 from pygeoapi.process.base import BaseProcessor
 
-from processes.PMARProcess import SCENARIOS_DIR, T4MSP_AREA_URL, _fetch_t4msp_areas
+from processes.PMARProcess import (SCENARIOS_DIR, T4MSP_AREA_URL, _T4MSP_RETRY_AFTER,
+                                   _T4MSP_TIMEOUT, _fetch_t4msp_areas)
 from processes.logging_utils import setup_logger
 from processes.access import (is_unlocked, require_scenario, require_unlocked, scenario_allowed,
                               token_configured)
@@ -14,6 +16,9 @@ from processes import scenario_state as state
 logger = setup_logger('scenario_status_process', 'pmar', 'scenario_status.log')
 
 _geo_cache: dict = {}
+# Aree la cui geometria non è arrivata: area_id -> istante dell'errore. Si
+# riprova passato _T4MSP_RETRY_AFTER, invece di restituire None fino al riavvio.
+_geo_failed: dict = {}
 
 # Bounds già calcolati, per shapefile: serve quando i JSON degli scenari non
 # sono scrivibili e il back-fill non riesce a renderli persistenti.
@@ -212,15 +217,17 @@ class ScenarioStatusProcessor(BaseProcessor):
         area_id = data.get('area_id')
         if area_id is not None:
             area_id = int(area_id)
-            if area_id not in _geo_cache:
+            recently_failed = time.time() - _geo_failed.get(area_id, 0.0) < _T4MSP_RETRY_AFTER
+            if area_id not in _geo_cache and not recently_failed:
                 try:
                     url = T4MSP_AREA_URL.format(area_id=area_id)
-                    with _u.urlopen(url, timeout=15) as resp:
+                    with _u.urlopen(url, timeout=_T4MSP_TIMEOUT) as resp:
                         _geo_cache[area_id] = json.loads(resp.read()).get('geo')
+                    _geo_failed.pop(area_id, None)
                     logger.info(f'[ScenarioStatus] Fetched geometry for T4MSP area {area_id}')
                 except Exception as e:
                     logger.warning(f'[ScenarioStatus] Could not fetch geometry for area {area_id}: {e}')
-                    _geo_cache[area_id] = None
+                    _geo_failed[area_id] = time.time()
             return 'application/json', {'geo': _geo_cache.get(area_id)}
 
         scenario_id = data.get('scenario_id')
