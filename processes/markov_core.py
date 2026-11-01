@@ -1,28 +1,28 @@
-"""Catene di Markov da traiettorie lagrangiane.
+"""Markov chains from Lagrangian trajectories.
 
-Il calcolo, senza I/O: posizioni delle particelle in ingresso, matrice e mappe in
-uscita. Solo numpy e scipy. Fa lo stesso conto della libreria PMAR, verificato con
-`get_cm`, `get_histogram` e `predict_with_cm` (vedi README, "Markov process"):
+The computation, without I/O: particle positions in, matrix and maps out. Only numpy
+and scipy. It computes the same as the PMAR library, checked against `get_cm`,
+`get_histogram` and `predict_with_cm` (see the README, "Markov process"):
 
-- griglia regolare di celle; pᵢⱼ = Nᵢⱼ / Nᵢ, frazione delle particelle che a t₀ stanno
-  nella cella i e dopo Δt stanno nella cella j (`PMAR.get_cm`);
-- condizione iniziale q₀ = particelle per cella a t₀ (`PMAR.get_histogram(t=0,
+- a regular grid of cells; pᵢⱼ = Nᵢⱼ / Nᵢ, the share of the particles that are in
+  cell i at t₀ and in cell j after Δt (`PMAR.get_cm`);
+- initial condition q₀ = particles per cell at t₀ (`PMAR.get_histogram(t=0,
   dim=['trajectory'])`);
-- previsione dopo k passi: q₀ · Mᵏ (`PMAR.predict_with_cm`).
+- forecast after k steps: q₀ · Mᵏ (`PMAR.predict_with_cm`).
 
-Scelte motivate nel codice:
+Choices explained in the code:
 
-- **dominio** = celle con almeno una particella a t₀ o dopo Δt. Le altre celle della
-  griglia non ricevono mai niente e restano fuori, così il vettore resta piccolo. Una
-  cella raggiunta solo dopo Δt ha la riga a zero, come in `PMAR.get_cm`: la massa che
-  ci arriva si vede per un passo e al passo dopo esce dalla catena;
-- **particelle senza posizione** (spiaggiate, o uscite dal forcing: OpenDrift le
-  scrive NaN) e quelle uscite dalla griglia escono dalla catena: le righe di M
-  sommano a meno di 1, come in `PMAR.get_cm` senza buffer;
-- **più seeding**: stima congiunta Σₛ Nᵢⱼ / Σₛ Nᵢ, che coincide con la media delle
-  matrici quando i seeding rilasciano le stesse particelle nelle stesse celle (il
-  caso di OpenDrift, che semina su una griglia di punti fissa) ed è più stabile
-  quando non è così.
+- **domain** = cells with at least one particle at t₀ or after Δt. The other cells of
+  the grid never receive anything and are left out, so the vector stays small. A cell
+  reached only after Δt has a zero row, as in `PMAR.get_cm`: the mass that arrives
+  there is seen for one step and leaves the chain at the next one;
+- **particles without a position** (stranded, or outside the forcing: OpenDrift writes
+  them as NaN) and particles outside the grid leave the chain: the rows of M sum to
+  less than 1, as in `PMAR.get_cm` without a buffer;
+- **several releases**: joint estimate Σₛ Nᵢⱼ / Σₛ Nᵢ, which equals the mean of the
+  matrices when the releases put the same particles in the same cells (the case of
+  OpenDrift, which seeds on a fixed grid of points) and is more stable when they
+  do not.
 """
 
 import math
@@ -32,15 +32,15 @@ from scipy.sparse import coo_array, csr_array, diags
 
 
 class Grid:
-    """Griglia regolare lon/lat allineata a multipli di `res`. Riga 0 = sud,
-    come i raster dell'analisi PMAR."""
+    """Regular lon/lat grid aligned to multiples of `res`. Row 0 = south, as in the
+    rasters of the PMAR analysis."""
 
     def __init__(self, bounds, res):
         lon_min, lat_min, lon_max, lat_max = (float(v) for v in bounds)
         if lon_max <= lon_min or lat_max <= lat_min:
             raise ValueError(f'invalid bounds: {bounds}')
         self.res = float(res)
-        # Bordi allineati: celle "tonde" e stabili fra un'analisi e l'altra.
+        # Aligned edges: "round" cells that stay the same from one analysis to the next.
         self.lon0 = math.floor(lon_min / res + 1e-9) * res
         self.lat0 = math.floor(lat_min / res + 1e-9) * res
         self.nx = max(1, math.ceil((lon_max - self.lon0) / res - 1e-9))
@@ -59,8 +59,8 @@ class Grid:
         return self.lat0 + (np.arange(self.ny) + 0.5) * self.res
 
     def cell_index(self, lon, lat):
-        """Indice piatto (riga * nx + colonna) di ogni posizione; -1 se è fuori dalla
-        griglia o non ha posizione (NaN)."""
+        """Flat index (row * nx + column) of each position; -1 if it is outside the
+        grid or has no position (NaN)."""
         lon = np.asarray(lon, dtype=float)
         lat = np.asarray(lat, dtype=float)
         col = np.floor((lon - self.lon0) / self.res)
@@ -72,18 +72,18 @@ class Grid:
 
 
 def transition_matrix(c0_list, c1_list, n_cells):
-    """Matrice di transizione sul dominio, da una o più coppie di posizioni.
+    """Transition matrix on the domain, from one or more pairs of positions.
 
     Args:
-        c0_list, c1_list: per ogni seeding, indice di cella di ogni particella a t₀ e
-            dopo Δt (-1 = fuori griglia o senza posizione).
-        n_cells: celle della griglia.
+        c0_list, c1_list: for each release, the cell index of every particle at t₀ and
+            after Δt (-1 = outside the grid or without a position).
+        n_cells: cells of the grid.
 
     Returns:
-        tuple: ``(M, cells, Ni)`` — M (csr, D × D) sulle sole celle del dominio, con
-        righe che sommano a ≤ 1 (il resto è uscito; 0 per le celle vuote a t₀);
-        ``cells`` gli indici di griglia delle D celle; ``Ni`` le particelle di
-        ciascuna a t₀, sommate sui seeding (0 per le celle raggiunte solo dopo Δt).
+        tuple: ``(M, cells, Ni)``: M (csr, D × D) on the domain cells only, with rows
+        that sum to ≤ 1 (the rest has left; 0 for cells empty at t₀); ``cells`` the
+        grid indices of the D cells; ``Ni`` the particles of each at t₀, summed over
+        the releases (0 for cells reached only after Δt).
     """
     c0 = np.concatenate([np.asarray(c) for c in c0_list])
     c1 = np.concatenate([np.asarray(c) for c in c1_list])
@@ -99,7 +99,7 @@ def transition_matrix(c0_list, c1_list, n_cells):
     i = to_dom[c0[start]]
     j_cell = c1[start]
     j = np.where(j_cell >= 0, to_dom[np.clip(j_cell, 0, None)], -1)
-    stay = j >= 0                       # arrivate in una cella del dominio
+    stay = j >= 0                       # arrived in a cell of the domain
     D = len(cells)
     Nij = coo_array((np.ones(int(stay.sum())), (i[stay], j[stay])), shape=(D, D)).tocsr()
     Ni = Ni_full[cells].astype(float)
@@ -109,14 +109,14 @@ def transition_matrix(c0_list, c1_list, n_cells):
 
 
 def propagate(M, q0, k_max):
-    """Stati q₀·Mᵏ per k = 0..k_max.
+    """States q₀·Mᵏ for k = 0..k_max.
 
-    Il frame 0 è la condizione iniziale. Ogni passo è un prodotto vettore-matrice
-    sparso: non si forma mai Mᵏ, che si riempirebbe a ogni potenza (come fa
-    `PMAR.predict_with_cm`).
+    Frame 0 is the initial condition. Each step is a sparse vector-matrix product: Mᵏ
+    is never formed, because it would fill up at every power (as
+    `PMAR.predict_with_cm` also avoids).
 
     Returns:
-        list[np.ndarray]: k_max + 1 vettori sul dominio.
+        list[np.ndarray]: k_max + 1 vectors on the domain.
     """
     MT = M.T.tocsr()
     q = np.asarray(q0, dtype=float)
@@ -128,8 +128,8 @@ def propagate(M, q0, k_max):
 
 
 def round_sig(a, digits=4):
-    """Arrotonda a `digits` cifre significative: il payload resta leggero senza
-    azzerare i valori piccoli, che su una mappa log contano quanto quelli grandi."""
+    """Round to `digits` significant digits: the payload stays light without setting
+    small values to zero, which on a log map matter as much as large ones."""
     a = np.asarray(a, dtype=float)
     out = np.zeros_like(a)
     nz = np.isfinite(a) & (a != 0)

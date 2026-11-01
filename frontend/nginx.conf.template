@@ -1,7 +1,7 @@
 # Rate limiting: max 5 req/s per IP sull'API, burst 10
 limit_req_zone $binary_remote_addr zone=api:10m rate=5r/s;
 
-# HTTP — serve solo ACME challenge, tutto il resto va su HTTPS
+# HTTP: only the ACME challenge is served, everything else goes to HTTPS
 server {
     listen 80;
     server_name ${DOMAIN};

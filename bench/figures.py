@@ -27,7 +27,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 RESULTS = os.path.join(HERE, 'results')
 SCENARIOS = os.path.join(os.path.dirname(HERE), 'scenarios')
 
-L_ID = 'custom_e3f0da47'          # the Adriatic campaign run of ch. 5
+# The reference scenarios of ch. 6. reference.csv also lists the runs that
+# measured them, which were removed afterwards; the maps need the scenarios kept.
+REFERENCE_IDS = {'S': 'custom_64978f32', 'M': 'custom_e4f2e106', 'L': 'custom_e3f0da47'}
+L_ID = REFERENCE_IDS['L']
 COLOURS = {'S': '#0072B2', 'M': '#E69F00', 'Mp': '#CC79A7', 'L': '#009E73',
            'server': '#7f7f7f'}
 
@@ -54,9 +57,8 @@ def num(x):
 
 
 def reference_ids():
-    """The scenario that stands for S, M and L: the run read back from its record."""
-    rows = read('reference')
-    return {r['name']: r['scenario_id'] for r in rows if r['run'] == 'record'}
+    """The scenarios that stand for S, M and L."""
+    return dict(REFERENCE_IDS)
 
 
 def warm(name):
@@ -207,9 +209,11 @@ def fig_explore(out):
         for pid, cfg, _ in families:
             # S is smaller than a 0.5 deg cell, so its connectivity grid is 0.25 deg.
             cands = [cfg, cfg.replace('0.5', '0.25')] if pid == 'connectivity' else [cfg]
+            # service time from the job record: the client's polling is not part
+            # of the cost of an analysis
             r = next((r for c in cands for r in rows
-                      if r['process'] == pid and r['config'] == c and r['wall_s_median']), None)
-            p2 = num(r['wall_s_median']) if r else math.nan
+                      if r['process'] == pid and r['config'] == c and r['service_s_median']), None)
+            p2 = num(r['service_s_median']) if r else math.nan
             ratios.append((p1[name] + p2) / p2)
         xs = np.arange(len(families)) + (k - 1) * width
         ax.bar(xs, ratios, width, color=COLOURS[name], label=name)
@@ -269,6 +273,7 @@ def fig_load(out, prefix='load'):
     ax.set_xlabel('analyses submitted together')
     ax.set_ylabel('longest wait (s)')
     ax.set_title('(b) waiting for a slot')
+    ax.set_ylim(0, max(longest) * 1.6)          # room for the legend above the points
     ax.legend(frameon=False, loc='upper left')
 
     ax = axes[2]

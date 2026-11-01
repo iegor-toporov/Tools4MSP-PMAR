@@ -6,7 +6,7 @@ import {
   histogramCsv, metaHeader, profileCsv, quantile, statsCsv, thresholdCsv, toCsv,
 } from './pmarTools.js'
 
-// Raster 3×4 a 0.1°, celle centrate su lat 44.0/44.1/44.2, lon 13.0…13.3
+// Raster 3×4 at 0.1°, cells centred on lat 44.0/44.1/44.2, lon 13.0…13.3
 const RD = {
   raster_values: [
     [0,   5,  50, 0],
@@ -116,7 +116,7 @@ describe('cells', () => {
     assert.deepEqual(cols, ['row', 'col', 'cell_id', 'lat', 'lon', 'cell_area_km2', 'value'])
     assert.equal(rows.length, 3 * 4)
     assert.equal(rows.filter(r => r[6] === '0').length, 5)
-    assert.equal(rows[6][2], '13.20E_44.10N')        // riga 1, colonna 2
+    assert.equal(rows[6][2], '13.20E_44.10N')        // row 1, column 2
   })
 })
 

@@ -28,8 +28,8 @@ export const PmarThresholdModal = forwardRef(function PmarThresholdModal(
   const areaRef   = useRef(null)
   const pctRef    = useRef(null)
 
-  // Celle con valore > 0 e la loro latitudine: l'area di una cella dipende da cos(lat)
-  // (prima era (res·111.32)², a 44° N sovrastimata di circa il 39%).
+  // Cells with value > 0 and their latitude: the area of a cell depends on cos(lat)
+  // ((res·111.32)² would overestimate it by about 39% at 44° N).
   const { cells = [], vmin, vmax, rasterRes = 0.1 } = result
   const logMin = Math.log10(Math.max(vmin > 0 ? vmin : 1e-6, 1e-12))
   const logMax = Math.log10(Math.max(vmax > 0 ? vmax : 1,    1e-12))
@@ -43,7 +43,7 @@ export const PmarThresholdModal = forwardRef(function PmarThresholdModal(
     return { threshold, nAbove, area, pct: nAbove / cells.length * 100 }
   }
 
-  // La curva di superamento: le stesse grandezze del cursore, per 50 soglie.
+  // The exceedance curve: the same quantities as the slider, for 50 thresholds.
   function downloadCsv() {
     saveText(thresholdCsv(result, result.meta), `pmar_threshold_${Date.now()}.csv`)
   }

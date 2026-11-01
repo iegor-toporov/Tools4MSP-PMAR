@@ -8,16 +8,16 @@ app = Celery(
     include=['worker.tasks'],
 )
 
-# Due code:
-# - `celery` (default): analisi PMAR e connettività, servita da `celery-worker` con più
-#   processi in parallelo;
-# - `simulations`: precompute e OpenDrift, servita da `simulation-worker` con un solo
-#   processo → una simulazione alla volta, le altre aspettano in coda.
-# La concorrenza si imposta da riga di comando in docker-compose.yml, per servizio.
+# Two queues:
+# - `celery` (default): PMAR and connectivity analyses, served by `celery-worker` with
+#   several processes in parallel;
+# - `simulations`: precompute and OpenDrift, served by `simulation-worker` with a single
+#   process → one simulation at a time, the others wait in the queue.
+# Concurrency is set on the command line in docker-compose.yml, per service.
 SIMULATIONS_QUEUE = 'simulations'
 
-# Una simulazione lunga (multi-seeding, mesi di deriva) può durare ore: 12 h di limite,
-# con un soft limit che lascia al processo il tempo di segnare lo scenario come fallito.
+# A long simulation (several releases, months of drift) can last hours: a 12 h limit,
+# with a soft limit that leaves the process time to mark the scenario as failed.
 TASK_TIME_LIMIT = 12 * 3600
 
 app.conf.update(
@@ -31,8 +31,8 @@ app.conf.update(
     task_reject_on_worker_lost=True,
     worker_prefetch_multiplier=1,
     task_default_queue='celery',
-    # Con acks_late, Redis riconsegna un task non confermato dopo visibility_timeout
-    # (default 1 h): un'analisi o simulazione più lunga verrebbe eseguita due volte in
-    # parallelo. Il timeout deve superare il task più lungo possibile.
+    # With acks_late, Redis delivers an unconfirmed task again after visibility_timeout
+    # (1 h by default): a longer analysis or simulation would run twice in parallel.
+    # The timeout must exceed the longest possible task.
     broker_transport_options={'visibility_timeout': TASK_TIME_LIMIT + 3600},
 )

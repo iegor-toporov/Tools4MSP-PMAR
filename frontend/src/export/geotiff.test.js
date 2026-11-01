@@ -28,7 +28,7 @@ function readTags(bytes) {
   return { dv, tags }
 }
 
-// 3 colonne × 2 righe; riga 0 = sud.
+// 3 columns × 2 rows; row 0 = south.
 const RASTER = { values: [[1, 2, 3], [4, 5, 6]], lon_min: 13.05, lat_min: 44.05, res: 0.1, nx: 3, ny: 2 }
 
 describe('encodeGeoTiff', () => {

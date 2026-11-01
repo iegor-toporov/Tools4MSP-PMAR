@@ -5,11 +5,12 @@ export const MODEL_STYLES = {
   OpenOil:    { color: '#ff453a', fill: '#ff8985', traj: '#ff6c67', badge: 'rgba(255,69,58,0.18)',  label: 'Oil'     },
 }
 
+// name/desc are defaults: Panel.jsx shows the translated ones from i18n.js.
 export const MODELS = [
-  { key: 'OceanDrift', name: 'Tracciante',  desc: 'Correnti superficiali'     },
-  { key: 'PlastDrift', name: 'Plastica',    desc: 'Con wind drag e Stokes'    },
-  { key: 'LarvalFish', name: 'Larve/uova', desc: 'Galleggiabilità verticale' },
-  { key: 'OpenOil',    name: 'Idrocarburi', desc: 'Evaporazione ed emulsione' },
+  { key: 'OceanDrift', name: 'Tracer',       desc: 'Surface currents'       },
+  { key: 'PlastDrift', name: 'Plastic',      desc: 'Wind drag & Stokes'     },
+  { key: 'LarvalFish', name: 'Larvae/eggs',  desc: 'Vertical buoyancy'      },
+  { key: 'OpenOil',    name: 'Hydrocarbons', desc: 'Evaporation & emulsion' },
 ]
 
 export function defaultStartTime() {
@@ -19,8 +20,8 @@ export function defaultStartTime() {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:00`
 }
 
-// Composti noti a ChemicalDrift: deve restare allineato a CHEMICAL_COMPOUNDS in
-// processes/PMARProcess.py (il primo è il default).
+// Compounds known to ChemicalDrift: keep in line with CHEMICAL_COMPOUNDS in
+// processes/PMARProcess.py (the first is the default).
 export const CHEMICAL_COMPOUNDS = [
   'Naphthalene', 'C1-Naphthalene', 'C2-Naphthalene', 'C3-Naphthalene',
   'Acenaphthene', 'Acenaphthylene', 'Fluorene', 'Anthracene', 'Phenanthrene',

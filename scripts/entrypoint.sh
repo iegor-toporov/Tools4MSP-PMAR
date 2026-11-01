@@ -13,19 +13,24 @@ sed 's|/Users/[^/]*/Documents/[^:]*DTO-PMAR|/app|g' "$CONFIG_SRC" > "$CONFIG_OUT
 export PYGEOAPI_CONFIG="$CONFIG_OUT"
 export PYGEOAPI_OPENAPI="${PYGEOAPI_OPENAPI:-/tmp/pygeoapi-openapi.yml}"
 
-# Se il primo argomento è "celery", avvia il worker invece di gunicorn
+# If the first argument is "celery", start the worker instead of gunicorn
 if [ "${1:-}" = "celery" ]; then
-    # Rimuovi file NC parziali lasciati da simulazioni interrotte al crash precedente
-    rm -f /app/out/precompute_*.nc
+    # Partial NetCDF files left by simulations interrupted by the previous crash. Only
+    # the simulation worker writes them, and when it starts it has none running;
+    # `out/` is shared, so if the analysis worker did this too, restarting it would
+    # delete the file of the simulation that is running.
+    if [ "${PMAR_SIMULATION_WORKER:-}" = "1" ]; then
+        rm -f /app/out/precompute_*.nc /app/out/precompute_*.nc_tmp
+    fi
     shift
     exec celery "$@"
 fi
 
-# Catalogo CMEMS: aggiornato e controllato in background, senza ritardare l'avvio.
-# Avvisi nel log se un dataset del registro sparisce o va in ritiro.
+# CMEMS catalogue: refreshed and checked in the background, without delaying the start.
+# Warnings in the log if a dataset of the registry disappears or is being retired.
 python /app/scripts/check_cmems_catalog.py &
 
-# Generate OpenAPI spec from the fixed config (solo per il backend gunicorn)
+# Generate OpenAPI spec from the fixed config (only for the gunicorn backend)
 pygeoapi openapi generate "$PYGEOAPI_CONFIG" --output-file "$PYGEOAPI_OPENAPI"
 
 # Hand off to gunicorn with proper signal handling

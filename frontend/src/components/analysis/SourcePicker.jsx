@@ -5,11 +5,11 @@ import { RadioCard } from '../ui'
 const EMODNET_SOURCES = ['windfarms', 'offshore_installations', 'msp_zones']
 
 /**
- * Layer sorgente di Dispersal come lista di schede radio, come nel mockup: Uniform, i
- * layer EMODnet delle attività umane, un layer dell'utente. `value` è la chiave scelta
+ * Source layer of Dispersal as a list of radio cards, as in the mockup: Uniform, the
+ * EMODnet layers of human activities, a layer of the user. `value` is the chosen key
  * ('none', 'windfarms', …, 'geotiff').
  *
- * `emodnet[key]` = { loading, empty, emptyText } dalla preview in App;
+ * `emodnet[key]` = { loading, empty, emptyText } from the preview in App;
  * `geotiff` = { b64, name, onFile(file) }.
  */
 export default function SourcePicker({ value, onPick, emodnet, geotiff, labels }) {

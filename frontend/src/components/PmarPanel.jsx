@@ -26,7 +26,7 @@ import { formatBbox } from './analysis/BboxPicker'
 import { POLL_INTERVAL_MS, anyActive, errorText, isActive, statusOf, statusText,
          transitions } from '../scenarios/lifecycle'
 
-// Tipi di tracciante nell'ordine del mockup (chiavi di PRESSURE_MODELS nel backend).
+// Tracer types in the order of the mockup (keys of PRESSURE_MODELS in the backend).
 const PRESSURES = ['generic', 'plastic', 'oil', 'chemical', 'larvae']
 
 const TIME_STEPS = [
@@ -37,12 +37,12 @@ const TIME_STEPS = [
   { value: '24', label: '24 h' },
 ]
 
-// Byte per particella e passo del file NetCDF temporaneo, per tipo di tracciante.
+// Bytes per particle and step of the temporary NetCDF file, per tracer type.
 const NC_BYTES_PER_STEP = { generic: 40, plastic: 60, oil: 160, chemical: 120, larvae: 120 }
 
-// Limite di particelle per scenario del backend (PrecomputeProcess).
+// The backend's particle limit per scenario (PrecomputeProcess).
 const MAX_PARTICLES = 100000
-// Particelle per poligono: il backend porta i valori fuori da [1, 20000] dentro l'intervallo.
+// Particles per polygon: the backend brings values outside [1, 20000] inside the range.
 const MAX_PER_POLYGON = 20000
 
 function defaultStartDate() {
@@ -57,8 +57,8 @@ function formatNcSize(bytes) {
   return (bytes / 1e3).toFixed(0) + ' KB'
 }
 
-// Il token della modalità demo vive in sessionStorage: sopravvive a un ricarica,
-// sparisce chiudendo la scheda — quel che serve su un portatile da stand.
+// The demo-mode token lives in sessionStorage: it survives a reload and disappears
+// when the tab is closed, which is what a laptop at a stand needs.
 const TOKEN_KEY = 'pmar.accessToken'
 
 function readStoredToken() {
@@ -69,10 +69,10 @@ function storeToken(token) {
   try {
     if (token) sessionStorage.setItem(TOKEN_KEY, token)
     else sessionStorage.removeItem(TOKEN_KEY)
-  } catch { /* storage non disponibile: si resta sbloccati solo fino al ricarica */ }
+  } catch { /* storage not available: unlocked only until the next reload */ }
 }
 
-/** Sostituisce il form di nuova simulazione quando la demo è bloccata. */
+/** Replaces the new-simulation form when the demo is locked. */
 function SimulationLock({ a, value, onChange, onUnlock, pending, error }) {
   return (
     <Stack gap="xs" style={{ borderTop: '1px solid var(--modal-divider)', paddingTop: 8 }}>
@@ -104,8 +104,8 @@ const HEAD = { ...CELL, fontWeight: 600, color: 'var(--mantine-color-dimmed)',
                borderBottom: '1px solid var(--modal-divider)' }
 
 /**
- * Multi seeding in un riquadro: l'interruttore, le due impostazioni e il
- * calendario dei rilasci che ne risulta, con le date vere di inizio e fine.
+ * Several releases in one box: the switch, the two settings and the resulting
+ * schedule of the releases, with their real start and end dates.
  */
 function MultiSeedingBox({ p, locale, enabled, onToggle, releases, onReleases,
                            shift, onShift, startDate, duration }) {
@@ -170,7 +170,7 @@ function MultiSeedingBox({ p, locale, enabled, onToggle, releases, onReleases,
   )
 }
 
-/** Riquadro grigio coi dati di una simulazione. */
+/** Grey box with the data of a simulation. */
 function ScenarioCard({ rows, description }) {
   return (
     <Paper p="xs" radius="sm" style={BOX_STYLE}>
@@ -186,7 +186,7 @@ function ScenarioCard({ rows, description }) {
   )
 }
 
-/** Testata di una sezione dell'Analisi: titolo che apre/chiude e (i) accanto. */
+/** Header of an Analysis section: a title that opens/closes it and (i) next to it. */
 function SectionControl({ title, tip }) {
   return (
     <Group wrap="nowrap" gap={0} pr={6}>
@@ -225,8 +225,8 @@ export default function PmarPanel({
 
   const [t4mspAreas,        setT4mspAreas]        = useState([])
   const [selectedT4mspArea, setSelectedT4mspArea] = useState(null)
-  // Poligoni dell'area Tools4MSP scelta, dalla geometria della preview: servono al
-  // totale della semina per poligono. null finché la geometria non è arrivata.
+  // Polygons of the chosen Tools4MSP area, from the preview geometry: needed for the
+  // total of per-polygon seeding. null until the geometry has arrived.
   const [t4mspPolygons,     setT4mspPolygons]     = useState(null)
   const [t4mspSearch,       setT4mspSearch]       = useState('')
 
@@ -235,11 +235,11 @@ export default function PmarPanel({
   const [seedAreaName,  setSeedAreaName]  = useState('')
   const [cmemsMargin,   setCmemsMargin]   = useState('1')
   const [multiSeeding,  setMultiSeeding]  = useState(false)
-  // Distribuzione delle particelle: 'even' (in proporzione all'area) o 'poly' (lo
-  // stesso numero in ogni poligono, come serve alla connettività).
+  // Distribution of the particles: 'even' (in proportion to the area) or 'poly' (the
+  // same number in every polygon, as connectivity needs).
   const [distribution,   setDistribution]   = useState('even')
   const [pnumPerPolygon, setPnumPerPolygon] = useState('500')
-  // Tracciante conservativo per Propagate: niente spiaggiamento.
+  // Conservative tracer for Propagate: no stranding.
   const [noBeaching,     setNoBeaching]     = useState(false)
   const [seedings,      setSeedings]      = useState('3')
   const [tshift,        setTshift]        = useState('30')
@@ -250,11 +250,11 @@ export default function PmarPanel({
   const [pnum,          setPnum]          = useState('1000')
   const [timeStepHours, setTimeStepHours] = useState('1')
 
-  // Layer sorgente GeoTIFF dell'utente, per Dispersal (come `useSource`).
+  // The user's GeoTIFF source layer, for Dispersal (like `useSource`).
   const [geotiffB64,  setGeotiffB64]  = useState(null)
   const [geotiffName, setGeotiffName] = useState('')
 
-  // Sezioni aperte dell'Analisi: all'avvio tutte chiuse, così si vedono tutte e tre.
+  // Open sections of Analysis: all closed at start, so all three are visible.
   const [openSections, setOpenSections] = useState([])
 
   const [scenarioStatuses, setScenarioStatuses] = useState({})
@@ -262,15 +262,15 @@ export default function PmarPanel({
 
   const [customPrecomputeError, setCustomPrecomputeError] = useState(null)
   const [refetchFlag,           setRefetchFlag]           = useState(0)
-  // Scenari di cui è in corso uno Stop o una rimozione (bottone in attesa).
+  // Scenarios being stopped or removed (button waiting).
   const [busyScenarioIds,       setBusyScenarioIds]       = useState(() => new Set())
-  // Lettura precedente dell'elenco, per notificare i cambi di stato (pronta, fallita).
+  // Previous reading of the list, to notify state changes (ready, failed).
   const prevStatusesRef  = useRef(null)
-  // Job lanciati da questa pagina: quando finiscono, la simulazione si seleziona da sola.
+  // Jobs launched from this page: when they finish, the simulation is selected automatically.
   const submittedJobsRef = useRef(new Set())
 
-  // Modalità demo: finché il backend non risponde si assume l'accesso pieno, che è
-  // anche il comportamento senza token configurato.
+  // Demo mode: until the backend answers, full access is assumed, which is also the
+  // behaviour with no token configured.
   const [access, setAccess] = useState(() => {
     setAccessToken(readStoredToken())
     return { locked: false, unlocked: true }
@@ -292,12 +292,12 @@ export default function PmarPanel({
         notifyTransitions(prevStatusesRef.current, s)
         prevStatusesRef.current = s
         setScenarioStatuses(s)
-        // Stop o rimozione conclusi: lo scenario non c'è più, o non è più attivo.
+        // Stop or removal finished: the scenario is gone, or no longer active.
         setBusyScenarioIds(ids => {
           const keep = [...ids].filter(id => s[id] && (isActive(s[id].status) || s[id].status === 'failed'))
           return keep.length === ids.size ? ids : new Set(keep)
         })
-        // Bloccando, lo scenario selezionato può non essere più visibile.
+        // When locking, the selected scenario may no longer be visible.
         setScenarioId(id => (id && !s[id] ? '' : id))
         setT4mspAreas(resp.t4msp_areas ?? [])
 
@@ -305,7 +305,7 @@ export default function PmarPanel({
         const tried = pendingTokenRef.current
         pendingTokenRef.current = null
         if (acc.locked && !acc.unlocked) {
-          // Token rifiutato (sbagliato, o cambiato sul server): si torna visitatori.
+          // Token rejected (wrong, or changed on the server): back to visitor.
           setAccessToken(null)
           storeToken(null)
           if (tried) setUnlockError(true)
@@ -336,14 +336,14 @@ export default function PmarPanel({
     setRefetchFlag(f => f + 1)
   }
 
-  // I processi sincroni arrivano col prefisso di pygeoapi ("Error executing process: …").
+  // Synchronous processes arrive with pygeoapi's prefix ("Error executing process: …").
   const describePrecomputeError = msg => {
     const clean = msg?.replace(/^Error executing process:\s*/i, '')
     return clean === ACCESS_DENIED ? p.access.denied : clean
   }
 
-  // Finché qualcosa è in coda o in calcolo l'elenco si rilegge da solo: stato,
-  // avanzamento e notifiche vengono dal server, quindi sopravvivono a una ricarica.
+  // While something is queued or running, the list is read again automatically: state,
+  // progress and notifications come from the server, so they survive a reload.
   const hasActive = anyActive(scenarioStatuses)
   useEffect(() => {
     if (!hasActive) return
@@ -403,9 +403,9 @@ export default function PmarPanel({
 
   useEffect(() => { onT4mspPreview?.(null) }, [runMode]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Area della simulazione scelta, evidenziata sulla mappa. La geometria si
-  // chiede solo alla selezione: la mappa di stato viene ripolled, e leggere
-  // tutti gli shapefile a ogni giro costerebbe troppo.
+  // Area of the chosen simulation, highlighted on the map. The geometry is requested
+  // only on selection: the status map is polled, and reading every shapefile at each
+  // poll would cost too much.
   useEffect(() => {
     let annullato = false
     if (!scenarioId) { onScenarioArea?.(null); return }
@@ -427,9 +427,9 @@ export default function PmarPanel({
     return () => { annullato = true }
   }, [scenarioId]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Disegnare una nuova area e analizzarne una esistente sono due lavori
-  // diversi: iniziare un disegno lascia la simulazione selezionata, così sulla
-  // mappa resta evidenziata una sola area per volta.
+  // Drawing a new area and analysing an existing one are two different tasks:
+  // starting a drawing deselects the simulation, so only one area at a time is
+  // highlighted on the map.
   useEffect(() => {
     if (drawMode) setScenarioId('')
   }, [drawMode])
@@ -459,8 +459,8 @@ export default function PmarPanel({
       ...(noBeaching ? { beaching: false } : {}),
     }
     try {
-      // Il backend registra subito lo scenario come `queued`: compare nell'elenco
-      // alla prossima lettura, e da lì in poi lo stato lo dà il server.
+      // The backend records the scenario as `queued` at once: it appears in the list at
+      // the next reading, and from then on the server gives its state.
       const jobId = await executeAsync(Process.PRECOMPUTE, inputs)
       submittedJobsRef.current.add(jobId)
       notifications.show({
@@ -471,7 +471,7 @@ export default function PmarPanel({
       })
       setRefetchFlag(f => f + 1)
     } catch (err) {
-      // Input non validi o accesso negato arrivano subito, come errore HTTP.
+      // Invalid inputs or denied access arrive at once, as an HTTP error.
       setCustomPrecomputeError(err?.detail || p.computeStartError)
     }
   }
@@ -493,15 +493,15 @@ export default function PmarPanel({
     onFile: file => readFile(file, b64 => { setGeotiffB64(b64); setGeotiffName(file.name) }),
   }
 
-  // ── Simulazione selezionata (Analisi) ─────────────────────────────────────
+  // ── Selected simulation (Analysis) ───────────────────────────────────────
   const selected = scenarioStatuses[scenarioId]
   const sc = selected?.status === 'ready' ? selected : null
   const scenarioLabel = sc ? (lang === 'it' ? sc.label_it : sc.label_en) : ''
 
   /**
-   * Dati per la scheda del layer nel pannello di destra: lo scenario usato e i
-   * parametri. Si salvano i valori grezzi (anche le etichette in entrambe le lingue),
-   * così la descrizione segue la lingua corrente anche dopo.
+   * Data for the layer card in the right-hand panel: the scenario used and the
+   * parameters. The raw values are saved (also the labels in both languages), so the
+   * description follows the current language later too.
    */
   function scenarioInfo() {
     const s = scenarioStatuses[scenarioId] ?? {}
@@ -533,16 +533,15 @@ export default function PmarPanel({
   const ctx = { t, sc, scenarioId, scenarioLabel, scenarioInfo, ready: !!sc, limitNote, analysesFull, geotiff }
   const sectionActive = key => runMode === 'scenario' && openSections.includes(key)
 
-  // ── Nuova simulazione ─────────────────────────────────────────────────────
+  // ── New simulation ───────────────────────────────────────────────────────
   const seedInfo = seedAreaMode === 'draw'
     ? formatSeedShape(seedShape, { polygons: p.seedPolygons, polygonsOne: p.seedPolygonOne })
     : null
 
-  // Distribuzione per poligono: vale per ogni modo di definire l'area e, quando è
-  // attiva, è lei a determinare il numero di particelle (pnum viene ignorato).
-  // Il totale si conosce prima dell'invio per le aree disegnate e per quelle
-  // Tools4MSP; per uno shapefile lo calcola il backend, che rifiuta subito la
-  // richiesta oltre il limite.
+  // Per-polygon distribution: it applies to every way of defining the area and, when
+  // active, it sets the number of particles (pnum is ignored). The total is known
+  // before submission for drawn areas and Tools4MSP areas; for a shapefile the backend
+  // computes it, and rejects the request at once beyond the limit.
   const usesPerPolygon  = distribution === 'poly'
   const seedPolygons    = seedAreaMode === 'draw'  ? (seedShapePolygonCount(seedShape) || null)
                         : seedAreaMode === 't4msp' ? (selectedT4mspArea ? t4mspPolygons : null)
@@ -580,8 +579,8 @@ export default function PmarPanel({
   const tracerOf = s => [p.pressures[s.pressure], s.pressure === 'chemical' ? s.chemical_compound : null]
     .filter(Boolean).join(' · ')
 
-  // Il bottone di avvio della simulazione sta in una barra fissa in fondo al pannello
-  // (Panel.jsx), fuori dall'area che scorre. In Analisi ogni sezione ha il suo.
+  // The simulation run button sits in a fixed bar at the bottom of the panel
+  // (Panel.jsx), outside the scrolling area. In Analysis each section has its own.
   const actions = runMode === 'custom' && canSimulate ? (
     <Stack gap={6}>
       <Button size="sm" color="blue" fullWidth disabled={!canPrecompute} onClick={handleCustomCompute} type="button">
@@ -684,7 +683,7 @@ export default function PmarPanel({
                           value={customDesc} onChange={e => setCustomDesc(e.target.value)}
                           autosize minRows={2} styles={LABEL_STYLES} />
 
-                {/* ── Area di semina ─────────────────────────────── */}
+                {/* ── Release area ─────────────────────────────── */}
                 <SectionLabel>{p.seedAreaLabel}</SectionLabel>
                 <SegmentedControl
                   size="xs"
@@ -767,7 +766,7 @@ export default function PmarPanel({
                                   setT4mspPolygons(geometryPolygonCount(geo))
                                   onT4mspPreview?.({ type: 'FeatureCollection', features: [{ type: 'Feature', geometry: geo, properties: {} }] })
                                 }
-                              } catch { /* l'area resta scelta, senza anteprima */ }
+                              } catch { /* the area stays chosen, without a preview */ }
                             }}
                             className={`t4msp-area${selectedT4mspArea === area.id ? ' is-selected' : ''}`}
                           >
@@ -812,7 +811,7 @@ export default function PmarPanel({
                   />
                 )}
 
-                {/* ── Tempi e particelle ─────────────────────────── */}
+                {/* ── Times and particles ─────────────────────────── */}
                 <SectionLabel>{sim.timing}</SectionLabel>
                 <Group grow gap="xs" align="flex-start">
                   <TextInput type="date" size="xs" label={lbl(p.labelStart, p.tooltips.labelStart)}
@@ -858,7 +857,7 @@ export default function PmarPanel({
                   </Stack>
                 )}
 
-                {/* ── Avanzate ───────────────────────────────────── */}
+                {/* ── Advanced ───────────────────────────────────── */}
                 <UnstyledButton onClick={() => setShowAdvanced(v => !v)} aria-expanded={showAdvanced}>
                   <Group gap={4}>
                     <Text size="xs" fw={600} c="dimmed" tt="uppercase" style={{ letterSpacing: '0.05em', flex: 1 }}>
@@ -927,8 +926,8 @@ export default function PmarPanel({
                   [p.labelStart,                  sc.start_time],
                   [p.labelDuration,               `${sc.duration_days} d`],
                   [p.labelParticles,              sc.pnum?.toLocaleString()],
-                  // Solo per gli scenari seminati per poligono: è l'informazione
-                  // che dice se lo scenario è un buon input per la connettività.
+                  // Only for scenarios seeded per polygon: this tells whether the
+                  // scenario is a good input for connectivity.
                   [p.labelSeedingPerPoly,         sc.seeding_mode === 'per_polygon'
                     ? `${sc.pnum_per_polygon?.toLocaleString()} × ${sc.n_polygons}` : null],
                   [p.labelTimeStep,               `${sc.time_step_hours} h`],

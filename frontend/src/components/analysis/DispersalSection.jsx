@@ -4,17 +4,17 @@ import { IconChevronDown } from '@tabler/icons-react'
 import { LABEL_STYLES, SectionLabel, lbl } from '../ui'
 import RunButton from './RunButton'
 
-// Deve restare allineato a PMAR_RES_MIN / PMAR_RES_MAX in processes/PMARProcess.py
+// Keep in line with PMAR_RES_MIN / PMAR_RES_MAX in processes/PMARProcess.py
 export const PMAR_RES_MIN = 0.05
 export const PMAR_RES_MAX = 5
 
-// σ è la deviazione standard tra i seeding (chiave `std` nel risultato).
+// σ is the standard deviation between the releases (key `std` in the result).
 const INDICATORS = ['ppi', 'max', 'q90', 'std']
 
 /**
- * "Dispersal from source": mappa dei passaggi per cella pesati dal layer sorgente
- * (processes/PMARProcess.py). MAX, Q90 e σ si calcolano tra i seeding, quindi ci sono
- * solo per una simulazione multi seeding.
+ * "Dispersal from source": map of the passages per cell weighted by the source layer
+ * (processes/PMARProcess.py). MAX, Q90 and σ are computed between the releases, so
+ * they exist only for a simulation with several releases.
  */
 export default function DispersalSection({
   ctx, sourcePicker, useSource, geotiff, onRun, loading, stopping, onStop, onMarginChange,
@@ -31,10 +31,10 @@ export default function DispersalSection({
   const resNum = parseFloat(res)
   const resOk  = resNum >= PMAR_RES_MIN && resNum <= PMAR_RES_MAX
 
-  // Una simulazione a seeding singolo ha solo PPI.
+  // A simulation with a single release has only the PPI.
   useEffect(() => { if (!multi) setIndicator('ppi') }, [multi])
 
-  // L'area della preview EMODnet in App segue il margine dell'analisi.
+  // The area of the EMODnet preview in App follows the margin of the analysis.
   const marginValue = Math.max(0, Math.min(parseFloat(margin) || 0, 20))
   useEffect(() => { onMarginChange?.(marginValue) }, [marginValue]) // eslint-disable-line react-hooks/exhaustive-deps
 

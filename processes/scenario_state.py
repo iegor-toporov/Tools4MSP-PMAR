@@ -1,12 +1,12 @@
-"""Ciclo di vita di uno scenario custom: stato nel JSON, file su disco, job in Redis.
+"""Life cycle of a custom scenario: state in the JSON, files on disk, job in Redis.
 
-Uno scenario nasce `queued` quando la richiesta di simulazione viene accettata (prima
-ancora che un worker la prenda), diventa `running` quando il worker parte, `ready` a
-calcolo finito, `failed` se qualcosa va storto. Lo stato vive nel JSON dello scenario,
-così sopravvive a ricariche della pagina, riavvii del backend e altri dispositivi.
+A scenario is born `queued` when the simulation request is accepted (even before a
+worker takes it), becomes `running` when the worker starts, `ready` when the
+computation is finished, and `failed` if something goes wrong. The state lives in the
+scenario JSON, so it survives page reloads, backend restarts and other devices.
 
-Modulo leggero (niente geopandas/OpenDrift): lo usano il manager, i processi e il
-worker all'avvio.
+A light module (no geopandas or OpenDrift): the manager, the processes and the worker
+at start use it.
 """
 
 import glob
@@ -37,14 +37,14 @@ def now_iso():
     return datetime.now(timezone.utc).isoformat()
 
 
-# ── JSON dello scenario ─────────────────────────────────────────────────────
+# ── Scenario JSON ───────────────────────────────────────────────────────────
 
 def meta_path(scenario_id):
     return os.path.join(SCENARIOS_DIR, f'{scenario_id}.json')
 
 
 def read_scenario(scenario_id):
-    """Il JSON dello scenario, o None se non esiste."""
+    """The scenario JSON, or None if it does not exist."""
     try:
         with open(meta_path(scenario_id)) as f:
             return json.load(f)
@@ -53,8 +53,8 @@ def read_scenario(scenario_id):
 
 
 def write_scenario(sc):
-    """Scrittura atomica: la pagina rilegge il JSON ogni pochi secondi mentre il
-    worker lo aggiorna, e non deve mai trovarlo scritto a metà."""
+    """Atomic write: the page reads the JSON again every few seconds while the
+    worker updates it, and must never find it half-written."""
     path = meta_path(sc['scenario_id'])
     fd, tmp = tempfile.mkstemp(dir=SCENARIOS_DIR, prefix='.tmp_', suffix='.json')
     try:
@@ -68,8 +68,8 @@ def write_scenario(sc):
 
 
 def update_scenario(scenario_id, **fields):
-    """Aggiorna alcuni campi del JSON (lettura-modifica-scrittura atomica). None se lo
-    scenario non esiste più (es. eliminato da uno Stop nel frattempo)."""
+    """Update some fields of the JSON (atomic read-modify-write). None if the
+    scenario no longer exists (e.g. deleted by a Stop in the meantime)."""
     sc = read_scenario(scenario_id)
     if sc is None:
         return None
@@ -89,8 +89,8 @@ def nc_complete(sc):
 
 
 def state_of(sc):
-    """Stato dello scenario. Gli scenari creati prima del tracciamento non hanno
-    `state`: sono pronti se hanno tutti i NC, altrimenti incompleti (falliti)."""
+    """State of the scenario. Scenarios without `state` are ready if they have all
+    their NetCDF files, otherwise incomplete (failed)."""
     st = sc.get('state')
     if st:
         return st
@@ -113,7 +113,7 @@ def remove_partial_ncs(sc):
 
 
 def remove_scenario_files(scenario_id, sc=None):
-    """Elimina JSON, NC e shapefile custom di uno scenario."""
+    """Delete the JSON, NetCDF files and custom shapefile of a scenario."""
     sc = sc or read_scenario(scenario_id) or {}
     remove_partial_ncs(sc)
     shp = sc.get('shapefile', '')
@@ -134,8 +134,8 @@ def remove_scenario_files(scenario_id, sc=None):
 
 
 def mark_failed(scenario_id, error):
-    """Scenario fallito: i NC parziali non servono, JSON e shapefile restano perché
-    l'utente veda cosa è successo e possa rimuoverlo."""
+    """Failed scenario: the partial NetCDF files are not needed; the JSON and the
+    shapefile stay, so the user can see what happened and remove it."""
     sc = read_scenario(scenario_id)
     if sc is None:
         return None
@@ -148,13 +148,13 @@ def mark_failed(scenario_id, error):
 # ── Job in Redis ────────────────────────────────────────────────────────────
 
 def job_status(job_id):
-    """Stato del job nell'hash Redis del manager, o None se non c'è (scaduto/mai creato)."""
+    """State of the job in the manager's Redis hash, or None if absent (expired or never created)."""
     if not job_id:
         return None
     try:
         return _r().hget(f'pmar:job:{job_id}', 'status')
     except Exception:
-        return 'unknown'      # Redis irraggiungibile: meglio non toccare niente
+        return 'unknown'      # Redis unreachable: better not to touch anything
 
 
 def set_job_failed(job_id, message):
@@ -167,16 +167,16 @@ def set_job_failed(job_id, message):
         pass
 
 
-# ── Riconciliazione ─────────────────────────────────────────────────────────
+# ── Reconciliation ─────────────────────────────────────────────────────────
 
 def reconcile(sc):
-    """Allinea uno scenario attivo allo stato del suo job. Restituisce lo scenario
-    (eventualmente aggiornato) o None se è stato eliminato.
+    """Align an active scenario with the state of its job. Return the scenario
+    (updated if needed) or None if it was deleted.
 
-    - job annullato (Stop) mentre era in coda: il task non partirà mai → si elimina;
-    - job fallito, o sparito da Redis: → failed.
-    Il caso "worker morto durante il calcolo" lo gestisce il worker stesso all'avvio
-    (`fail_interrupted`), perché lì l'hash del job resta `running`.
+    - job cancelled (Stop) while queued: the task will never start → delete it;
+    - job failed, or gone from Redis: → failed.
+    The case "worker died during the computation" is handled by the worker itself at
+    start (`fail_interrupted`), because there the job hash stays `running`.
     """
     if state_of(sc) not in ACTIVE:
         return sc
@@ -198,9 +198,9 @@ def reconcile(sc):
 
 
 def fail_interrupted():
-    """All'avvio del worker delle simulazioni: ogni scenario `running` era stato
-    interrotto (riavvio, crash, OOM). I `queued` restano: i loro messaggi sono ancora
-    nella coda e ripartiranno."""
+    """At the start of the simulation worker: every `running` scenario was
+    interrupted (restart, crash, OOM). The `queued` ones stay: their messages are
+    still in the queue and will start again."""
     out = []
     for path in glob.glob(os.path.join(SCENARIOS_DIR, 'custom_*.json')):
         try:
@@ -210,7 +210,7 @@ def fail_interrupted():
             continue
         if sc.get('state') == RUNNING:
             if job_status(sc.get('job_id')) == 'dismissed':
-                # Stop arrivato col worker che moriva: annullato, non fallito.
+                # Stop arrived while the worker was dying: cancelled, not failed.
                 remove_scenario_files(sc['scenario_id'], sc)
                 continue
             msg = 'interrupted (worker restart)'

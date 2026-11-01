@@ -3,7 +3,7 @@ import { describe, it } from 'node:test'
 
 import { clampFrame, frameDay, markovRaster } from './frames.js'
 
-// Griglia 3 × 2 (nx = 3, ny = 2): dominio sulle celle 0 (sud-ovest), 2 e 4 (nord, centro).
+// Grid 3 × 2 (nx = 3, ny = 2): domain on cells 0 (south-west), 2 and 4 (north, centre).
 const DATA = {
   grid: { lon_min: 13.05, lat_min: 44.05, res: 0.1, nx: 3, ny: 2 },
   cells: [0, 2, 4],

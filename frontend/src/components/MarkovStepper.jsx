@@ -4,14 +4,14 @@ import { IconPlayerPlay, IconPlayerPause } from '@tabler/icons-react'
 import { useLang } from '../LanguageContext'
 import { clampFrame, frameCount, frameDay } from '../markov/frames'
 
-// Un passo ogni 0.9 s: abbastanza per leggere giorno e mappa.
+// One step every 0.9 s: enough to read the day and the map.
 const PLAY_INTERVAL_MS = 900
 
 const formatDay = d => (Number.isInteger(d) ? `${d}` : `${+d.toFixed(2)}`)
 
 /**
- * Cursore dei passi di un layer "Propagate forward", in basso al centro della mappa:
- * si vede quando quel layer è l'attivo. Il passo k mostra la previsione dopo k × Δt.
+ * Step slider of a "Propagate forward" layer, at the bottom centre of the map: it is
+ * shown when that layer is the active one. Step k shows the forecast after k × Δt.
  */
 export default function MarkovStepper({ an, onView }) {
   const { t } = useLang()
@@ -21,7 +21,7 @@ export default function MarkovStepper({ an, onView }) {
   const n = frameCount(d)
   const k = clampFrame(d, an.view.frame)
   const [playing, setPlaying] = useState(false)
-  // Frame corrente per il timer, che non deve ripartire a ogni passo.
+  // Current frame for the timer, which must not restart at every step.
   const kRef = useRef(k)
   kRef.current = k
 
@@ -34,11 +34,11 @@ export default function MarkovStepper({ an, onView }) {
     return () => clearInterval(timer)
   }, [playing, n]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Cambiando layer attivo il play si ferma.
+  // Changing the active layer stops playback.
   useEffect(() => { setPlaying(false) }, [an.id])
 
   const togglePlay = () => {
-    if (!playing && k >= n - 1) onView({ frame: 0 })      // dalla fine si riparte
+    if (!playing && k >= n - 1) onView({ frame: 0 })      // from the end, start again
     setPlaying(p => !p)
   }
   const last = n - 1

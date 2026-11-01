@@ -1,5 +1,5 @@
-"""Colonne di uno shapefile caricato: alimentano il menu "Polygon label" della
-connettività, che oggi chiedeva di scrivere il nome della colonna a memoria."""
+"""Columns of an uploaded shapefile: they fill the "Polygon label" menu of the
+connectivity analysis, so the user picks the column instead of typing its name."""
 import os
 import tempfile
 
@@ -10,7 +10,7 @@ from processes.logging_utils import setup_logger
 
 logger = setup_logger('shapefile_fields_process', 'pmar', 'shapefile_fields.log')
 
-# Valori d'esempio per colonna: bastano a riconoscere quella con i nomi.
+# Example values per column: enough to recognise the one with the names.
 SAMPLE_VALUES = 3
 
 PROCESS_METADATA = {
@@ -39,7 +39,7 @@ PROCESS_METADATA = {
 
 
 class ShapefileFieldsProcessor(BaseProcessor):
-    """OGC API Process: colonne e numero di poligoni di uno shapefile."""
+    """OGC API Process: columns and number of polygons of a shapefile."""
 
     def __init__(self, processor_def):
         super().__init__(processor_def, PROCESS_METADATA)
@@ -56,7 +56,7 @@ class ShapefileFieldsProcessor(BaseProcessor):
             except ProcessorExecuteError:
                 raise
             except Exception as e:
-                logger.warning(f'[ShapefileFields] lettura fallita: {e}')
+                logger.warning(f'[ShapefileFields] read failed: {e}')
                 raise ProcessorExecuteError('Shapefile not readable: a ZIP containing .shp, .shx and .dbf is required.')
         columns = [
             {'name': c,

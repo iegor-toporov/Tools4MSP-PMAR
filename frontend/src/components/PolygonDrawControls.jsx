@@ -2,17 +2,17 @@ import { Button, Group, Stack, Text } from '@mantine/core'
 import { polygonCounts, formatPolygonCounts } from '../geometry/seedShape'
 
 /**
- * Controlli mostrati mentre si disegnano poligoni: suggerimento, conteggio di
- * quelli già chiusi e le due uscite (togli l'ultimo, oppure concludi).
+ * Controls shown while polygons are drawn: a hint, the count of polygons already
+ * closed and the two ways out (remove the last one, or finish).
  *
- * Vive in un componente suo perché serve identico ai due pannelli, PMAR e
- * OpenDrift.
+ * It is a component of its own because the two panels, PMAR and OpenDrift, need it
+ * identical.
  *
- * @param {object}   props.seedShape area di seeding corrente, o null
- * @param {object}   props.labels    sezione i18n con hintPolygon / seedPolygons /
+ * @param {object}   props.seedShape current release area, or null
+ * @param {object}   props.labels    i18n section with hintPolygon / seedPolygons /
  *                                   btnUndoPolygon / btnFinishDraw
- * @param {Function} props.onUndo    rimuove l'ultimo poligono chiuso
- * @param {Function} props.onFinish  esce dalla modalità disegno
+ * @param {Function} props.onUndo    removes the last closed polygon
+ * @param {Function} props.onFinish  leaves drawing mode
  */
 export default function PolygonDrawControls({ seedShape, labels, onUndo, onFinish }) {
   const { n } = polygonCounts(seedShape)

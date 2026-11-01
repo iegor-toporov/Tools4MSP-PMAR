@@ -1,22 +1,23 @@
-"""Registro dei dataset CMEMS usati come forzanti.
+"""Registry of the CMEMS datasets used as forcing.
 
-Ogni voce dice **cosa** è un dataset (bacino, famiglia di variabili, analisi e
-previsione o reanalisi, passo, 2D o 3D); **dove e quando** ha dati lo legge il catalogo
-CMEMS (`data/cmems_select.py`, salvato in `cache/cmems_catalog.json`), perché i prodotti
-di analisi e previsione sono finestre mobili e CMEMS ritira e rinomina versioni. La
-scelta fra le voci la fa `cmems_select.plan_family`, senza provarle una dopo l'altra.
+Each entry says **what** a dataset is (basin, family of variables, analysis and
+forecast or reanalysis, step, 2D or 3D); **where and when** it has data is read from
+the CMEMS catalogue (`data/cmems_select.py`, saved in `cache/cmems_catalog.json`),
+because analysis and forecast products are moving windows and CMEMS retires and renames
+versions. `cmems_select.plan_family` chooses among the entries, without trying them one
+after another.
 
-Gli ID sono stati verificati col catalogo il 26/10/2026; `scripts/check_cmems_catalog.py`
-li ricontrolla (all'avvio del backend).
+The IDs were checked against the catalogue on 26/10/2026; `scripts/check_cmems_catalog.py`
+checks them again (when the backend starts).
 
-Famiglie: `cur` correnti, `tem` temperatura, `sal` salinità, `mld` spessore dello strato
-rimescolato, `wav` deriva di Stokes, `wind` vento a 10 m, `bathy` profondità del fondale.
+Families: `cur` currents, `tem` temperature, `sal` salinity, `mld` mixed layer depth,
+`wav` Stokes drift, `wind` wind at 10 m, `bathy` seabed depth.
 """
 
-# Nome leggibile dei bacini (provenienza mostrata nell'interfaccia) ed estensione in cui
-# il bacino ha senso (come in PMAR). Il rettangolo del catalogo si restringe a questa:
-# da solo può includere mare che il modello non simula (NWS arriva a 40°N nel Tirreno).
-# Senza catalogo vale questa.
+# Readable name of the basins (provenance shown in the interface) and the extent where
+# the basin makes sense (as in PMAR). The catalogue rectangle is narrowed to this: on
+# its own it can include sea that the model does not simulate (NWS reaches 40°N in the
+# Tyrrhenian). Without a catalogue, this extent applies.
 BASINS = {
     'med': {'label': 'Mediterranean', 'extent': [-6.0, 30.19, 36.29, 45.98]},
     'blk': {'label': 'Black Sea',     'extent': [27.25, 40.5, 42.0, 47.0]},
@@ -40,9 +41,9 @@ def _d(family, basin, dataset_id, variables, step_h, dims, kind, res):
             'variables': variables, 'step_h': step_h, 'dims': dims, 'kind': kind, 'res': res}
 
 
-# step_h: passo in ore (None = statico). dims: '2D' solo superficie, '3D' con profondità
-# (se ne scarica la superficie quando il modello non va in profondità).
-# kind: 'anfc' analisi e previsione, 'my' reanalisi, 'static'.
+# step_h: step in hours (None = static). dims: '2D' surface only, '3D' with depth (only
+# the surface is downloaded when the model does not move vertically).
+# kind: 'anfc' analysis and forecast, 'my' reanalysis, 'static'.
 REGISTRY = [
     # ── Mediterraneo (4.2 km) ─────────────────────────────────────────────────
     _d('cur', 'med', 'cmems_mod_med_phy-cur_anfc_4.2km-2D_PT1H-m', CUR, 1,  '2D', 'anfc', '4.2 km'),
@@ -59,7 +60,7 @@ REGISTRY = [
     _d('wav', 'med', 'cmems_mod_med_wav_my_4.2km_PT1H-i',          WAV, 1,  '2D', 'my',   '4.2 km'),
     _d('bathy', 'med', 'cmems_mod_med_phy_anfc_4.2km_static',      BATH, None, '2D', 'static', '4.2 km'),
 
-    # ── Mar Nero (2.5 km) ─────────────────────────────────────────────────────
+    # ── Black Sea (2.5 km) ─────────────────────────────────────────────────────
     _d('cur', 'blk', 'cmems_mod_blk_phy-cur_anfc_2.5km_PT1H-m',    CUR, 1,  '3D', 'anfc', '2.5 km'),
     _d('cur', 'blk', 'cmems_mod_blk_phy-cur_anfc_2.5km_P1D-m',     CUR, 24, '3D', 'anfc', '2.5 km'),
     _d('cur', 'blk', 'cmems_mod_blk_phy-cur_my_2.5km_P1D-m',       CUR, 24, '3D', 'my',   '2.5 km'),
@@ -73,7 +74,7 @@ REGISTRY = [
     _d('wav', 'blk', 'cmems_mod_blk_wav_my_2.5km_PT1H-i',          WAV, 1,  '2D', 'my',   '2.5 km'),
     _d('bathy', 'blk', 'cmems_mod_blk_phy_anfc_2.5km_static',      BATH, None, '2D', 'static', '2.5 km'),
 
-    # ── Iberia-Biscaglia-Irlanda (0.027°) ─────────────────────────────────────
+    # ── Iberia-Biscay-Ireland (0.027°) ─────────────────────────────────────
     _d('cur', 'ibi', 'cmems_mod_ibi_phy_anfc_0.027deg-2D_PT1H-m',  CUR, 1,  '2D', 'anfc', '0.027°'),
     _d('cur', 'ibi', 'cmems_mod_ibi_phy_anfc_0.027deg-3D_P1D-m',   CUR, 24, '3D', 'anfc', '0.027°'),
     _d('cur', 'ibi', 'cmems_mod_ibi_phy-cur_my_0.027deg_PT1H-m',   CUR, 1,  '2D', 'my',   '0.027°'),
@@ -88,7 +89,7 @@ REGISTRY = [
     _d('wav', 'ibi', 'cmems_mod_ibi_wav_my_0.027deg_PT1H-i',       WAV, 1,  '2D', 'my',   '0.027°'),
     _d('bathy', 'ibi', 'cmems_mod_ibi_phy_anfc_0.027deg-3D_static', BATH, None, '2D', 'static', '0.027°'),
 
-    # ── Piattaforma nord-occidentale (1.5 km analisi, 7 km reanalisi) ─────────
+    # ── North-West Shelf (1.5 km analysis, 7 km reanalysis) ─────────
     _d('cur', 'nws', 'cmems_mod_nws_phy-cur_anfc_1.5km-2D_PT1H-i', CUR, 1,  '2D', 'anfc', '1.5 km'),
     _d('cur', 'nws', 'cmems_mod_nws_phy-cur_anfc_1.5km-3D_P1D-m',  CUR, 24, '3D', 'anfc', '1.5 km'),
     _d('cur', 'nws', 'cmems_mod_nws_phy-uv_my_7km-2D_PT1H-i',      CUR, 1,  '2D', 'my',   '7 km'),
@@ -117,7 +118,7 @@ REGISTRY = [
     _d('wav', 'bal', 'cmems_mod_bal_wav_my_PT1H-i',                WAV, 1,  '2D', 'my',   None),
     _d('bathy', 'bal', 'cmems_mod_bal_phy_anfc_static',            BATH, None, '2D', 'static', None),
 
-    # ── Globale (1/12°) e vento ────────────────────────────────────────────────
+    # ── Global (1/12°) and wind ────────────────────────────────────────────────
     _d('cur', 'glo', 'cmems_mod_glo_phy_anfc_0.083deg_PT1H-m',     CUR, 1,  '2D', 'anfc', '1/12°'),
     _d('cur', 'glo', 'cmems_mod_glo_phy-cur_anfc_0.083deg_P1D-m',  CUR, 24, '3D', 'anfc', '1/12°'),
     _d('cur', 'glo', 'cmems_mod_glo_phy_my_0.083deg_P1D-m',        CUR, 24, '3D', 'my',   '1/12°'),
@@ -136,5 +137,5 @@ REGISTRY = [
 
 
 def dataset_ids():
-    """Tutti gli ID del registro, una volta sola ciascuno."""
+    """All the IDs of the registry, each once."""
     return sorted({d['dataset_id'] for d in REGISTRY})

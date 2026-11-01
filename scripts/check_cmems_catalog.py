@@ -1,12 +1,14 @@
-"""Controlla il registro dei dataset CMEMS (data/cmems_datasets.py) contro il catalogo.
+"""Check the registry of CMEMS datasets (data/cmems_datasets.py) against the catalogue.
 
-Rilegge il catalogo (lo salva anche in cache/cmems_catalog.json, che la scelta dei
-dataset usa) e segnala: dataset spariti o rinominati, variabili mancanti, versioni con
-una data di ritiro. Esce con 1 se un dataset del registro non c'è più.
+It reads the catalogue again (and saves it in cache/cmems_catalog.json, which the
+dataset choice uses) and reports: datasets removed or renamed, missing variables,
+versions with a retirement date. It exits with 1 if a dataset of the registry no
+longer exists.
 
     docker compose exec backend python scripts/check_cmems_catalog.py
 
-All'avvio del backend gira in background (scripts/entrypoint.sh) e scrive solo nel log.
+When the backend starts it runs in the background (scripts/entrypoint.sh) and writes
+only to the log.
 """
 
 import logging
@@ -40,7 +42,7 @@ def main():
         log.warning(f'CMEMS dataset not available: {did} — {err}')
     for did, lacking in sorted(set((d, tuple(v)) for d, v in no_vars)):
         log.warning(f'CMEMS dataset {did} lacks variables {list(lacking)}')
-    # Raggruppati per data: di solito un prodotto intero cambia versione lo stesso giorno.
+    # Grouped by date: a whole product usually changes version on the same day.
     by_date = {}
     for did, when in set(retiring):
         by_date.setdefault(when, []).append(did)

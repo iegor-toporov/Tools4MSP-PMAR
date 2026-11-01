@@ -178,9 +178,8 @@ def exp_storage(args):
     rows.sort(key=lambda r: (str(r['pressure']), r['pnum'], r['duration_days']))
     write_csv('storage', rows)
 
-    # Raggruppare per modello di pressione, e segnalare gli scostamenti forti con
-    # un criterio dichiarato invece che a occhio: la provenienza di uno scenario
-    # non è registrata in modo affidabile, quindi non la si indovina.
+    # Group by pressure model, and flag large deviations with a stated rule instead of
+    # by eye: the origin of a scenario is not recorded reliably, so it is not guessed.
     by = {}
     for r in rows:
         if r['bytes_per_particle_step'] != '':
@@ -277,10 +276,10 @@ def exp_load(args):
                     has three slots, so jobs 1-3 should start at once and the
                     rest should wait in steps of one service time per three
                     jobs. The job record's created/started/finished times
-                    separate the wait in the queue from the service itself:
-                    the client polls every half second and records when the
-                    job first reports running, because the job record's own
-                    `started` field is written when the job is created.
+                    separate the wait in the queue from the service itself;
+                    the worker writes `started` when it picks the job up.
+                    The analysis is connectivity in passage mode, the
+                    default of the interface.
                     While each burst runs, a probe keeps sending synchronous
                     requests, to see whether the queue slows down the API.
 
@@ -300,19 +299,28 @@ def exp_load(args):
     if urlparse(api.base).hostname not in ('localhost', '127.0.0.1', 'backend'):
         raise SystemExit('refusing to run a load test against a non-local service')
 
+    def stamp(d, key):
+        return datetime.fromisoformat(d[key].replace('Z', '+00:00'))
+
     def run_tracked(pid, inputs, poll=0.5):
-        """Submit, then poll: returns (status, wait_s, service_s, total_s)."""
+        """Submit, then poll: returns (status, wait_s, service_s, total_s).
+
+        Wait and service come from the job record (server clocks); the total is
+        what the client waited, polling included.
+        """
         t0 = time.monotonic()
         job, _ = api.submit(pid, inputs)
-        t_run = None
         while True:
             _, _, d = api._json(f'{api.base}/jobs/{job}?f=json', timeout=60)
             st = d.get('status')
-            now = time.monotonic()
-            if t_run is None and st != 'accepted':
-                t_run = now
             if st in ('successful', 'failed', 'dismissed'):
-                return st, t_run - t0, now - t_run, now - t0
+                total = time.monotonic() - t0
+                try:
+                    wait = (stamp(d, 'started') - stamp(d, 'created')).total_seconds()
+                    service = (stamp(d, 'finished') - stamp(d, 'started')).total_seconds()
+                except (KeyError, TypeError, ValueError, AttributeError):
+                    wait = service = None
+                return st, wait, service, total
             time.sleep(poll)
 
     # The default probe is the process list, which the API layer answers on its
@@ -358,7 +366,7 @@ def exp_load(args):
               f"{r['throughput_rps']:>6} req/s")
 
     # ---- analysis sweep, with a synchronous probe running alongside
-    job_inputs = {'scenario_id': args.scenario, 'grid_res': 0.5, 'mode': 'transition'}
+    job_inputs = {'scenario_id': args.scenario, 'grid_res': 0.5, 'mode': 'passage'}
     for rep in range(args.repeat):
         for c in args.job_levels:
             stop, probe, probe_err = threading.Event(), [], []
@@ -379,16 +387,16 @@ def exp_load(args):
             finally:
                 stop.set(); th.join()
             span = time.monotonic() - t0
-            waits = [r[1] for r in results]
-            services = [r[2] for r in results]
+            waits = [r[1] for r in results if r[1] is not None]
+            services = [r[2] for r in results if r[2] is not None]
             ends = [r[3] for r in results]
             ok = sum(1 for r in results if r[0] == 'successful')
             pm, pi = summarise(probe) if probe else (None, None)
             rows_jobs.append({
                 'repeat': rep, 'jobs': c, 'successful': ok,
-                'wait_s_median': round(statistics.median(waits), 2) if waits else '',
-                'wait_s_max': round(max(waits), 2) if waits else '',
-                'service_s_median': round(statistics.median(services), 2) if services else '',
+                'wait_s_median': round(statistics.median(waits), 3) if waits else '',
+                'wait_s_max': round(max(waits), 3) if waits else '',
+                'service_s_median': round(statistics.median(services), 3) if services else '',
                 'end_to_end_s_median': round(statistics.median(ends), 2),
                 'makespan_s': round(span, 1),
                 'probe_ms_median': round(pm * 1000, 1) if pm else '',
@@ -659,8 +667,28 @@ def exp_cachedir(args):
 
 # ───────────────────────────── API experiments ─────────────────────────────
 
+def service_seconds(rec):
+    """Service time from the job record: finished - started, both server clocks.
+
+    The worker writes `started` when it picks the job up, so this leaves out the
+    wait in the queue and the client's polling interval. Records written before
+    that change carry the creation time there; they would include the wait.
+    """
+    try:
+        t0 = datetime.fromisoformat(rec['started'].replace('Z', '+00:00'))
+        t1 = datetime.fromisoformat(rec['finished'].replace('Z', '+00:00'))
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return None
+    return (t1 - t0).total_seconds()
+
+
 def exp_analyses(args):
-    """Phase-2 cost: each analysis family across the resolutions the UI offers."""
+    """Phase-2 cost: each analysis family across the resolutions the UI offers.
+
+    Two times per run: the service time from the job record (server clocks, so
+    not limited by the client's one-second polling) and the wall time the
+    client waited, which is what a user experiences.
+    """
     api = Api()
     sc = args.scenario
     # Density at the default 0.1 deg and at the 0.05 deg minimum the service accepts.
@@ -684,14 +712,16 @@ def exp_analyses(args):
 
     rows = []
     for pid, inputs, label in cases:
-        walls = []
+        walls, services = [], []
         for rep in range(args.repeat):
             rec, res, wall = api.run(pid, inputs)
             status = rec.get('status')
             walls.append(wall if status == 'successful' else None)
+            services.append(service_seconds(rec) if status == 'successful' else None)
             if status != 'successful':
                 print(f'  {pid} {label} rep{rep}: {status} — {rec.get("message", "")[:70]}')
         med, spread = summarise(walls)
+        smed, sspread = summarise(services)
         size, units = None, ''
         if res is not None:
             size = round(len(json.dumps(res)) / 1e6, 2)
@@ -703,10 +733,13 @@ def exp_analyses(args):
                 units = res.get('raster_nx', 0) * res.get('raster_ny', 0)
         rows.append({'process': pid, 'config': label, 'scenario': sc,
                      'units': units, 'repeats': args.repeat,
+                     'service_s_median': round(smed, 3) if smed is not None else '',
+                     'service_s_spread': round(sspread, 3) if sspread is not None else '',
                      'wall_s_median': round(med, 2) if med else '',
                      'wall_s_spread': round(spread, 2) if spread is not None else '',
                      'payload_mb': size if size is not None else ''})
         print(f'  {pid:14} {label:18} {"rejected" if med is None else round(med, 2):>6}s  '
+              f'service {smed if smed is None else round(smed, 3)}s  '
               f'{units:>6} units  payload {size} MB')
     write_csv(args.out, rows)
 
@@ -716,8 +749,8 @@ def exp_analyses(args):
 # Chapter 6 reports every simulation-side measurement on the same small set of
 # scenarios, so a reader meets three names and finds them everywhere. S is the
 # configuration of the script baseline; M is a month over the whole basin; L is
-# the Adriatic run built by bench/adriatic_campaign.py, which already has a
-# recorded run and is not repeated here. July 2024 is chosen because no
+# the Adriatic run first built by bench/adriatic_campaign.py, repeated here on a
+# full cache with the same inputs. July 2024 is chosen because no
 # forcing for it was cached, so the first run of S and of M is a cold one.
 
 S_BOX = [[12.4, 44.6], [13.0, 44.6], [13.0, 45.0], [12.4, 45.0], [12.4, 44.6]]
@@ -729,6 +762,10 @@ REFERENCE = {
                time_step_hours=1, start_time='2024-07-01T00:00:00', cmems_margin=0),
     'Mp': dict(area='basin', pressure='plastic', pnum=10000, duration_days=30,
                time_step_hours=1, start_time='2024-07-01T00:00:00', cmems_margin=0),
+    # the configuration of bench/adriatic_campaign.py at 50 particles per sea cell
+    'L':  dict(area='basin', pressure='generic', pnum=13850, duration_days=90,
+               time_step_hours=4, start_time='2024-01-02T00:00:00', cmems_margin=0,
+               seedings=4, tshift=30),
 }
 
 
@@ -818,8 +855,8 @@ def exp_reference(args):
             rows.append(r)
             print(f"  M with {pnum}: {r['run_s']}s  integration {r['integration_s']}s")
     write_csv(args.out, rows)
-    print('  NOTE: the sweep scenarios can be removed afterwards; S, M and Mp are '
-          'the reference scenarios of ch. 6')
+    print('  NOTE: the scenarios created here can be removed afterwards; the reference '
+          'scenarios of ch. 6 are the ones named in the records')
 
 
 
@@ -860,6 +897,9 @@ def exp_equivalence(args):
     that are not PMAR's to compute are shared: the activity layer rasterised onto
     the grid, and the grid cells used as connectivity nodes.
 
+    The passage matrix is compared with PMAR.get_cm_within_range, which needs
+    PMAR at commit 38b69b1 or later.
+
     Expected differences, stated before the runs: the rounding of the response (3
     decimals for density, 6 for matrices, 4 significant digits for propagation),
     and, for weighted density, the weights below 1e-6 of the maximum that the
@@ -878,11 +918,17 @@ def exp_equivalence(args):
     import shapely
     os.environ.pop('PROJ_LIB', None)
     os.environ.pop('PROJ_DATA', None)
+    # The platform's processes install a faster make_grid in the library
+    # (processes/ocean_grid.py); the reference side must be the library as it is.
+    import pmar.pmar
+    import pmar.utils
+    from processes import ocean_grid
+    make_grid = ocean_grid.LIBRARY_MAKE_GRID
+    pmar.pmar.make_grid = pmar.utils.make_grid = make_grid
     from pmar.pmar import PMAR
-    from pmar.utils import make_grid
     from processes.markov_core import Grid
     from processes.ConnectivityProcess import (_load_scenario, _make_grid_polygons,
-                                               _scenario_bbox, align_bbox)
+                                               _scenario_bbox, _time_window, align_bbox)
     from processes.PMARProcess import (_fetch_windfarms, _gdf_to_use_raster,
                                        EMODNET_CACHE_DIR)
     import tempfile
@@ -957,6 +1003,24 @@ def exp_equivalence(args):
         cms = [pmar_for(nc).get_cm(t=-1, cm_grid=gdf) for nc in nc_list]
         ref = np.asarray((sum(cms) / len(cms)).todense(), float)
         row(name, 'connectivity', f'transition, {conn_res} deg', ref, got, '', 5e-7 + 1e-12)
+
+        # ---- structural connectivity, passage (the default of the interface), on
+        # the same output steps the process reads: it subsamples a long time axis
+        _, out, _ = api.run('connectivity', {'scenario_id': sid, 'grid_res': float(conn_res),
+                                             'mode': 'passage'})
+        got = np.array(out['matrix'], float)
+        cms, strides = [], set()
+        for nc in nc_list:
+            p = pmar_for(nc)
+            steps, stride, _ = _time_window(p.ds, sc, None, 'passage')
+            strides.add(stride)
+            p.ds = p.ds.isel(time=slice(0, steps + 1, stride))
+            cms.append(p.get_cm_within_range(t_max=int(p.ds.sizes['time']), cm_grid=gdf))
+        ref = np.asarray((sum(cms) / len(cms)).todense(), float)
+        stride = max(strides)
+        row(name, 'connectivity', f'passage, {conn_res} deg', ref, got,
+            f'every {stride} output steps, as the process reads them' if stride > 1 else '',
+            5e-7 + 1e-12)
 
         # ---- propagation forward
         _, out, _ = api.run('markov', {'scenario_id': sid, 'res': float(prop_res),
@@ -1150,7 +1214,7 @@ def main():
             s.add_argument('--n', type=int, default=200)
             s.add_argument('--seed', type=int, default=20261025)
         if name == 'reference':
-            s.add_argument('--names', nargs='*', default=['S', 'M', 'Mp'])
+            s.add_argument('--names', nargs='*', default=['S', 'M', 'L'])
             s.add_argument('--records', nargs='*', default=[],
                            help='NAME=scenario_id of runs already on disk')
             s.add_argument('--sweep', type=int, nargs='*', default=[1000, 2500, 5000])

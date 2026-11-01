@@ -1,12 +1,12 @@
 /**
- * Calendario dei rilasci di una simulazione multi seeding: il rilascio n parte
- * `tshift × n` giorni dopo la data di inizio e dura `duration` giorni, come in
- * PrecomputeProcess. Gli stessi limiti del backend: da 2 a 12 rilasci, uno
- * sfasamento da 1 a 365 giorni.
+ * Schedule of the releases of a simulation with several releases: release n starts
+ * `tshift × n` days after the start date and lasts `duration` days, as in
+ * PrecomputeProcess. The same limits as the backend: 2 to 12 releases, a shift of 1 to
+ * 365 days.
  *
- * Le date sono in UTC, così il calendario non dipende dal fuso del browser.
+ * Dates are in UTC, so the schedule does not depend on the browser's time zone.
  *
- * Modulo puro: testato in releases.test.js.
+ * Pure module: tested in releases.test.js.
  */
 
 export const MIN_RELEASES = 2
@@ -24,8 +24,8 @@ function addDays(date, days) {
 }
 
 /**
- * Un elemento per rilascio: `{ n, start, end }`, con `start` e `end` Date UTC.
- * Restituisce [] se la data di inizio non è valida.
+ * One element per release: `{ n, start, end }`, with `start` and `end` UTC Dates.
+ * Returns [] if the start date is not valid.
  */
 export function releaseSchedule(startDate, duration, releases, shift) {
   const t0 = new Date(`${startDate}T00:00:00Z`)
@@ -39,7 +39,7 @@ export function releaseSchedule(startDate, duration, releases, shift) {
   })
 }
 
-/** Data breve nel formato della lingua, senza spostamenti di fuso. */
+/** Short date in the format of the language, without time-zone shifts. */
 export function formatDay(date, locale) {
   return date.toLocaleDateString(locale, {
     timeZone: 'UTC', day: '2-digit', month: '2-digit', year: 'numeric',

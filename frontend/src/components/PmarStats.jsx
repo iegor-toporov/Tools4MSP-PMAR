@@ -6,8 +6,8 @@ import { FloatingWindow } from './FloatingWindow'
 import { statsCsv } from '../export/pmarTools'
 import { saveText } from '../export/download'
 
-// Il calcolo sta in export/pmarTools.js (quantili come numpy/pandas); qui si
-// riesporta per chi lo importava da questo file.
+// The computation is in export/pmarTools.js (quantiles as in numpy/pandas); it is
+// re-exported here for code that imports it from this file.
 export { computeStats } from '../export/pmarTools'
 
 // ── Value formatter ───────────────────────────────────────────────────────────

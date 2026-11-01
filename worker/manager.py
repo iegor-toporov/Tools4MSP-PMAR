@@ -21,16 +21,16 @@ LOGGER = logging.getLogger(__name__)
 _TTL = 7 * 24 * 3600  # 7 days
 
 class InvalidSubmission(ProcessorExecuteError):
-    """Richiesta rifiutata alla preparazione (input non validi, accesso negato): 400, e
-    il messaggio arriva al client — pygeoapi mostra solo `user_msg`, altrimenti
-    risponderebbe "generic error (check logs)"."""
+    """Request rejected while it is prepared (invalid inputs, access denied): 400, and
+    the message reaches the client. pygeoapi shows only `user_msg`; otherwise it would
+    answer "generic error (check logs)"."""
     http_status_code = HTTPStatus.BAD_REQUEST
 
     def __init__(self, msg):
         super().__init__(msg, user_msg=msg)
 
 
-# Processi che fanno girare OpenDrift: vanno sulla coda `simulations`, una alla volta.
+# Processes that run OpenDrift: they go to the `simulations` queue, one at a time.
 SIMULATION_PROCESSES = {'precompute', 'opendrift'}
 
 
@@ -238,13 +238,13 @@ class CeleryManager(BaseManager):
                               subscriber: Optional[Subscriber] = None,
                               requested_response: Optional[RequestedResponse] = RequestedResponse.raw.value  # noqa
                               ) -> Tuple[str, Any, JobStatus]:
-        """Esegue il processo in linea, e salva il risultato come fa il ramo asincrono.
+        """Run the process inline, and store the result as the asynchronous path does.
 
-        `BaseManager._execute_handler_sync` scrive l'output su disco solo se il manager
-        ha `output_dir`, e non lo mette mai nel record del job: un'esecuzione sincrona
-        lasciava quindi un job `successful` il cui `/results` rispondeva
-        ``JobResultNotFound``. Qui si delega al comportamento di base e si aggiunge il
-        payload in Redis, così le due modalità lasciano lo stesso record.
+        `BaseManager._execute_handler_sync` writes the output to disk only if the
+        manager has `output_dir`, and never puts it in the job record, so a synchronous
+        run would leave a `successful` job whose `/results` answers
+        ``JobResultNotFound``. This delegates to the base behaviour and adds the payload
+        to Redis, so the two modes leave the same record.
         """
         mimetype, outputs, status = super()._execute_handler_sync(
             p, job_id, data_dict, requested_outputs, subscriber, requested_response)
@@ -256,8 +256,8 @@ class CeleryManager(BaseManager):
                     'result': json.dumps(outputs),
                 })
             except (TypeError, ValueError):
-                # Output non serializzabile (es. bytes): il job resta valido, il
-                # risultato è già stato restituito nel corpo della risposta.
+                # Output that cannot be serialised (e.g. bytes): the job stays valid,
+                # the result was already returned in the body of the response.
                 LOGGER.warning(f'[{job_id}] sync result not JSON-serialisable, not stored')
 
         return mimetype, outputs, status
@@ -293,9 +293,9 @@ class CeleryManager(BaseManager):
         from worker.tasks import run_processor, run_simulation
         process_class_path = f"{p.__class__.__module__}.{p.__class__.__name__}"
 
-        # Preparazione sincrona, prima della coda (es. il precompute registra subito lo
-        # scenario come `queued`). Un errore qui torna all'utente come errore HTTP; il
-        # record del job, già creato da pygeoapi, va chiuso come fallito.
+        # Synchronous preparation, before the queue (e.g. precompute records the scenario
+        # as `queued` at once). An error here goes back to the user as an HTTP error; the
+        # job record, already created by pygeoapi, is closed as failed.
         prepare = getattr(p, 'prepare', None)
         if callable(prepare):
             try:

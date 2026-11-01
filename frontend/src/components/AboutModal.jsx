@@ -3,7 +3,7 @@ import { useLang } from '../LanguageContext'
 
 const DOI = '10.1016/j.envsoft.2025.106822'
 
-// Collegamenti fissi: non cambiano con la lingua.
+// Fixed links: they do not change with the language.
 const LINKS = [
   ['tracking',   'OpenDrift', 'https://opendrift.github.io/',                        'opendrift.github.io'],
   ['forcing',    'CMEMS',     'https://data.marine.copernicus.eu/products',          'data.marine.copernicus.eu'],
@@ -12,7 +12,7 @@ const LINKS = [
   ['uiSource',   null,        'https://github.com/iegor-toporov/Tools4MSP-PMAR',     'github.com/iegor-toporov/Tools4MSP-PMAR'],
 ]
 
-/** Crediti, citazione e fonti di dati e software (icona del libro accanto al titolo). */
+/** Credits, citation and sources of data and software (book icon next to the title). */
 export default function AboutModal({ opened, onClose }) {
   const { t } = useLang()
   const a = t.about

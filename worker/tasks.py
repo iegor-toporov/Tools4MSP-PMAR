@@ -42,32 +42,61 @@ def _set_status(job_id: str, status: str, message: str = None) -> None:
 
 @app.task(bind=True, name='run_processor')
 def run_processor(self, job_id: str, process_class_path: str, data_dict: dict):
-    """Analisi (coda di default). Vedi :func:`_run`."""
+    """Analyses (default queue). See :func:`_run`."""
     return _run(job_id, process_class_path, data_dict)
 
 
 @app.task(bind=True, name='run_simulation', acks_late=False, reject_on_worker_lost=False)
 def run_simulation(self, job_id: str, process_class_path: str, data_dict: dict):
-    """Simulazioni (coda `simulations`, un processo).
+    """Simulations (`simulations` queue, one process).
 
-    Ack immediato: se il worker muore a metà, la simulazione **non** viene rieseguita
-    alla cieca da Celery. Lo scenario viene segnato come fallito all'avvio del worker
-    (vedi :func:`_recover_simulations`) e l'utente decide se rilanciarla.
+    Immediate ack: if the worker dies halfway, Celery does **not** run the simulation
+    again blindly. The scenario is marked as failed when the worker starts (see
+    :func:`_recover_simulations`) and the user decides whether to run it again.
     """
     return _run(job_id, process_class_path, data_dict, stop_on_dismiss=True)
 
 
 @worker_init.connect
-def _recover_simulations(sender=None, **kwargs):
-    """All'avvio del worker delle simulazioni, prima che prenda messaggi dalla coda.
+def _preload_libraries(sender=None, **kwargs):
+    """Load in the main process what every task would otherwise load from scratch.
 
-    - Ogni scenario rimasto `running` era stato interrotto (riavvio, crash, OOM):
-      diventa `failed`.
-    - Con il prefetch il worker tiene già in mano la simulazione successiva, non
-      ancora confermata. Se è stato ucciso (SIGKILL dopo il timeout di `docker stop`),
-      Redis la restituirebbe alla coda solo dopo `visibility_timeout`, cioè ore: la si
-      rimette subito in testa. Sono orfani per forza: questo è l'unico worker della
-      coda, e il task in corso viene confermato appena parte (`acks_late=False`).
+    The child processes are created after this point and inherit everything ready.
+    In the simulation worker, which opens a new process for every simulation
+    (`--max-tasks-per-child=1`), these are the OpenDrift model modules and the global
+    land mask: about 8 s each when cold. In the analysis worker they are the libraries
+    and the Natural Earth coastline of `processes.ocean_grid`: about 17 s on the first
+    analysis.
+    """
+    try:
+        if os.environ.get('PMAR_SIMULATION_WORKER') == '1':
+            import importlib
+            from processes.PMARProcess import PRESSURE_MODELS
+            for module in {m['module'] for m in PRESSURE_MODELS.values()}:
+                importlib.import_module(module)
+            from opendrift.readers.reader_global_landmask import Reader
+            Reader()
+        else:
+            import processes.PMARProcess  # noqa: F401
+            import processes.ConnectivityProcess  # noqa: F401
+            from processes import ocean_grid
+            ocean_grid._ocean()
+    except Exception as e:                    # without the preload, tasks are only slower
+        print(f'[worker] preload failed: {e}', flush=True)
+
+
+@worker_init.connect
+def _recover_simulations(sender=None, **kwargs):
+    """When the simulation worker starts, before it takes messages from the queue.
+
+    - Every scenario left `running` was interrupted (restart, crash, OOM): it becomes
+      `failed`.
+    - With prefetch, the worker already holds the next simulation, not yet confirmed.
+      If the worker was killed (SIGKILL after the `docker stop` timeout), Redis would
+      return it to the queue only after `visibility_timeout`, that is hours: it is put
+      back at the head at once. These messages are necessarily orphans: this is the
+      only worker of the queue, and the running task is confirmed as soon as it starts
+      (`acks_late=False`).
     """
     if os.environ.get('PMAR_SIMULATION_WORKER') != '1':
         return
@@ -75,7 +104,7 @@ def _recover_simulations(sender=None, **kwargs):
     from worker.app import SIMULATIONS_QUEUE
     interrupted = scenario_state.fail_interrupted()
     if interrupted:
-        print(f'[worker] scenari interrotti segnati come falliti: {interrupted}', flush=True)
+        print(f'[worker] interrupted scenarios marked as failed: {interrupted}', flush=True)
     restored = 0
     try:
         with app.connection_for_write() as conn:
@@ -91,9 +120,9 @@ def _recover_simulations(sender=None, **kwargs):
                         pipe.execute()
                     restored += 1
     except Exception as e:
-        print(f'[worker] ripristino delle simulazioni in coda non riuscito: {e}', flush=True)
+        print(f'[worker] could not restore the queued simulations: {e}', flush=True)
     if restored:
-        print(f'[worker] simulazioni in coda rimesse in testa: {restored}', flush=True)
+        print(f'[worker] queued simulations put back at the head: {restored}', flush=True)
 
 
 def _stop_when_dismissed(job_id: str, scenario_id, done: threading.Event, interval=2.0):
@@ -111,7 +140,7 @@ def _stop_when_dismissed(job_id: str, scenario_id, done: threading.Event, interv
         try:
             if _redis.hget(_key(job_id), 'status') != 'dismissed':
                 continue
-        except Exception:                     # Redis non raggiungibile: si riprova
+        except Exception:                     # Redis unreachable: try again
             continue
         try:
             if scenario_id:
@@ -120,7 +149,7 @@ def _stop_when_dismissed(job_id: str, scenario_id, done: threading.Event, interv
             from processes.OpenDriftProcess import remove_active_partials
             remove_active_partials()
         finally:
-            print(f'[worker] job {job_id} annullato: processo chiuso', flush=True)
+            print(f'[worker] job {job_id} cancelled: process closed', flush=True)
             os._exit(0)
 
 
@@ -142,14 +171,18 @@ def _run(job_id: str, process_class_path: str, data_dict: dict, stop_on_dismiss=
         Exception: Re-raises any exception from the processor after recording the
             ``'failed'`` status in Redis.
     """
-    # Annullato mentre era in coda: la revoca di Celery vive nella memoria del worker e
-    # si perde se il worker si riavvia, quindi fa fede lo stato in Redis.
+    # Cancelled while queued: Celery's revocation lives in the worker's memory and is
+    # lost if the worker restarts, so the state in Redis is what counts.
     if _redis.hget(_key(job_id), 'status') == 'dismissed':
         if data_dict.keys() == {'scenario_id'}:
             from processes import scenario_state
             scenario_state.remove_scenario_files(data_dict['scenario_id'])
         return None
     _set_status(job_id, 'running')
+    # pygeoapi writes `started` when it creates the job; here it becomes the real
+    # start, so started - created is the wait in the queue and finished - started the
+    # service time.
+    _redis.hset(_key(job_id), 'started', datetime.now(timezone.utc).isoformat())
     done = threading.Event()
     if stop_on_dismiss:
         threading.Thread(target=_stop_when_dismissed, daemon=True,

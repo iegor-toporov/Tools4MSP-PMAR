@@ -1,9 +1,9 @@
-"""Scarica in anticipo le forzanti CMEMS delle simulazioni pubbliche.
+"""Download in advance the CMEMS forcing of the public simulations.
 
-Per una demo: le aree e i periodi delle simulazioni in PUBLIC_SCENARIOS (o quelle
-indicate a mano) finiscono in cache, così le nuove simulazioni simili non aspettano
-CMEMS. La cache si cerca per contenimento: basta che l'area e il periodo nuovi stiano
-dentro quelli scaricati.
+For a demo: the areas and periods of the simulations in PUBLIC_SCENARIOS (or those
+given by hand) go into the cache, so new similar simulations do not wait for CMEMS.
+The cache is searched by containment: it is enough that the new area and period lie
+inside those downloaded.
 
     docker compose exec simulation-worker python scripts/prefetch_cmems.py [custom_xxx ...]
 """
@@ -24,12 +24,12 @@ from processes.PMARProcess import PRESSURE_MODELS              # noqa: E402
 def main(ids):
     ids = ids or [s.strip() for s in os.environ.get('PUBLIC_SCENARIOS', '').split(',') if s.strip()]
     if not ids:
-        print('Nessuno scenario: passarne gli id, o impostare PUBLIC_SCENARIOS.')
+        print('No scenario: pass their ids, or set PUBLIC_SCENARIOS.')
         return 1
     for sid in ids:
         sc = state.read_scenario(sid)
         if not sc:
-            print(f'{sid}: non trovato')
+            print(f'{sid}: not found')
             continue
         b = gpd.read_file(sc['shapefile']).to_crs('EPSG:4326').total_bounds
         start = datetime.fromisoformat(sc['start_time'])

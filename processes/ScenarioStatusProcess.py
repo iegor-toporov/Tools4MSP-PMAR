@@ -16,12 +16,12 @@ from processes import scenario_state as state
 logger = setup_logger('scenario_status_process', 'pmar', 'scenario_status.log')
 
 _geo_cache: dict = {}
-# Aree la cui geometria non è arrivata: area_id -> istante dell'errore. Si
-# riprova passato _T4MSP_RETRY_AFTER, invece di restituire None fino al riavvio.
+# Areas whose geometry did not arrive: area_id -> time of the error. They are tried
+# again after _T4MSP_RETRY_AFTER, instead of returning None until a restart.
 _geo_failed: dict = {}
 
-# Bounds già calcolati, per shapefile: serve quando i JSON degli scenari non
-# sono scrivibili e il back-fill non riesce a renderli persistenti.
+# Bounds already computed, per shapefile: needed when the scenario JSON files are not
+# writable and the back-fill cannot make them persistent.
 _bounds_cache: dict = {}
 
 PROCESS_METADATA = {
@@ -75,21 +75,21 @@ PROCESS_METADATA = {
 
 
 def _backfill_bounds(sc, meta_path):
-    """Aggiunge i bounds dell'area di semina agli scenari che non li hanno.
+    """Add the bounds of the release area to the scenarios that lack them.
 
-    I bounds vengono registrati alla creazione, ma gli scenari più vecchi ne sono
-    privi e la UI della griglia di connettività li usa per pre-compilare il
-    riquadro. Li si calcola una volta sola e li si riscrive nel JSON: rileggere lo
-    shapefile a ogni chiamata di stato costerebbe una lettura per scenario a ogni
-    polling, e lo stato viene ripolled ogni 5 s durante un precompute.
+    The bounds are recorded when a scenario is created, but older scenarios lack them,
+    and the connectivity grid UI uses them to pre-fill the box. They are computed once
+    and written back to the JSON: reading the shapefile at every status call would cost
+    one read per scenario at every poll, and the status is polled every 5 s during a
+    precompute.
 
-    La scrittura è best-effort: sul server i JSON possono non essere scrivibili
-    dall'utente del container. In quel caso i bounds finiscono comunque nella
-    risposta — sono già stati messi in *sc* — e la cache di processo evita di
-    ricalcolarli a ogni chiamata; si perde solo la persistenza fra riavvii.
+    The write is best-effort: on the server the JSON files may not be writable by the
+    container user. In that case the bounds still end up in the response (they are
+    already in *sc*), and the process cache avoids computing them at every call; only
+    persistence across restarts is lost.
     """
-    # Con i bounds si registra anche il numero di poligoni dell'area di semina:
-    # la connettività "sull'area di semina" ne richiede almeno due.
+    # With the bounds, the number of polygons of the release area is recorded too:
+    # connectivity "on the release area" needs at least two.
     if (sc.get('bounds') and sc.get('n_seed_polygons')) or not sc.get('shapefile'):
         return
     shp = sc['shapefile']
@@ -111,34 +111,33 @@ def _backfill_bounds(sc, meta_path):
         sc['bounds'] = [round(float(v), 4) for v in b]
         sc['n_seed_polygons'] = int((parts.geom_type == 'Polygon').sum())
         _bounds_cache[shp] = (sc['bounds'], sc['n_seed_polygons'])
-        # L'elenco delle simulazioni è ordinato per data di modifica: riscrivere
-        # il JSON per aggiungere i bounds ne cambierebbe la posizione, quindi la
-        # data va ripristinata.
+        # The list of simulations is sorted by modification date: rewriting the JSON
+        # to add the bounds would change its position, so the date is restored.
         st = os.stat(meta_path)
         state.write_scenario(sc)
         os.utime(meta_path, (st.st_atime, st.st_mtime))
-        logger.info(f'[ScenarioStatus] bounds aggiunti a {os.path.basename(meta_path)}')
+        logger.info(f'[ScenarioStatus] bounds added to {os.path.basename(meta_path)}')
     except Exception as e:
-        logger.warning(f'[ScenarioStatus] bounds non calcolabili per {meta_path}: {e}')
+        logger.warning(f'[ScenarioStatus] bounds could not be computed for {meta_path}: {e}')
 
 
 def _scenario_geometry(scenario_id):
-    """Geometria dell'area di semina di uno scenario, per evidenziarla sulla mappa.
+    """Geometry of the release area of a scenario, to highlight it on the map.
 
-    Serve su richiesta — quando l'utente sceglie una simulazione — e non dentro la
-    mappa di stato: quella viene ripolled e leggere tutti gli shapefile a ogni giro
-    costerebbe troppo.
+    It is served on request, when the user chooses a simulation, and not inside the
+    status map: that is polled, and reading every shapefile at each poll would cost
+    too much.
 
-    Le geometrie sono unite in una sola (`union_all`): un'area disegnata a più
-    poligoni resta una MultiPolygon, e al frontend basta una geometria sola da
-    passare a Leaflet, come già fa con le aree Tools4MSP.
+    The geometries are merged into one (`union_all`): an area drawn as several
+    polygons stays a MultiPolygon, and the frontend needs a single geometry to pass
+    to Leaflet, as it already does with the Tools4MSP areas.
 
     Args:
-        scenario_id (str): id di uno scenario custom.
+        scenario_id (str): id of a custom scenario.
 
     Returns:
-        dict | None: geometria GeoJSON, o None se lo scenario o il suo shapefile
-        non esistono.
+        dict | None: GeoJSON geometry, or None if the scenario or its shapefile does
+        not exist.
     """
     meta_path = os.path.join(SCENARIOS_DIR, f'{scenario_id}.json')
     if not os.path.exists(meta_path):
@@ -156,11 +155,11 @@ def _scenario_geometry(scenario_id):
         os.environ.pop('PROJ_DATA', None)
 
         geom = gpd.read_file(shp).to_crs('EPSG:4326').geometry.union_all()
-        # Tolleranza fine: serve solo a non spedire vertici inutili, non a
-        # cambiare la forma percepita sulla mappa.
+        # Fine tolerance: it only avoids sending useless vertices, without changing
+        # the shape seen on the map.
         return mapping(geom.simplify(0.0005, preserve_topology=True))
     except Exception as e:
-        logger.warning(f'[ScenarioStatus] geometria non leggibile per {scenario_id}: {e}')
+        logger.warning(f'[ScenarioStatus] geometry not readable for {scenario_id}: {e}')
         return None
 
 
@@ -174,8 +173,8 @@ def _created_at(meta_file, sc):
 
 
 def _remove_failed(scenario_id, unlocked):
-    """Elimina uno scenario fallito. Solo quelli falliti: uno pronto non si cancella per
-    errore, uno in coda o in calcolo si ferma con lo Stop."""
+    """Delete a failed scenario. Only failed ones: a ready one is not deleted by
+    mistake, and a queued or running one is stopped with Stop."""
     require_unlocked(unlocked)
     sc = state.read_scenario(scenario_id)
     if sc is None:
@@ -247,17 +246,17 @@ class ScenarioStatusProcessor(BaseProcessor):
                 sc.setdefault('scenario_id', os.path.basename(meta_file)[:-len('.json')])
                 if not scenario_allowed(sc['scenario_id'], unlocked):
                     continue
-                # Job annullato o perso mentre lo scenario era in coda/in calcolo.
+                # Job cancelled or lost while the scenario was queued or running.
                 sc = state.reconcile(sc)
                 if sc is not None:
                     loaded.append((meta_file, sc))
             except Exception as e:
                 logger.warning(f'[ScenarioStatus] Failed to load {meta_file}: {e}')
 
-        # Più recenti prima, per data di creazione (gli scenari vecchi non l'hanno: mtime).
+        # Most recent first, by creation date (older scenarios lack it: mtime).
         loaded.sort(key=lambda x: _created_at(*x), reverse=True)
 
-        # Posizione in coda: 1 = la prossima a partire.
+        # Position in the queue: 1 = the next to start.
         queued = sorted((sc for _, sc in loaded if sc.get('state') == state.QUEUED),
                         key=lambda sc: sc.get('queued_at') or '')
         queue_pos = {sc['scenario_id']: i + 1 for i, sc in enumerate(queued)}
@@ -272,8 +271,8 @@ class ScenarioStatusProcessor(BaseProcessor):
                 nc_filenames = sc.get('nc_filenames') or [sc['nc_filename']]
                 existing     = [fn for fn in nc_filenames
                                 if os.path.exists(os.path.join(SCENARIOS_DIR, fn))]
-                # Durante il calcolo i NC dei seeding già finiti esistono, ma lo scenario
-                # non è utilizzabile finché non è `ready`.
+                # During the computation the NetCDF files of finished releases exist, but
+                # the scenario cannot be used until it is `ready`.
                 computed     = st == state.READY and len(existing) == len(nc_filenames)
                 nc_size_mb   = round(
                     sum(os.path.getsize(os.path.join(SCENARIOS_DIR, fn)) for fn in existing)
@@ -288,8 +287,8 @@ class ScenarioStatusProcessor(BaseProcessor):
                     'area_en':         sc.get('area_en', ''),
                     'pressure':        sc['pressure'],
                     'chemical_compound': sc.get('chemical_compound'),
-                    # Dataset CMEMS usati, per famiglia (correnti, vento, …): la provenienza
-                    # mostrata nel riassunto. Assente negli scenari precedenti.
+                    # CMEMS datasets used, per family (currents, wind, …): the provenance
+                    # shown in the summary. Absent in older scenarios.
                     'forcing_datasets': sc.get('forcing_datasets'),
                     'pnum':            sc['pnum'],
                     # Only per-polygon seeding gives every polygon the same sampling
@@ -298,9 +297,8 @@ class ScenarioStatusProcessor(BaseProcessor):
                     'seeding_mode':     sc.get('seeding_mode', 'total'),
                     'pnum_per_polygon': sc.get('pnum_per_polygon'),
                     'n_polygons':       sc.get('n_polygons'),
-                    # Bounds dell'area di semina: la UI li usa per pre-compilare il
-                    # riquadro della griglia di connettività. Assenti sugli scenari
-                    # creati prima che venissero registrati.
+                    # Bounds of the release area: the UI uses them to pre-fill the box of
+                    # the connectivity grid. Absent in older scenarios.
                     'bounds':           sc.get('bounds'),
                     'n_seed_polygons':  sc.get('n_seed_polygons'),
                     'duration_days':   sc['duration_days'],
@@ -312,9 +310,9 @@ class ScenarioStatusProcessor(BaseProcessor):
                     'source':          'custom',
                     'seedings':        sc.get('seedings', 1),
                     'tshift':          sc.get('tshift', 0),
-                    # Gli scenari creati prima dell'opzione spiaggiavano sempre.
+                    # Scenarios without this option always used stranding.
                     'beaching':        sc.get('beaching', True),
-                    # Ciclo di vita (vedi processes/scenario_state.py).
+                    # Life cycle (see processes/scenario_state.py).
                     'state':           st,
                     'progress':        sc.get('progress') if st in state.ACTIVE else None,
                     'queue_position':  queue_pos.get(sid),
@@ -323,7 +321,7 @@ class ScenarioStatusProcessor(BaseProcessor):
                     'started_at':      sc.get('started_at'),
                     'finished_at':     sc.get('finished_at'),
                 }
-                # L'id del job serve solo allo Stop, che richiede accesso pieno.
+                # The job id is needed only by Stop, which requires full access.
                 if unlocked and st in state.ACTIVE:
                     scenarios[sid]['job_id'] = sc.get('job_id')
             except Exception as e:
@@ -332,7 +330,7 @@ class ScenarioStatusProcessor(BaseProcessor):
         t4msp_areas = [{'id': a['id'], 'label': a['label']} for a in _fetch_t4msp_areas()]
 
         logger.info(f'[ScenarioStatus] Custom scenarios: {len(scenarios)}, T4MSP areas: {len(t4msp_areas)}')
-        # Il frontend ne ricava se mostrare il form di simulazione o la richiesta di token.
+        # The frontend uses it to decide whether to show the simulation form or ask for a token.
         access = {'locked': token_configured(), 'unlocked': unlocked}
         return 'application/json', {'scenarios': scenarios, 't4msp_areas': t4msp_areas,
                                     'access': access}

@@ -1,20 +1,20 @@
 /**
- * Conversioni per l'area di seeding disegnata sulla mappa.
+ * Conversions for the release area drawn on the map.
  *
- * Il modulo non dipende da React, da Leaflet né da i18n: prende una forma e
- * restituisce dati. Le tre funzioni erano duplicate in App.jsx, Panel.jsx e
- * PmarPanel.jsx, e un terzo tipo di forma le avrebbe fatte divergere.
+ * The module does not depend on React, Leaflet or i18n: it takes a shape and returns
+ * data. App.jsx, Panel.jsx and PmarPanel.jsx all use it, so a new kind of shape needs
+ * to be handled in one place only.
  *
- * Una forma è uno di:
- *   { type: 'circle',    lon, lat, radius }                  raggio in metri
+ * A shape is one of:
+ *   { type: 'circle',    lon, lat, radius }                  radius in metres
  *   { type: 'rectangle', lon_min, lat_min, lon_max, lat_max }
- *   { type: 'polygon',   rings: [ [[lon, lat], …], … ] }     anelli non chiusi, ≥3 vertici
+ *   { type: 'polygon',   rings: [ [[lon, lat], …], … ] }     open rings, ≥3 vertices
  */
 
-/** Vertici con cui si approssima un cerchio quando diventa un poligono GeoJSON. */
+/** Vertices used to approximate a circle when it becomes a GeoJSON polygon. */
 const CIRCLE_VERTICES = 64
 
-/** Metri per grado di latitudine; per la longitudine si corregge col coseno. */
+/** Metres per degree of latitude; for longitude, corrected with the cosine. */
 const M_PER_DEG = 111320
 
 const feature = (ring) => ({
@@ -23,7 +23,7 @@ const feature = (ring) => ({
   properties: {},
 })
 
-/** Chiude un anello ripetendo il primo vertice, come vuole GeoJSON. */
+/** Close a ring by repeating the first vertex, as GeoJSON requires. */
 const closeRing = (ring) => [...ring, ring[0]]
 
 function circleRing({ lon, lat, radius }) {
@@ -38,14 +38,14 @@ function circleRing({ lon, lat, radius }) {
 }
 
 /**
- * Traduce la forma nel GeoJSON che il backend salva come shapefile di seeding.
+ * Turn the shape into the GeoJSON that the backend saves as the release shapefile.
  *
- * Un'area a più poligoni diventa una FeatureCollection con una Feature per
- * anello: `_save_custom_shapefile()` le legge tutte, e OpenDrift semina poi in
- * ciascuna geometria.
+ * An area of several polygons becomes a FeatureCollection with one Feature per ring:
+ * `_save_custom_shapefile()` reads them all, and OpenDrift then seeds in each
+ * geometry.
  *
  * @param {?object} shape
- * @returns {?object} FeatureCollection, o null se non c'è una forma
+ * @returns {?object} FeatureCollection, or null if there is no shape
  */
 export function seedShapeToGeoJSON(shape) {
   if (!shape) return null
@@ -72,8 +72,8 @@ export function seedShapeToGeoJSON(shape) {
 }
 
 /**
- * Riquadro che contiene la forma, nel formato atteso dai processi di overlay
- * (EMODnet, Natura 2000) e dal seeding rettangolare di OpenDrift.
+ * Box that contains the shape, in the format expected by the overlay processes
+ * (EMODnet, Natura 2000) and by OpenDrift's rectangular seeding.
  *
  * @param {?object} shape
  * @returns {?{lon_min: number, lat_min: number, lon_max: number, lat_max: number}}
@@ -103,26 +103,26 @@ export function seedShapeBounds(shape) {
   return { lon_min, lat_min, lon_max, lat_max }
 }
 
-/** Riassunto "N poligoni · M vertici", con il singolare quando serve. */
+/** Summary "N polygons · M vertices", with the singular when needed. */
 export function formatPolygonCounts(shape, labels = {}) {
   const { n, v } = polygonCounts(shape)
   const tpl = (n === 1 ? labels.polygonsOne : labels.polygons) ?? '{n} · {v}'
   return tpl.replace('{n}', n).replace('{v}', v)
 }
 
-/** Numero di anelli e di vertici complessivi di un'area poligonale. */
+/** Number of rings and total vertices of a polygonal area. */
 export function polygonCounts(shape) {
   const rings = shape?.type === 'polygon' ? (shape.rings ?? []) : []
   return { n: rings.length, v: rings.reduce((sum, r) => sum + r.length, 0) }
 }
 
 /**
- * Riassunto leggibile della forma, per il pannello.
+ * Readable summary of the shape, for the panel.
  *
  * @param {?object} shape
- * @param {{polygons: string, polygonsOne: string}} [labels] testi già tradotti,
- *        con i segnaposto `{n}` (poligoni) e `{v}` (vertici); servono solo alle
- *        aree poligonali, e il singolare perché "1 poligoni" si legge male
+ * @param {{polygons: string, polygonsOne: string}} [labels] texts already translated,
+ *        with the placeholders `{n}` (polygons) and `{v}` (vertices); needed only for
+ *        polygonal areas, and the singular because "1 polygons" reads badly
  * @returns {?string}
  */
 export function formatSeedShape(shape, labels = {}) {
@@ -142,9 +142,9 @@ export function formatSeedShape(shape, labels = {}) {
 }
 
 /**
- * Poligoni in cui semina OpenDrift per una forma disegnata: uno per cerchio e
- * rettangolo, uno per anello di un'area poligonale. Serve alla semina per
- * connettività, dove il totale è particelle per poligono × poligoni.
+ * Polygons in which OpenDrift seeds for a drawn shape: one for a circle or rectangle,
+ * one per ring of a polygonal area. Needed by seeding for connectivity, where the
+ * total is particles per polygon × polygons.
  *
  * @param {?object} shape
  * @returns {number}
@@ -156,9 +156,9 @@ export function seedShapePolygonCount(shape) {
 }
 
 /**
- * Poligoni di una geometria GeoJSON contati come li conta il backend
- * (`geometry.explode()`): una MultiPolygon vale quanto le sue parti.
- * Accetta geometrie, Feature e FeatureCollection.
+ * Polygons of a GeoJSON geometry, counted as the backend counts them
+ * (`geometry.explode()`): a MultiPolygon counts as its parts.
+ * Accepts geometries, Features and FeatureCollections.
  *
  * @param {?object} geo
  * @returns {number}

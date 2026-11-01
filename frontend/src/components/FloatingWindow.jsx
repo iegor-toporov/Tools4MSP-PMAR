@@ -32,15 +32,15 @@ export const FloatingWindow = forwardRef(function FloatingWindow(
     if (!el) return
     const { width: elW, height: elH } = el.getBoundingClientRect()
     const { innerWidth: vw, innerHeight: vh } = window
-    // In basso, a sinistra del pannello delle analisi (16 + 310 + 16 px dal bordo
-    // destro): sopra di esso ne coprirebbe i comandi.
+    // At the bottom, to the left of the analysis panel (16 + 310 + 16 px from the right
+    // edge): on top of it, it would cover its controls.
     el.style.top  = `${Math.max(16, vh - 20 - stackIndex * 24 - elH)}px`
     el.style.left = `${Math.max(16, vw - 342 - stackIndex * 16 - elW)}px`
   }, [stackIndex]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // La posizione si calcola all'apertura, ma il contenuto può crescere dopo (il
-  // Confronto aggiunge il grafico alla seconda area): senza questo il fondo della
-  // finestra, col bottone di download, finiva fuori dallo schermo.
+  // The position is computed when the window opens, but the content can grow later
+  // (Compare adds the chart with the second area): without this, the bottom of the
+  // window, with the download button, would end up off screen.
   useEffect(() => {
     const el = nodeRef.current
     if (!el) return

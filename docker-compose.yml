@@ -16,8 +16,8 @@ services:
       - ./cache:/app/cache
       - ./out:/app/out
       - ./scenarios:/app/scenarios
-      # Harness dei benchmark: il codice entra e i CSV dei risultati escono.
-      # Montato, non copiato nell'immagine, così le misure restano sull'host.
+      # Benchmark harness: the code goes in and the result CSV files come out.
+      # Mounted, not copied into the image, so the measurements stay on the host.
       - ./bench:/app/bench
     expose:
       - "5001"
@@ -42,7 +42,7 @@ services:
     environment:
       PYTHONPATH: /app
       REDIS_URL: redis://redis:6379/0
-    # Analisi PMAR e connettività (coda di default), in parallelo.
+    # PMAR and connectivity analyses (default queue), in parallel.
     command: ["celery", "-A", "worker.app", "worker", "-Q", "celery", "--loglevel=info", "--concurrency=3"]
     volumes:
       - ./cache:/app/cache
@@ -56,8 +56,11 @@ services:
     healthcheck:
       disable: true
 
-  # Simulazioni OpenDrift (precompute): un processo solo, una simulazione alla volta;
-  # le altre aspettano nella coda `simulations` e compaiono come "in coda".
+  # OpenDrift simulations (precompute): a single process, one simulation at a time;
+  # the others wait in the `simulations` queue and are shown as "queued".
+  # Each simulation runs in a new process (--max-tasks-per-child=1): the memory goes
+  # back to the system at the end of the run, and the peak recorded in the scenario is
+  # that of the run.
   simulation-worker:
     build:
       context: .
@@ -69,7 +72,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       PMAR_SIMULATION_WORKER: "1"
     command: ["celery", "-A", "worker.app", "worker", "-Q", "simulations", "-n", "simulations@%h",
-              "--loglevel=info", "--concurrency=1"]
+              "--loglevel=info", "--concurrency=1", "--max-tasks-per-child=1"]
     volumes:
       - ./cache:/app/cache
       - ./out:/app/out

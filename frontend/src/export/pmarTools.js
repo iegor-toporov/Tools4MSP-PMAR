@@ -1,45 +1,45 @@
 /**
- * Export dei dati degli strumenti della heatmap PMAR (istogramma, statistiche,
- * profilo, soglia, celle, confronto) come CSV con un'intestazione di metadati.
+ * Export of the data of the PMAR heatmap tools (histogram, statistics, profile,
+ * threshold, cells, comparison) as CSV with a metadata header.
  *
- * Ogni file comincia con righe `# chiave: valore` (analisi, scenario, indicatore,
- * area selezionata…) e prosegue con una tabella. Si legge con
- * pandas `read_csv(f, comment='#')` o R `read.csv(f, comment.char='#')`.
+ * Each file starts with `# key: value` lines (analysis, scenario, indicator, selected
+ * area…) and continues with a table. It is read with pandas
+ * `read_csv(f, comment='#')` or R `read.csv(f, comment.char='#')`.
  *
- * Modulo puro (niente React, niente DOM): testato in pmarTools.test.js.
+ * Pure module (no React, no DOM): tested in pmarTools.test.js.
  */
 
 const KM_PER_DEG = 111.32
 
-/** Area di una cella di `res` gradi centrata alla latitudine `lat` (approssimazione sferica). */
+/** Area of a cell of `res` degrees centred at latitude `lat` (spherical approximation). */
 export function cellAreaKm2(lat, res) {
   return (res * KM_PER_DEG) ** 2 * Math.cos((lat * Math.PI) / 180)
 }
 
-/** Area di un rettangolo lon/lat, in km². */
+/** Area of a lon/lat rectangle, in km². */
 export function boxAreaKm2(latMin, latMax, lonMin, lonMax) {
   const latMid = (latMin + latMax) / 2
   return Math.abs((latMax - latMin) * (lonMax - lonMin) * KM_PER_DEG ** 2 * Math.cos((latMid * Math.PI) / 180))
 }
 
-/** Decimali degli id di cella: gli stessi del tooltip della heatmap (PmarLayer). */
+/** Decimals of the cell ids: the same as the heatmap tooltip (PmarLayer). */
 const idDecimals = res => Math.max(0, Math.ceil(-Math.log10(res)) + 1)
 
-/** Id stabile di una cella, `{lon}E_{lat}N`: lo stesso che mostra il tooltip sulla mappa. */
+/** Stable id of a cell, `{lon}E_{lat}N`: the same as shown by the tooltip on the map. */
 export function cellId(lon, lat, res) {
   const d = idDecimals(res)
   return `${lon.toFixed(d)}E_${lat.toFixed(d)}N`
 }
 
-/** Centro della cella (riga, colonna) del raster `rd`. */
+/** Centre of the cell (row, column) of the raster `rd`. */
 export function cellCenter(rd, row, col) {
   return { lat: rd.raster_lat_min + row * rd.raster_res, lon: rd.raster_lon_min + col * rd.raster_res }
 }
 
 /**
- * Quantile con interpolazione lineare fra i due valori vicini: la definizione di
- * default di numpy, pandas e R (tipo 7), così i numeri si ritrovano rifacendo il conto.
- * `sorted` deve essere ordinato in modo crescente.
+ * Quantile with linear interpolation between the two nearest values: the default
+ * definition of numpy, pandas and R (type 7), so the numbers can be reproduced.
+ * `sorted` must be in ascending order.
  */
 export function quantile(sorted, p) {
   if (!sorted.length) return NaN
@@ -51,20 +51,20 @@ export function quantile(sorted, p) {
 
 // ── CSV ─────────────────────────────────────────────────────────────────────
 
-/** Campo CSV: tra virgolette solo se contiene virgole, virgolette o a capo. */
+/** CSV field: quoted only if it contains commas, quotes or line breaks. */
 function csvField(v) {
   const s = v === Infinity ? 'inf' : String(v ?? '')
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
 }
 
-/** Righe `# chiave: valore`; quelle con valore vuoto si saltano. */
+/** `# key: value` lines; those with an empty value are skipped. */
 function headerLines(pairs) {
   return pairs
     .filter(([, v]) => v !== null && v !== undefined && v !== '')
     .map(([k, v]) => `# ${k}: ${String(v).replace(/\n/g, ' ')}`)
 }
 
-/** Intestazione comune: strumento, analisi, scenario, valore, griglia, data. */
+/** Common header: tool, analysis, scenario, value, grid, date. */
 export function metaHeader(tool, meta = {}, extra = []) {
   const sc = meta.scenario ?? {}
   const scenario = [sc.label, sc.start_time?.slice(0, 10),
@@ -83,14 +83,14 @@ export function metaHeader(tool, meta = {}, extra = []) {
   ])
 }
 
-/** CSV completo: intestazione `#`, riga delle colonne, righe di dati. */
+/** Complete CSV: `#` header, column row, data rows. */
 export function toCsv(header, columns, rows) {
   const lines = [...header, columns.join(',')]
   for (const r of rows) lines.push(r.map(csvField).join(','))
   return lines.join('\n') + '\n'
 }
 
-/** Riga di metadati che descrive un rettangolo selezionato. */
+/** Metadata line that describes a selected rectangle. */
 function boxLine(r) {
   const km2 = boxAreaKm2(r.snapLatMin, r.snapLatMax, r.snapLonMin, r.snapLonMax)
   return `lon ${r.snapLonMin.toFixed(4)}..${r.snapLonMax.toFixed(4)}, ` +
@@ -100,8 +100,8 @@ function boxLine(r) {
 // ── Istogramma ──────────────────────────────────────────────────────────────
 
 /**
- * Classi dell'istogramma con i loro limiti. La prima raccoglie anche i valori sotto
- * vmin e l'ultima quelli sopra vmax (come sulla mappa): i loro estremi sono 0 e inf.
+ * Histogram classes with their bounds. The first also collects the values below vmin
+ * and the last those above vmax (as on the map): their outer bounds are 0 and inf.
  */
 export function histogramBins(h) {
   return h.bins.map((count, i) => ({
@@ -128,7 +128,7 @@ export function histogramCsv(result, meta) {
 
 // ── Statistiche ─────────────────────────────────────────────────────────────
 
-/** Statistiche delle celle con valore > 0 di un rettangolo (quantili come numpy). */
+/** Statistics of the cells with value > 0 in a rectangle (quantiles as in numpy). */
 export function computeStats(rasterValues, colMin, colMax, rowMin, rowMax) {
   const vals = []
   for (let r = rowMin; r <= rowMax; r++)
@@ -176,9 +176,9 @@ export function profileCsv(profile, meta) {
 // ── Soglia ──────────────────────────────────────────────────────────────────
 
 /**
- * Curva di superamento: per `n` soglie log-equispaziate fra vmin e vmax, quante celle
- * stanno sopra soglia, la loro area reale (cos(lat)) e la percentuale di celle.
- * `cells` = `[{ v, lat }]`, solo celle con valore > 0.
+ * Exceedance curve: for `n` log-spaced thresholds between vmin and vmax, how many cells
+ * are above the threshold, their real area (cos(lat)) and the percentage of cells.
+ * `cells` = `[{ v, lat }]`, only cells with value > 0.
  */
 export function exceedanceCurve(cells, vmin, vmax, res, n = 50) {
   const lo = Math.log10(Math.max(vmin > 0 ? vmin : 1e-6, 1e-12))
@@ -206,7 +206,7 @@ export function thresholdCsv(result, meta, n = 50) {
 
 // ── Celle ───────────────────────────────────────────────────────────────────
 
-/** Tutte le celle del rettangolo, zeri compresi: una griglia regolare senza buchi. */
+/** All the cells of the rectangle, zeros included: a regular grid without holes. */
 export function cellsCsv(rd, snap, meta) {
   const res = rd.raster_res
   const rows = []
@@ -227,7 +227,7 @@ export function cellsCsv(rd, snap, meta) {
 
 // ── Confronto ───────────────────────────────────────────────────────────────
 
-/** Formato lungo: una riga per (area, classe); i metadati di ogni area nell'intestazione. */
+/** Long format: one row per (area, class); the metadata of each area in the header. */
 export function comparisonCsv(areas, names, meta) {
   const extra = areas.map((a, i) => [
     `area ${names[i] ?? i}`,

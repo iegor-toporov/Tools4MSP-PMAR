@@ -1,12 +1,12 @@
-process,config,scenario,units,repeats,wall_s_median,wall_s_spread,payload_mb
-pmar,res=0.1,custom_64978f32,624,3,23.12,0.97,0.02
-pmar,res=0.05,custom_64978f32,2544,3,21.18,0.01,0.03
-connectivity,passage grid=0.5,custom_64978f32,,3,,,
-connectivity,passage grid=0.25,custom_64978f32,6,3,8.07,0.04,0.03
-connectivity,transition grid=0.5,custom_64978f32,,3,,,
-connectivity,transition grid=0.25,custom_64978f32,6,3,7.09,1.19,0.02
-markov,res=0.5,custom_64978f32,2,3,1.52,1.15,0.01
-markov,res=0.25,custom_64978f32,6,3,1.03,0.01,0.01
-markov,res=0.1,custom_64978f32,24,3,1.03,0.36,0.02
-markov,dt=1d,custom_64978f32,6,3,1.03,0.01,0.01
-markov,dt=10d,custom_64978f32,,3,,,
+process,config,scenario,units,repeats,service_s_median,service_s_spread,wall_s_median,wall_s_spread,payload_mb
+pmar,res=0.1,custom_64978f32,624,3,0.173,0.069,1.05,0.02,0.02
+pmar,res=0.05,custom_64978f32,2544,3,0.174,0.175,1.03,0.03,0.03
+connectivity,passage grid=0.5,custom_64978f32,,3,,,,,
+connectivity,passage grid=0.25,custom_64978f32,6,3,0.242,0.024,1.04,0.01,0.03
+connectivity,transition grid=0.5,custom_64978f32,,3,,,,,
+connectivity,transition grid=0.25,custom_64978f32,6,3,0.061,0.006,1.03,0.0,0.02
+markov,res=0.5,custom_64978f32,2,3,0.027,0.005,1.03,0.0,0.01
+markov,res=0.25,custom_64978f32,6,3,0.028,0.005,1.04,0.01,0.01
+markov,res=0.1,custom_64978f32,24,3,0.027,0.003,1.03,0.01,0.02
+markov,dt=1d,custom_64978f32,6,3,0.026,0.008,1.03,0.01,0.01
+markov,dt=10d,custom_64978f32,,3,,,,,

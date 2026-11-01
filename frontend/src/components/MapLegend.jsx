@@ -2,24 +2,24 @@ import { useEffect, useRef, useState } from 'react'
 import { IconChevronDown, IconChevronRight, IconX } from '@tabler/icons-react'
 
 /**
- * Legenda interattiva della mappa: una sezione per layer visibile (heatmap, poligoni
- * di connettività, frecce), ogni riga una classe di valori. Cliccare una riga la
- * accende o la spegne; le classi accese restano a colori pieni sulla mappa, le altre
- * vengono attenuate dal layer.
+ * Interactive legend of the map: one section per visible layer (heatmap, connectivity
+ * polygons, arrows), each row a class of values. Clicking a row switches it on or off;
+ * the classes that are on keep full colours on the map, the others are dimmed by the
+ * layer.
  *
- * Il componente è solo presentazione: classi, conteggi e selezione arrivano da App.
+ * The component is presentation only: classes, counts and selection come from App.
  *
  * @param {Array<{
  *   key: string, title: string,
  *   rows: Array<{ swatch: object, label: string, count: number, index?: number }>,
  *   selected: Set<number>, onToggle: (index: number) => void, onReset: () => void,
- * }>} sections  righe dall'alto (valori alti) in basso; senza `index` non è cliccabile
+ * }>} sections  rows from top (high values) to bottom; without `index` a row is not clickable
  */
 export default function MapLegend({ sections, labels, maxHeight }) {
   const [collapsed, setCollapsed] = useState({})
 
-  // Quando compare una sezione nuova (es. una connettività dopo la PPI) resta aperta
-  // solo lei: lo spazio sotto il pannello strumenti non basta per tre sezioni aperte.
+  // When a new section appears (e.g. a connectivity after the PPI) only that one stays
+  // open: the space below the tools panel is not enough for three open sections.
   const seen = useRef(new Set())
   const keys = sections.map(s => s.key).join('|')
   useEffect(() => {
@@ -88,14 +88,14 @@ export default function MapLegend({ sections, labels, maxHeight }) {
   )
 }
 
-/** Campione: quadrato pieno per celle e poligoni, tratto per le frecce. */
+/** Swatch: a filled square for cells and polygons, a line for arrows. */
 function Swatch({ color, line, width = 2, dashed }) {
   if (line) {
     return (
       <span className="map-legend-swatch">
         <span style={{ display: 'block', width: 18, height: Math.max(1, width),
                        background: color, borderRadius: 2,
-                       // le fasce basse sono quasi bianche: senza contorno sparirebbero
+                       // the low bands are almost white: without an outline they would vanish
                        boxShadow: '0 0 0 0.5px rgba(0,0,0,0.3)' }} />
       </span>
     )

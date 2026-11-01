@@ -1,9 +1,9 @@
-"""OGC API - Processes: analisi di connettività marina su uno scenario pre-calcolato.
+"""OGC API - Processes: marine connectivity analysis on a pre-computed scenario.
 
-Costruisce una matrice di connettività fra i poligoni forniti dall'utente partendo
-dalle traiettorie lagrangiane di uno scenario già simulato, e ne deriva le metriche
-di teoria dei grafi descritte in Bosi et al. (2026): in-strength, out-strength e
-betweenness centrality, più la rete di archi direzionali fra i poligoni.
+It builds a connectivity matrix between the polygons given by the user from the
+Lagrangian trajectories of a scenario already simulated, and derives from it the
+graph measures described in Bosi et al. (2026): in-strength, out-strength and
+betweenness centrality, plus the network of directed edges between the polygons.
 """
 
 import json
@@ -21,26 +21,26 @@ from processes.access import is_unlocked, require_scenario
 
 logger = setup_logger('connectivity_process', 'pmar', 'connectivity.log')
 
-# La matrice restituita è densa (n x n): oltre questa soglia il payload JSON
-# diventa ingestibile per Redis e per la tabella nel frontend.
+# The returned matrix is dense (n x n): beyond this threshold the JSON payload becomes
+# unmanageable for Redis and for the table in the frontend.
 MAX_POLYGONS = 300
 
-# Sotto questo numero di particelle rilasciate, la riga di un poligono è
-# statisticamente debole: la segnaliamo invece di presentarla come valida.
+# Below this number of released particles, the row of a polygon is statistically
+# weak: it is flagged instead of being presented as valid.
 MIN_PARTICLES = 30
 
-# Tetto al numero di passate di point-in-polygon per la probabilità di passaggio,
-# che altrimenti itera su ogni singolo timestep fino all'orizzonte richiesto.
+# Cap on the number of point-in-polygon passes for the passage probability, which
+# would otherwise iterate over every single time step up to the requested horizon.
 MAX_TIME_PASSES = 180
 
 SIMPLIFY_TOLERANCE = 0.005
 
-# Risoluzione della griglia automatica (gradi): libera in questo intervallo. Il
-# limite vero è il numero di celle di mare (MAX_POLYGONS), controllato dopo.
+# Resolution of the automatic grid (degrees): free within this range. The real limit
+# is the number of sea cells (MAX_POLYGONS), checked afterwards.
 GRID_RES_MIN, GRID_RES_MAX = 0.05, 5.0
 
-# Tetto alle feature della rete di archi. Oltre, si tengono gli archi con
-# probabilità più alta: la matrice resta completa, si alleggerisce solo il disegno.
+# Cap on the features of the edge network. Beyond it, the edges with the highest
+# probability are kept: the matrix stays complete, only the drawing gets lighter.
 MAX_EDGE_FEATURES = 1500
 
 METRICS = ('in_strength', 'out_strength', 'betweenness')
@@ -156,7 +156,7 @@ PROCESS_METADATA = {
 
 
 def _load_scenario(scenario_id):
-    """Carica i metadata di uno scenario pre-calcolato e i path dei suoi NetCDF."""
+    """Load the metadata of a pre-computed scenario and the paths of its NetCDF files."""
     if not scenario_id:
         raise ProcessorExecuteError('Provide scenario_id.')
     if not str(scenario_id).startswith('custom_'):
@@ -168,7 +168,7 @@ def _load_scenario(scenario_id):
     with open(meta_path) as f:
         sc = json.load(f)
 
-    # Stesso pattern di compatibilità multi-seeding usato da PMARProcess.
+    # Same compatibility pattern for several releases as in PMARProcess.
     nc_filenames = sc.get('nc_filenames') or [sc['nc_filename']]
     nc_list = []
     for fn in nc_filenames:
@@ -182,7 +182,7 @@ def _load_scenario(scenario_id):
 
 
 def _scenario_bbox(sc):
-    """Bounds dell'area di semina dello scenario, usati quando il bbox non è dato."""
+    """Bounds of the scenario's release area, used when no bbox is given."""
     shp = sc.get('shapefile')
     if not shp or not os.path.exists(shp):
         raise ProcessorExecuteError(
@@ -193,17 +193,18 @@ def _scenario_bbox(sc):
 
 
 def _make_grid_polygons(res, bbox):
-    """Costruisce i nodi come celle regolari di oceano su *bbox*.
+    """Build the nodes as regular ocean cells over *bbox*.
 
-    `make_grid` maschera la terraferma con le polygon oceaniche Natural Earth e
-    `make_vector_grid` scarta le celle vuote, quindi restano solo celle di mare:
-    una cella a secco avrebbe comunque una riga tutta a zero.
+    `make_grid` masks the land with the Natural Earth ocean polygons and
+    `make_vector_grid` drops the empty cells, so only sea cells remain: a cell on land
+    would have a row of zeros anyway.
 
     Returns:
-        tuple[geopandas.GeoDataFrame, list[str]]: celle con ``node_id``/``node_label``
-        e le etichette, nello stesso formato di :func:`_read_polygons`.
+        tuple[geopandas.GeoDataFrame, list[str]]: cells with ``node_id``/``node_label``
+        and the labels, in the same format as :func:`_read_polygons`.
     """
-    from pmar.utils import make_grid, make_vector_grid
+    from pmar.utils import make_vector_grid
+    from processes.ocean_grid import make_grid
 
     if not (GRID_RES_MIN <= res <= GRID_RES_MAX):
         raise ProcessorExecuteError(
@@ -211,8 +212,8 @@ def _make_grid_polygons(res, bbox):
         )
     lon_min, lat_min, lon_max, lat_max = align_bbox(bbox, res)
 
-    # Stima prima di costruire: make_grid vettorializza l'intero riquadro, e su
-    # una griglia assurda si pagherebbero minuti prima di poter rifiutare.
+    # Estimate before building: make_grid vectorises the whole box, and on an absurd
+    # grid it would take minutes before the request could be rejected.
     estimate = math.ceil((lon_max - lon_min) / res) * math.ceil((lat_max - lat_min) / res)
     if estimate > MAX_POLYGONS * 4:
         raise ProcessorExecuteError(
@@ -233,9 +234,9 @@ def _make_grid_polygons(res, bbox):
             f'{MAX_POLYGONS}: use a coarser resolution.'
         )
 
-    # Etichette r<riga>c<colonna> calcolate sui bounds *reali* della griglia: per
-    # chiudere l'ultima cella make_grid può sforare il bbox richiesto, e sui
-    # bounds richiesti verrebbero fuori indici negativi.
+    # Labels r<row>c<column> computed on the *actual* bounds of the grid: to close the
+    # last cell, make_grid can go beyond the requested bbox, and on the requested
+    # bounds the indices would come out negative.
     gb = gdf.total_bounds
     centroids = gdf.geometry.centroid
     labels = [
@@ -248,9 +249,9 @@ def _make_grid_polygons(res, bbox):
 
 
 def align_bbox(bbox, res):
-    """Bbox allargato ai multipli di *res*: le celle risultano le stesse della
-    griglia Markov (markov_core.Grid), e una matrice di transizione calcolata qui
-    descrive le stesse celle di una previsione con gli stessi res e bbox."""
+    """Bbox enlarged to multiples of *res*: the cells are the same as those of the
+    Markov grid (markov_core.Grid), and a transition matrix computed here describes
+    the same cells as a forecast with the same res and bbox."""
     lon_min, lat_min, lon_max, lat_max = (float(v) for v in bbox)
     if lon_max <= lon_min or lat_max <= lat_min:
         raise ProcessorExecuteError(f'Invalid bounding box: {bbox}.')
@@ -261,8 +262,8 @@ def align_bbox(bbox, res):
 
 
 def _seeding_area_polygons(sc):
-    """Poligoni dell'area di semina dello scenario, uno per nodo: le parti di un
-    multipoligono diventano nodi distinti, come le aree di un network di MPA."""
+    """Polygons of the scenario's release area, one per node: the parts of a
+    multipolygon become separate nodes, like the areas of an MPA network."""
     shp = sc.get('shapefile')
     if not shp or not os.path.exists(shp):
         raise ProcessorExecuteError('The scenario has no seeding area on disk.')
@@ -287,24 +288,24 @@ def _seeding_area_polygons(sc):
 
 
 def _warning(code, message, **params):
-    """Avviso per il client: ``code`` + parametri, che il frontend traduce.
+    """Warning for the client: ``code`` plus parameters, which the frontend translates.
 
-    ``message`` (in inglese) serve solo a chi usa l'API senza conoscere i codici:
-    il frontend compone il testo nella lingua dell'utente da ``code`` e parametri.
+    ``message`` (in English) is only for API users who do not know the codes: the
+    frontend composes the text in the user's language from ``code`` and parameters.
     """
     return {'code': code, **params, 'message': message}
 
 
 def _trim_edges(edges_geojson, warnings):
-    """Dirada la rete quando è troppo fitta da disegnare, equamente fra i nodi.
+    """Thin the network when it is too dense to draw, fairly across the nodes.
 
-    Il taglio è per coppia (curva e punta di freccia restano insieme) e procede a
-    giri: a ogni giro ciascun nodo cede il suo arco uscente più probabile ancora
-    disponibile. Tenere semplicemente i più forti in assoluto concentrerebbe tutto
-    il disegno su poche celle di passaggio, e cliccando una qualsiasi delle altre
-    non apparirebbe un solo arco — pur avendo la matrice piena di valori.
+    The cut is per pair (curve and arrowhead stay together) and proceeds in rounds: in
+    each round every node gives up its most probable outgoing edge still available.
+    Simply keeping the strongest edges overall would concentrate the whole drawing on
+    a few corridor cells, and clicking any of the others would show not a single edge,
+    even with a matrix full of values.
 
-    La matrice restituita resta comunque completa: si perde disegno, non dato.
+    The returned matrix stays complete: the drawing loses edges, the data does not.
     """
     feats = edges_geojson.get('features', [])
     if len(feats) <= MAX_EDGE_FEATURES:
@@ -346,7 +347,7 @@ def _trim_edges(edges_geojson, warnings):
 
 
 def _read_polygons(data, tmpdir, label_field):
-    """Legge i poligoni dei nodi, preservando gli attributi come etichette."""
+    """Read the node polygons, keeping their attributes as labels."""
     shp_path = _resolve_shapefile(data.get('geojson'), data.get('shapefile_b64'), tmpdir)
     gdf = gpd.read_file(shp_path).to_crs('EPSG:4326')
 
@@ -360,9 +361,9 @@ def _read_polygons(data, tmpdir, label_field):
     if not gdf.geometry.geom_type.isin(['Polygon', 'MultiPolygon']).all():
         raise ProcessorExecuteError('The shapefile must contain polygons only.')
 
-    # Etichette dei nodi. node_id è anche la garanzia che cm_grid abbia sempre una
-    # colonna non geometrica: PMAR la usa per riconoscere la cella buffer e senza
-    # di essa solleverebbe IndexError.
+    # Node labels. node_id also guarantees that cm_grid always has a non-geometry
+    # column: PMAR uses it to recognise the buffer cell, and without it it would
+    # raise IndexError.
     if label_field and label_field in gdf.columns:
         labels = gdf[label_field].astype(str).tolist()
     elif label_field:
@@ -380,7 +381,7 @@ def _read_polygons(data, tmpdir, label_field):
 
 
 def _indicator(ll, n_cells, n_traj):
-    """Matrice sparsa 0/1 (celle × traiettorie) da un dict ``{cella: id traiettorie}``."""
+    """Sparse 0/1 matrix (cells × trajectories) from a dict ``{cell: trajectory ids}``."""
     from scipy.sparse import csr_array
 
     rows = [np.full(len(ids), i) for i, ids in ll.items()]
@@ -391,14 +392,13 @@ def _indicator(ll, n_cells, n_traj):
 
 
 def _passage_matrix(pm, t_max, cm_grid):
-    """Probabilità di passaggio: passare dal poligono i al poligono j almeno una volta entro *t_max* timestep.
+    """Passage probability: going from polygon i through polygon j at least once within *t_max* time steps.
 
-    È la connettività strutturale della tesi di Bosi. Riproduce
-    ``PMAR.get_cm_within_range`` del fork, rimosso dalla libreria pubblica
-    CNR-ISMAR/pmar come codice inutilizzato (commit c1f6922): qui usa solo
-    ``get_particles_by_cell``, che resta API pubblica. Come l'originale,
-    l'insieme dei passaggi parte da t=1 e la riga i si normalizza sulle
-    particelle presenti in i a t=0.
+    The same quantity as ``PMAR.get_cm_within_range`` (CNR-ISMAR/pmar, commit
+    38b69b1): the set of passages starts at t=1 and row i is normalised by the
+    particles in i at t=0. The library joins Python sets cell by cell; here sparse
+    indicator matrices are added and set back to 1, with the same result.
+    bench/run.py equivalence compares the two.
     """
     from scipy.sparse import coo_array, diags
 
@@ -411,7 +411,7 @@ def _passage_matrix(pm, t_max, cm_grid):
         At = A if At is None else At + A
     if At is None:
         At = _indicator({}, n_cells, n_traj)
-    # Unione dei passaggi: conta se la particella è passata, non quante volte.
+    # Union of the passages: what counts is whether the particle passed, not how often.
     At.data[:] = 1.0
 
     Nij = A0 @ At.T
@@ -423,7 +423,7 @@ def _passage_matrix(pm, t_max, cm_grid):
 
 
 def _time_window(ds, sc, t_days, mode):
-    """Traduce l'orizzonte in giorni nel numero di timestep, con eventuale stride."""
+    """Turn the horizon in days into a number of time steps, with a stride if needed."""
     n_time = int(ds.sizes['time'])
     step_h = float(sc.get('time_step_hours') or 1)
     horizon = float(t_days) if t_days else float(sc.get('duration_days') or 0)
@@ -433,8 +433,8 @@ def _time_window(ds, sc, t_days, mode):
         steps = int(round(horizon * 24.0 / step_h))
     steps = max(1, min(steps, n_time - 1))
 
-    # Il passaggio ripete il point-in-polygon su ogni timestep: sotto-campioniamo
-    # per tenere il costo sotto controllo (la tesi lavora a passi di 4 ore).
+    # Passage repeats the point-in-polygon test at every time step: the time axis is
+    # subsampled to keep the cost under control.
     stride = 1
     if mode == 'passage' and steps > MAX_TIME_PASSES:
         stride = int(math.ceil(steps / MAX_TIME_PASSES))
@@ -442,7 +442,7 @@ def _time_window(ds, sc, t_days, mode):
 
 
 class ConnectivityProcessor(BaseProcessor):
-    """OGC API Process che calcola la connettività fra poligoni su uno scenario."""
+    """OGC API Process that computes the connectivity between polygons on a scenario."""
 
     def __init__(self, processor_def):
         """Initialise the processor with its OGC API metadata definition."""
@@ -462,15 +462,15 @@ class ConnectivityProcessor(BaseProcessor):
         """
         import xarray as xr
         from pmar.pmar import PMAR
-        # pmar.py imposta PROJ_LIB/PROJ_DATA a import-time su un path inesistente
-        # nel container, corrompendo pyproj/rasterio. Va rimosso dopo l'import.
+        # pmar.py sets PROJ_LIB/PROJ_DATA at import time to a path that does not exist
+        # in the container, which breaks pyproj/rasterio. Remove it after the import.
         os.environ.pop('PROJ_LIB', None)
         os.environ.pop('PROJ_DATA', None)
 
         scenario_id = data.get('scenario_id')
         require_scenario(scenario_id, is_unlocked(data))
         mode        = str(data.get('mode') or 'passage').lower()
-        # "passage" si chiamava "transit": il vecchio nome resta accettato.
+        # "passage" was called "transit": the old name is still accepted.
         if mode == 'transit':
             mode = 'passage'
         label_field = data.get('node_label_field') or None
@@ -488,9 +488,9 @@ class ConnectivityProcessor(BaseProcessor):
         warnings = []
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            # Due modi di definire i nodi: i poligoni dell'utente, oppure una
-            # griglia regolare di celle di mare su un riquadro. I poligoni hanno
-            # la precedenza, perché darli entrambi è quasi sempre una svista.
+            # Two ways to define the nodes: the user's polygons, or a regular grid of
+            # sea cells over a box. The polygons take precedence, because giving both
+            # is almost always an oversight.
             if data.get('node_source') == 'seeding_area':
                 gdf, labels = _seeding_area_polygons(sc)
                 node_source, grid_res, grid_bbox = 'seeding_area', None, None
@@ -507,8 +507,8 @@ class ConnectivityProcessor(BaseProcessor):
                 grid_bbox = align_bbox(grid_bbox, grid_res)
                 gdf, labels = _make_grid_polygons(grid_res, grid_bbox)
                 node_source = 'grid'
-                logger.info(f'[Connectivity] griglia {grid_res}° su {grid_bbox}: '
-                            f'{len(gdf)} celle di mare')
+                logger.info(f'[Connectivity] grid {grid_res}° over {grid_bbox}: '
+                            f'{len(gdf)} sea cells')
             else:
                 raise ProcessorExecuteError(
                     'Provide the polygons (shapefile_b64 or geojson), or grid_res '
@@ -523,7 +523,7 @@ class ConnectivityProcessor(BaseProcessor):
             ]
 
             logger.info(
-                f'[Connectivity] scenario={scenario_id} mode={mode} nodi={n_nodes} '
+                f'[Connectivity] scenario={scenario_id} mode={mode} nodes={n_nodes} '
                 f'seedings={len(nc_list)} self_loops={self_loops}'
             )
 
@@ -543,7 +543,7 @@ class ConnectivityProcessor(BaseProcessor):
                     pm.study_area = study_area
 
                     if mode == 'passage':
-                        # a differenza di get_cm, il passaggio non assegna pm.cm
+                        # unlike get_cm, the passage function does not set pm.cm
                         cm = _passage_matrix(pm, t_max=int(ds.sizes['time']), cm_grid=gdf)
                         pm.cm = cm
                     else:
@@ -567,14 +567,14 @@ class ConnectivityProcessor(BaseProcessor):
 
             metrics_gdf = pm.connectivity_analysis(node_name='node_label',
                                                    self_loops=self_loops)
-            # Niente node_names: con quelli export_network mette le etichette in
-            # source/target, mentre il frontend filtra gli archi confrontandoli
-            # con node_id (intero). Le etichette viaggiano già in node_labels.
+            # No node_names: with them export_network puts the labels in source/target,
+            # while the frontend filters the edges by comparing them with node_id
+            # (an integer). The labels already travel in node_labels.
             pm.get_network(cm=cm_mean)
             edges_geojson = pm.export_network(node_shapes=gdf, include_nodes=False)
             if not self_loops:
-                # Gli auto-anelli sono esclusi dalle metriche: disegnarli comunque
-                # sarebbe incoerente, e visivamente coprono i poligoni.
+                # Self-loops are excluded from the measures: drawing them anyway would
+                # be inconsistent, and they cover the polygons visually.
                 feats = edges_geojson.get('features', [])
                 edges_geojson['features'] = [
                     f for f in feats
@@ -582,12 +582,12 @@ class ConnectivityProcessor(BaseProcessor):
                 ]
 
             released = (released / len(nc_list)).round().astype(int)
-            # 6 decimali: a 4 le probabilità sotto 5e-5 diventerebbero 0 e sparirebbero
-            # dagli export sparsi (elenco di archi, Matrix Market) del frontend.
+            # 6 decimals: with 4, probabilities below 5e-5 would become 0 and disappear
+            # from the frontend's sparse exports (edge list, Matrix Market).
             matrix = np.asarray(cm_mean.todense(), dtype=float).round(6)
 
-            # Il GeoJSON deve portarsi dietro le properties: semplificare con
-            # gdf.simplify() restituirebbe una GeoSeries e le perderebbe.
+            # The GeoJSON must carry the properties: simplifying with gdf.simplify()
+            # would return a GeoSeries and lose them.
             out = metrics_gdf.copy()
             out['node_id'] = list(range(n_nodes))
             out['n_released'] = released
@@ -646,8 +646,8 @@ class ConnectivityProcessor(BaseProcessor):
             }
 
             logger.info(
-                f'[Connectivity] completato: {n_nodes} nodi, '
-                f'{int((matrix > 0).sum())} archi non nulli, warning={len(warnings)}'
+                f'[Connectivity] done: {n_nodes} nodes, '
+                f'{int((matrix > 0).sum())} non-zero edges, warnings={len(warnings)}'
             )
             return 'application/json', result
 

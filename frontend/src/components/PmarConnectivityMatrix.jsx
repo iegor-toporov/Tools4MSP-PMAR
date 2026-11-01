@@ -5,7 +5,7 @@ import { useLang } from '../LanguageContext'
 import { FloatingWindow } from './FloatingWindow'
 import { formatCell, sparseEntries, toDenseTsv, toEdgeListCsv, toMatrixMarket } from '../export/connectivityMatrix'
 
-/** Scarica un testo come file. Blob e non `data:` URI: con 300 nodi sarebbe enorme. */
+/** Download a text as a file. A Blob and not a `data:` URI: with 300 nodes it would be huge. */
 function saveText(text, filename, type) {
   const url = URL.createObjectURL(new Blob([text], { type }))
   Object.assign(document.createElement('a'), { href: url, download: filename }).click()
@@ -51,7 +51,7 @@ export const PmarConnectivityMatrix = forwardRef(function PmarConnectivityMatrix
   const nonZero = useMemo(() => (matrix ? sparseEntries(matrix).length : 0), [matrix])
   const fileBase = () => `pmar_connectivity_${data.mode}_${Date.now()}`
 
-  // Densa (tutte le n² caselle), elenco di archi e Matrix Market (solo le non nulle).
+  // Dense (all n² entries), edge list and Matrix Market (non-zero entries only).
   const downloads = [
     { key: 'dense', label: c.downloadDense,
       run: () => saveText(toDenseTsv(matrix, labels, c.connectivityFrom), `${fileBase()}.tsv`, 'text/tab-separated-values') },

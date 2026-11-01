@@ -1,21 +1,21 @@
-"""Catalogo CMEMS, scelta dei dataset e indice della cache delle forzanti.
+"""CMEMS catalogue, dataset choice and index of the forcing cache.
 
-Tre pezzi, senza dipendenze da OpenDrift:
+Three parts, with no dependency on OpenDrift:
 
-- **Catalogo.** `copernicusmarine.describe` per ogni ID del registro
-  (`data/cmems_datasets.py`): estensione e periodo coperto, salvati in
-  `cache/cmems_catalog.json` e aggiornati una volta al giorno. I prodotti di analisi e
-  previsione sono finestre mobili di circa due anni, le reanalisi arrivano a qualche
-  settimana fa: il periodo non si può scrivere nel codice.
-- **Scelta** (`plan_family`): per una famiglia di variabili, un riquadro e un periodo,
-  quali dataset scaricare. Come PMAR (`pmar.utils.select_spatial_domain`): il bacino
-  regionale dove c'è, il globale a coprire il resto. Nessun "prova e fallisci": ogni
-  tentativo a vuoto costava 2–5 s di rete.
-- **Indice della cache.** Accanto a ogni file `cmems_*.nc` un `.json` con dataset,
-  variabili, riquadro, periodo e profondità: una richiesta si serve con qualunque file
-  che la **contiene**, non solo con uno identico.
+- **Catalogue.** `copernicusmarine.describe` for every ID of the registry
+  (`data/cmems_datasets.py`): extent and period covered, saved in
+  `cache/cmems_catalog.json` and refreshed once a day. Analysis and forecast products
+  are moving windows of about two years, reanalyses end a few weeks ago: the period
+  cannot be written in the code.
+- **Choice** (`plan_family`): for a family of variables, a box and a period, which
+  datasets to download. As in PMAR (`pmar.utils.select_spatial_domain`): the regional
+  basin where there is one, the global product to cover the rest. No "try and fail":
+  every empty attempt cost 2–5 s of network.
+- **Cache index.** Next to every `cmems_*.nc` file, a `.json` with dataset, variables,
+  box, period and depth: a request is served by any file that **contains** it, not only
+  by an identical one.
 
-Testato in `tests/test_cmems_select.py` con un catalogo finto, senza rete.
+Tested in `tests/test_cmems_select.py` with a fake catalogue, without network.
 """
 
 import fcntl
@@ -35,13 +35,13 @@ _ROOT        = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CACHE_DIR    = os.environ.get('CMEMS_CACHE_DIR', os.path.join(_ROOT, 'cache'))
 CATALOG_PATH = os.path.join(CACHE_DIR, 'cmems_catalog.json')
 CATALOG_MAX_AGE_H = 24
-# Spazio massimo della cache delle forzanti: oltre, si tolgono i file usati meno di
-# recente. Configurabile con CMEMS_CACHE_MAX_GB.
+# Maximum size of the forcing cache: beyond it, the least recently used files are
+# removed. Configurable with CMEMS_CACHE_MAX_GB.
 CACHE_MAX_GB = float(os.environ.get('CMEMS_CACHE_MAX_GB', '20'))
-# Un file usato da poco non si toglie: potrebbe servire alla simulazione in corso.
+# A recently used file is not removed: the running simulation may need it.
 EVICT_GRACE_S = 2 * 3600
 
-# Errori che non passano riprovando: dataset, variabile o area inesistenti, credenziali.
+# Errors that retrying does not fix: missing dataset, variable or area, credentials.
 PERMANENT_ERRORS = {
     'DatasetNotFound', 'DatasetVersionNotFound', 'DatasetVersionPartNotFound',
     'DatasetIsNotPartOfTheProduct', 'ProductNotFound', 'VariableDoesNotExistInTheDataset',
@@ -50,13 +50,13 @@ PERMANENT_ERRORS = {
     'NoServiceAvailable', 'ServiceNotAvailable', 'LonLatSubsetNotAvailableInOriginalGridDatasets',
 }
 
-# Dove coprono entrambi, prima l'analisi: la reanalisi è servita circa due volte più
-# lentamente (misurato: 312–358 s contro 128–157 s per gli stessi 60 MB).
+# Where both cover the period, the analysis comes first: the reanalysis is served about
+# twice as slowly (measured: 312–358 s against 128–157 s for the same 60 MB).
 KIND_RANK = {'anfc': 0, 'my': 1, 'static': 2}
 
 
 def is_permanent(err):
-    """Errore che riprovare non risolve."""
+    """An error that retrying does not fix."""
     return type(err).__name__ in PERMANENT_ERRORS
 
 
@@ -67,7 +67,7 @@ def _ms_to_iso(v):
 
 
 def _describe_one(dataset_id):
-    """Estensione e periodo di un dataset dal catalogo CMEMS, o un errore."""
+    """Extent and period of a dataset from the CMEMS catalogue, or an error."""
     import copernicusmarine as cm
     try:
         cat = cm.describe(dataset_id=dataset_id, disable_progress_bar=True)
@@ -83,8 +83,8 @@ def _describe_one(dataset_id):
             'version': version.label,
             'services': sorted(str(s.service_name.value if hasattr(s.service_name, 'value')
                                    else s.service_name) for s in part.services)}
-    # Data di ritiro della versione corrente: dopo, copernicusmarine passa da sé alla
-    # versione nuova (stesso ID); il controllo del catalogo la segnala per ricontrollare.
+    # Retirement date of the current version: afterwards, copernicusmarine moves to the
+    # new version by itself (same ID); the catalogue check reports it for review.
     retire = getattr(part, 'retired_date', None)
     if retire:
         info['retirement'] = str(retire)[:10]
@@ -103,9 +103,9 @@ def _describe_one(dataset_id):
 
 
 def refresh_catalog(ids=None, workers=8):
-    """Rilegge dal catalogo CMEMS i dataset del registro e salva il risultato.
+    """Read the registry datasets from the CMEMS catalogue again and save the result.
 
-    In parallelo: una richiesta costa 2–5 s, tutto il registro una trentina di secondi.
+    In parallel: one request costs 2–5 s, the whole registry about thirty seconds.
     """
     from concurrent.futures import ThreadPoolExecutor
     ids = ids or dataset_ids()
@@ -125,10 +125,10 @@ def refresh_catalog(ids=None, workers=8):
 
 
 def load_catalog(allow_refresh=True, max_age_h=CATALOG_MAX_AGE_H):
-    """Il catalogo salvato; se manca o è vecchio e `allow_refresh`, lo rilegge.
+    """The saved catalogue; if it is missing or old and `allow_refresh`, read it again.
 
-    Senza rete il catalogo vecchio va bene lo stesso; senza nessun catalogo la scelta
-    usa le estensioni di riserva di `BASINS` e considera coperto ogni periodo.
+    Without network the old catalogue still works; without any catalogue the choice
+    uses the fallback extents of `BASINS` and treats every period as covered.
     """
     catalog = None
     try:
@@ -145,7 +145,7 @@ def load_catalog(allow_refresh=True, max_age_h=CATALOG_MAX_AGE_H):
             pass
     if not fresh and allow_refresh:
         with _lock('catalog'):
-            # Un altro processo può averlo appena aggiornato mentre si aspettava il lock.
+            # Another process may have just refreshed it while this one waited for the lock.
             try:
                 with open(CATALOG_PATH) as f:
                     other = json.load(f)
@@ -160,16 +160,17 @@ def load_catalog(allow_refresh=True, max_age_h=CATALOG_MAX_AGE_H):
     return catalog or {'datasets': {}}
 
 
-# ── Scelta dei dataset ────────────────────────────────────────────────────────
+# ── Dataset choice ────────────────────────────────────────────────────────────
 
 def _info(catalog, entry):
     return (catalog or {}).get('datasets', {}).get(entry['dataset_id'], {})
 
 
 def _extent(catalog, entry):
-    """Dove il dataset ha senso: il rettangolo del catalogo, ristretto all'estensione del
-    bacino nel registro. Il rettangolo da solo può includere mare che il modello non
-    simula: quello della reanalisi NWS arriva a 40°N e 13°E, e tocca Tirreno e Adriatico."""
+    """Where the dataset makes sense: the catalogue rectangle, narrowed to the extent of
+    the basin in the registry. The rectangle alone can include sea that the model does
+    not simulate: that of the NWS reanalysis reaches 40°N and 13°E, touching the
+    Tyrrhenian and the Adriatic."""
     basin = BASINS[entry['basin']]['extent']
     info = _info(catalog, entry)
     if not ('lon' in info and 'lat' in info):
@@ -182,7 +183,7 @@ def _extent(catalog, entry):
 
 
 def _period(catalog, entry):
-    """(inizio, fine) coperti, o None se il catalogo non lo dice."""
+    """(start, end) covered, or None if the catalogue does not say."""
     t = _info(catalog, entry).get('time')
     if not t or not t[0] or not t[1]:
         return None
@@ -190,7 +191,7 @@ def _period(catalog, entry):
 
 
 def _available(catalog, entry):
-    """Dataset presente nel catalogo (o catalogo assente: si assume di sì)."""
+    """Dataset present in the catalogue (or no catalogue: assume it is)."""
     datasets = (catalog or {}).get('datasets', {})
     if not datasets:
         return True
@@ -203,8 +204,8 @@ def _intersects(a, b):
 
 
 def _covered_fraction(extents, bbox):
-    """Quota del riquadro coperta dalle estensioni (sovrapposizioni contate una volta
-    sola solo approssimativamente: fra bacini regionali sono rare)."""
+    """Share of the box covered by the extents (overlaps are counted once only
+    approximately: between regional basins they are rare)."""
     area = (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
     if area <= 0:
         return 1.0
@@ -217,9 +218,9 @@ def _covered_fraction(extents, bbox):
     return min(1.0, inside / area)
 
 
-# Il globale si aggiunge solo se i bacini regionali lasciano scoperto più del 5% del
-# riquadro: un margine che sfora di pochi centesimi di grado (il nord Adriatico oltre
-# 45.98°N, terraferma) non vale un download in più.
+# The global product is added only if the regional basins leave more than 5% of the
+# box uncovered: a margin that exceeds by a few hundredths of a degree (the northern
+# Adriatic beyond 45.98°N, on land) is not worth one more download.
 GLOBAL_FILL_MIN_GAP = 0.05
 
 
@@ -229,9 +230,9 @@ def _contains(outer, inner, eps=1e-6):
 
 
 def _step_rank(entry, family, hourly, vertical):
-    """Più piccolo = preferito. Correnti: orarie 2D per i modelli di superficie,
-    giornaliere 3D per quelli verticali (scelta dell'utente: più leggere, e le orarie
-    3D coprono solo l'ultimo anno). T/S e MLD cambiano lentamente: giornaliere."""
+    """Smaller = preferred. Currents: hourly 2D for surface models, daily 3D for
+    vertical ones (lighter, and the hourly 3D products cover only the last year).
+    T/S and MLD change slowly: daily."""
     step = entry['step_h'] or 0
     if family == 'cur':
         if vertical:
@@ -241,7 +242,7 @@ def _step_rank(entry, family, hourly, vertical):
         return 0 if step == 24 else 1
     if family in ('tem', 'sal', 'mld'):
         return 0 if step == 24 else 1
-    return step                                   # onde, vento: il passo più fine
+    return step                                   # waves, wind: the finest step
 
 
 def _best_in_basin(catalog, family, basin, bbox, t0, t1, hourly, vertical):
@@ -264,9 +265,9 @@ def _best_in_basin(catalog, family, basin, bbox, t0, t1, hourly, vertical):
 
     full = [e for e in cands if covers(e, t0, t1)]
     best_full = min(full, key=rank) if full else None
-    # Due dataset dello stesso bacino, uno per l'inizio e uno per la fine (es. a cavallo
-    # della fine della reanalisi). Valgono più di uno solo se hanno un passo migliore:
-    # due file orari sono meglio di uno giornaliero, non di uno orario.
+    # Two datasets of the same basin, one for the start and one for the end (e.g. across
+    # the end of the reanalysis). They beat a single one only with a better step: two
+    # hourly files are better than a daily one, not than an hourly one.
     pair = None
     for h in sorted((e for e in cands if covers(e, t0, t0)), key=rank):
         for t in sorted((e for e in cands if covers(e, t1, t1)), key=rank):
@@ -281,28 +282,28 @@ def _best_in_basin(catalog, family, basin, bbox, t0, t1, hourly, vertical):
 
 def plan_family(family, bbox, t0=None, t1=None, *, hourly=True, vertical=False, catalog=None,
                 exclude=()):
-    """Dataset da scaricare per una famiglia di variabili.
+    """Datasets to download for a family of variables.
 
     Args:
-        family: 'cur', 'tem', 'sal', 'mld', 'wav', 'wind' o 'bathy'.
-        bbox: [lon_min, lat_min, lon_max, lat_max] della richiesta (margine compreso).
-        t0, t1: periodo (datetime naive UTC); ignorato per 'bathy'.
-        hourly: il modello gira con passo < 24 h.
-        vertical: il modello si muove in verticale (correnti 3D).
-        exclude: bacini regionali da non usare (il loro file è risultato senza dati).
+        family: 'cur', 'tem', 'sal', 'mld', 'wav', 'wind' or 'bathy'.
+        bbox: [lon_min, lat_min, lon_max, lat_max] of the request (margin included).
+        t0, t1: period (naive UTC datetimes); ignored for 'bathy'.
+        hourly: the model runs with a step < 24 h.
+        vertical: the model moves vertically (3D currents).
+        exclude: regional basins not to use (their file turned out to have no data).
 
     Returns:
-        list[dict]: voci del registro, regionali prima del globale. Vuota se nessun
-        dataset ha dati per quell'area e periodo.
+        list[dict]: registry entries, regional ones before the global one. Empty if no
+        dataset has data for that area and period.
     """
     t0 = t0 or datetime(1900, 1, 1)
     t1 = t1 or t0
     regional = [b for b in BASINS if b != 'glo' and b not in exclude]
-    # Bacini più piccoli prima: dove si sovrappongono (IBI e NWS) vince il più fine.
+    # Smaller basins first: where they overlap (IBI and NWS) the finer one wins.
     regional.sort(key=lambda b: (BASINS[b]['extent'][2] - BASINS[b]['extent'][0])
                   * (BASINS[b]['extent'][3] - BASINS[b]['extent'][1]))
-    # Un bacino che da solo copre il riquadro basta, anche se uno più piccolo ne tocca
-    # una parte: un pezzo di NWS o IBI accanto al Med è un download in più per niente.
+    # A basin that covers the box on its own is enough, even if a smaller one touches
+    # part of it: a piece of NWS or IBI next to the Med is one more download for nothing.
     for basin in regional:
         pick = _best_in_basin(catalog, family, basin, bbox, t0, t1, hourly, vertical)
         if pick and _covered_fraction([_extent(catalog, pick[0])], bbox) >= 1 - GLOBAL_FILL_MIN_GAP:
@@ -315,15 +316,15 @@ def plan_family(family, bbox, t0=None, t1=None, *, hourly=True, vertical=False, 
             extents.append(_extent(catalog, pick[0]))
             if _covered_fraction(extents, bbox) >= 1 - GLOBAL_FILL_MIN_GAP:
                 return choices
-    # Il globale copre ciò che i bacini regionali non coprono (o tutto, se non ce ne sono).
+    # The global product covers what the regional basins do not (or everything, if none).
     return choices + _best_in_basin(catalog, family, 'glo', bbox, t0, t1, hourly, vertical)
 
 
 def coverage_problem(bbox, t0, t1, *, hourly, vertical, catalog):
-    """Testo dell'errore se non ci sono correnti per area e periodo, altrimenti None.
+    """Error text if there are no currents for the area and period, otherwise None.
 
-    Usato all'invio della simulazione: senza correnti non si può simulare, ed è meglio
-    saperlo subito che dopo la coda.
+    Used when a simulation is submitted: without currents it cannot run, and it is
+    better to know at once than after the queue.
     """
     if not (catalog or {}).get('datasets'):
         return None
@@ -344,13 +345,13 @@ def coverage_problem(bbox, t0, t1, *, hourly, vertical, catalog):
 
 
 def describe_choice(entry):
-    """Provenienza di un dataset, per il JSON dello scenario e l'interfaccia."""
+    """Provenance of a dataset, for the scenario JSON and the interface."""
     return {'dataset_id': entry['dataset_id'], 'basin': entry['basin'],
             'basin_label': BASINS[entry['basin']]['label'], 'res': entry['res'],
             'step_h': entry['step_h'], 'dims': entry['dims'], 'kind': entry['kind']}
 
 
-# ── Indice della cache ────────────────────────────────────────────────────────
+# ── Cache index ───────────────────────────────────────────────────────────────
 
 def sidecar(path):
     return os.path.splitext(path)[0] + '.json'
@@ -365,10 +366,10 @@ def _read_meta(path_json):
 
 
 def find_cached(dataset_id, variables, bbox, t0, t1, depth_max=None):
-    """Un file in cache che contiene la richiesta, o None.
+    """A cached file that contains the request, or None.
 
-    Stesso dataset e variabili; riquadro, periodo e profondità almeno quelli chiesti.
-    Fra più candidati il più piccolo, che OpenDrift apre più in fretta.
+    Same dataset and variables; box, period and depth at least those requested. Among
+    several candidates the smallest, which OpenDrift opens faster.
     """
     best = None
     for js in glob.glob(os.path.join(CACHE_DIR, 'cmems_*.json')):
@@ -397,7 +398,7 @@ def find_cached(dataset_id, variables, bbox, t0, t1, depth_max=None):
 
 
 def record_cached(path, meta):
-    """Scrive l'indice di un file appena scaricato."""
+    """Write the index of a file just downloaded."""
     meta = {**meta, 'bytes': os.path.getsize(path),
             'created': datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S'), 'last_used': time.time()}
     tmp = sidecar(path) + '.part'
@@ -407,7 +408,7 @@ def record_cached(path, meta):
 
 
 def touch(path):
-    """Annota l'uso di un file (per la pulizia: si tolgono i meno usati di recente)."""
+    """Record the use of a file (for cleanup: the least recently used are removed)."""
     js = sidecar(path)
     meta = _read_meta(js)
     if meta is None:
@@ -423,10 +424,10 @@ def touch(path):
 
 
 def enforce_limit(max_gb=CACHE_MAX_GB):
-    """Toglie i file meno usati di recente finché la cache sta sotto `max_gb`.
+    """Remove the least recently used files until the cache is below `max_gb`.
 
-    I file senza indice (scaricati prima di questo schema) contano come i più vecchi,
-    con la data di modifica. Non si tocca niente usato nelle ultime due ore.
+    Files without an index count as the oldest, with their modification date. Nothing
+    used in the last two hours is touched.
     """
     files = []
     for nc in glob.glob(os.path.join(CACHE_DIR, 'cmems_*.nc')):
@@ -462,7 +463,7 @@ def enforce_limit(max_gb=CACHE_MAX_GB):
 
 @contextmanager
 def _lock(key):
-    """Lock su file fra processi (backend, worker): un solo download per pezzo."""
+    """File lock across processes (backend, worker): a single download per piece."""
     d = os.path.join(CACHE_DIR, '.locks')
     os.makedirs(d, exist_ok=True)
     with open(os.path.join(d, f'{key}.lock'), 'w') as f:

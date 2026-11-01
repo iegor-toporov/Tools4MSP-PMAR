@@ -1,12 +1,12 @@
 /**
- * Salvataggio del pannello delle analisi in IndexedDB, in questo browser.
+ * Saving of the analysis panel in IndexedDB, in this browser.
  *
- * IndexedDB e non localStorage: le analisi portano i loro dati (raster, reti) e
- * superano facilmente i ~5 MB di localStorage. Ogni accesso è protetto: in una
- * finestra privata, con i dati del sito bloccati o a quota piena, l'app continua
- * a funzionare in memoria, come prima di questa persistenza.
+ * IndexedDB and not localStorage: the analyses carry their data (rasters, networks)
+ * and easily exceed the ~5 MB of localStorage. Every access is guarded: in a private
+ * window, with site data blocked or the quota full, the app keeps working in memory
+ * only.
  *
- * Cosa si salva e come lo si rilegge: persistedState.js.
+ * What is saved and how it is read back: persistedState.js.
  */
 
 const DB_NAME = 'dto-pmar'
@@ -38,23 +38,23 @@ function run(mode, op) {
   }))
 }
 
-/** Lo stato salvato, o null se non c'è o IndexedDB non è disponibile. */
+/** The saved state, or null if there is none or IndexedDB is not available. */
 export async function loadState() {
   try {
     return (await run('readonly', store => store.get(KEY))) ?? null
   } catch (err) {
-    console.warn('[analysesStore] lettura non riuscita:', err)
+    console.warn('[analysesStore] read failed:', err)
     return null
   }
 }
 
-/** Salva lo stato; false se non è stato possibile (quota, IndexedDB assente…). */
+/** Save the state; false if it was not possible (quota, no IndexedDB…). */
 export async function saveState(value) {
   try {
     await run('readwrite', store => store.put(value, KEY))
     return true
   } catch (err) {
-    console.warn('[analysesStore] salvataggio non riuscito:', err)
+    console.warn('[analysesStore] save failed:', err)
     return false
   }
 }

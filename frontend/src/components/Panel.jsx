@@ -52,8 +52,8 @@ export default function Panel({
   analysesFull,
 }) {
   const { t } = useLang()
-  // Nodo della barra di azioni fissa: PmarPanel ci disegna il bottone di avvio della
-  // simulazione (in Analysis ogni sezione ha il suo, in fondo alla sezione).
+  // Node of the fixed action bar: PmarPanel draws the simulation run button into it
+  // (in Analysis each section has its own, at the bottom of the section).
   const [actionsEl, setActionsEl] = useState(null)
   const [runMode,   setRunMode]   = useState('custom')
   const [aboutOpen, setAboutOpen] = useState(false)
@@ -264,8 +264,8 @@ export default function Panel({
 
         {/* ── PMAR tab ──────────────────────────────────────────────── */}
         <Tabs.Panel value="pmar">
-          {/* Colonna a tutta altezza: intestazione, contenuto che scorre, barra di
-              azioni fissa in fondo — i bottoni di avvio restano sempre a portata. */}
+          {/* Full-height column: header, scrolling content, fixed action bar at the
+              bottom, so the run buttons are always within reach. */}
           <Box style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 34px)' }}>
           <Box px="md" pt="sm" pb={8} style={{ flexShrink: 0 }}>
             <Group gap={4} align="center">

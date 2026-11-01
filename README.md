@@ -434,6 +434,13 @@ Simulations need several GB of memory and can run for hours, so **only one runs 
   `--concurrency=1`. A second simulation is **queued**, not rejected.
 - PMAR and connectivity analyses go to the default queue, served by `celery-worker` with
   `--concurrency=3`: an analysis never waits for a simulation.
+- Each simulation runs in a new process (`--max-tasks-per-child=1`), so its memory goes back to
+  the system when it ends and the peak saved in the scenario (`timing.peak_rss_mb`) is that run's.
+  Both workers load their libraries once at start (`_preload_libraries` in `worker/tasks.py`),
+  so a new process does not pay the ~8 s import of OpenDrift and the ~8 s global land mask.
+- Only `simulation-worker` deletes half-written `out/precompute_*.nc` at start
+  (`scripts/entrypoint.sh`): `out/` is shared, and a restart of `celery-worker` must not delete
+  the file of a simulation that is running.
 
 Each scenario carries its state in its JSON (`processes/scenario_state.py`), so the list looks the
 same after a page reload, from another tab or from another device:
@@ -712,9 +719,9 @@ at all despite a matrix full of values.
 
 ### Notes
 
-- The *passage* matrix (formerly called *transit*) is built by `_passage_matrix()` in this process: it reproduces
-  `get_cm_within_range`, which the public PMAR removed as unused, on top of
-  `get_particles_by_cell`. Unlike `get_cm` it does not set `self.cm`, while
+- The *passage* matrix (formerly called *transit*) is built by `_passage_matrix()` in this process: it computes
+  the same quantity as PMAR's `get_cm_within_range` (commit `38b69b1`, the pinned version) with sparse
+  indicator matrices on top of `get_particles_by_cell`; `bench/run.py equivalence` compares the two. Unlike `get_cm` it does not set `self.cm`, while
   `connectivity_analysis()` requires it — the process assigns it explicitly.
 - `get_network()` is called **without** `node_names`: with them, `export_network` writes the
   labels into the edges' `source`/`target`, while the frontend filters edges by comparing those

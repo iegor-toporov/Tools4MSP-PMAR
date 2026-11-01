@@ -1,16 +1,17 @@
-"""OGC API - Processes: "Propagate forward", previsione con catene di Markov.
+"""OGC API - Processes: "Propagate forward", a forecast with Markov chains.
 
-Terza analisi del tab Analysis. Dalle traiettorie di uno scenario già simulato si
-stima la matrice di transizione fra le celle di una griglia regolare dopo un
-intervallo Δt (solo questo tipo di matrice regge una catena di Markov), e la si usa
-per propagare nel futuro la distribuzione delle particelle a t=0: un frame per ogni
-multiplo di Δt, anche oltre la durata della simulazione. Il frontend li scorre con
-un cursore.
+Third analysis of the Analysis tab. From the trajectories of a scenario already
+simulated, it estimates the transition matrix between the cells of a regular grid
+after an interval Δt (only this kind of matrix supports a Markov chain), and uses it
+to propagate the distribution of the particles at t=0 forward: one frame for every
+multiple of Δt, also beyond the duration of the simulation. The frontend moves
+through them with a slider.
 
-È il conto di PMAR: `get_cm` per la matrice, `get_histogram(t=0, dim=['trajectory'])`
-per la condizione iniziale, `predict_with_cm` per la previsione. Qui lo fa
-``processes/markov_core.py`` con numpy e scipy, verificato uguale (README, "Markov
-process"): evita le intersezioni punto-poligono e calcola tutti i passi in un giro.
+It is PMAR's computation: `get_cm` for the matrix, `get_histogram(t=0,
+dim=['trajectory'])` for the initial condition, `predict_with_cm` for the forecast.
+Here ``processes/markov_core.py`` does it with numpy and scipy, checked to give the
+same result (README, "Markov process"): it avoids point-in-polygon tests and computes
+all the steps in one pass.
 """
 
 import numpy as np
@@ -23,19 +24,18 @@ from processes.access import is_unlocked, require_scenario
 
 logger = setup_logger('markov_process', 'pmar', 'markov.log')
 
-# Più grossa che per il PPI: una matrice di transizione ha senso solo con abbastanza
-# particelle per cella (ne servono almeno una cinquantina). La risoluzione è libera in
-# questo intervallo: con una matrice "esistente" è quella della griglia di
-# connettività da cui la si riprende.
+# Coarser than for the PPI: a transition matrix makes sense only with enough particles
+# per cell (at least about fifty). The resolution is free within this range: with an
+# "existing" matrix it is that of the connectivity grid it comes from.
 RES_MIN, RES_MAX   = 0.05, 5.0
 MIN_PARTICLES      = 30
-MAX_GRID_CELLS     = 200_000      # riquadro, prima di guardare dove stanno le particelle
-MAX_DOMAIN_CELLS   = 10_000       # celle con particelle: dimensione dei frame nel payload
-MAX_STEPS          = 100          # multipli di Δt mostrati dal cursore (più il frame 0)
-# Celle × frame: oltre, il risultato pesa decine di MB. Con griglie molto fitte i
-# passi si riducono per restare entro questo limite.
+MAX_GRID_CELLS     = 200_000      # the box, before looking at where the particles are
+MAX_DOMAIN_CELLS   = 10_000       # cells with particles: size of the frames in the payload
+MAX_STEPS          = 100          # multiples of Δt shown by the slider (plus frame 0)
+# Cells × frames: beyond this, the result weighs tens of MB. With very fine grids the
+# steps are reduced to stay within this limit.
 MAX_FRAME_VALUES   = 400_000
-SHORT_DT_STAY      = 0.9          # mediana di pᵢᵢ oltre cui Δt è troppo corto per la griglia
+SHORT_DT_STAY      = 0.9          # median of pᵢᵢ above which Δt is too short for the grid
 
 
 PROCESS_METADATA = {
@@ -94,7 +94,7 @@ PROCESS_METADATA = {
 
 
 def _warning(code, message, **params):
-    """Avviso strutturato: il frontend traduce `code`, `message` è per chi usa l'API."""
+    """Structured warning: the frontend translates `code`; `message` is for API users."""
     return {'code': code, 'message': message, **params}
 
 
@@ -109,7 +109,7 @@ def _number(data, key, default, lo, hi, name):
 
 
 def _positions(nc_path, steps, grid):
-    """Indici di cella di ogni particella agli istanti `steps` (una colonna ciascuno)."""
+    """Cell index of every particle at the times `steps` (one column each)."""
     import xarray as xr
     with xr.open_dataset(nc_path) as ds:
         n_time = int(ds.sizes['time'])
@@ -120,7 +120,7 @@ def _positions(nc_path, steps, grid):
 
 
 class MarkovProcessor(BaseProcessor):
-    """OGC API Process: propagazione con una catena di Markov."""
+    """OGC API Process: propagation with a Markov chain."""
 
     def __init__(self, processor_def):
         super().__init__(processor_def, PROCESS_METADATA)
@@ -136,9 +136,9 @@ class MarkovProcessor(BaseProcessor):
 
         dt_days = _number(data, 'dt_days', min(10.0, sim_days), step_h / 24.0, sim_days, 'dt_days')
         dt_steps = max(1, int(round(dt_days * 24.0 / step_h)))
-        dt_days = dt_steps * step_h / 24.0          # quello che si usa davvero
+        dt_days = dt_steps * step_h / 24.0          # the value actually used
 
-        # ── Griglia: il riquadro dato, o l'area di semina ───────────────────
+        # ── Grid: the given box, or the release area ───────────────────────
         bounds = data.get('bbox') or sc.get('bounds')
         if not bounds:
             from processes.ConnectivityProcess import _scenario_bbox
@@ -154,7 +154,7 @@ class MarkovProcessor(BaseProcessor):
                 f'Grid too fine: {grid.size} cells at {res}° over this area. '
                 f'Use a coarser resolution.')
 
-        # ── Matrice di transizione: posizioni a t₀ e dopo Δt ──────────────────
+        # ── Transition matrix: positions at t₀ and after Δt ───────────────────
         per_seed = []
         for nc in nc_list:
             cells = _positions(nc, [0, dt_steps], grid)
@@ -172,14 +172,14 @@ class MarkovProcessor(BaseProcessor):
             raise ProcessorExecuteError(
                 f'The domain has {D} cells at {res}°, above the maximum of {MAX_DOMAIN_CELLS}: '
                 f'use a coarser resolution.')
-        # Sempre 100 multipli di Δt, salvo griglie così fitte da superare il payload.
+        # Always 100 multiples of Δt, except for grids so fine that they exceed the payload.
         k_max = max(1, min(MAX_STEPS, MAX_FRAME_VALUES // D - 1))
         logger.info(f'[Markov] {scenario_id} res={res} Δt={dt_days:g}d ({dt_steps} step) '
-                    f'K={k_max} dominio={D} celle, nnz={M.nnz}, seeding={len(nc_list)}')
+                    f'K={k_max} domain={D} cells, nnz={M.nnz}, seeding={len(nc_list)}')
 
-        # ── Condizione iniziale e previsione ──────────────────────────────────
-        # Particelle per cella a t=0 (istogramma), di un seeding: con più seeding la
-        # media, così i valori restano "particelle" come in una simulazione sola.
+        # ── Initial condition and forecast ────────────────────────────────────
+        # Particles per cell at t=0 (histogram), of one release: with several releases
+        # the mean, so the values still read as "particles" of a single simulation.
         q0 = Ni / len(nc_list)
         pred = mk.propagate(M, q0, k_max)
         frames = [{
@@ -190,7 +190,7 @@ class MarkovProcessor(BaseProcessor):
 
         # ── Avvisi ──────────────────────────────────────────────────────────
         warnings = []
-        # Solo le celle con particelle a t₀ hanno una riga della matrice.
+        # Only the cells with particles at t₀ have a row of the matrix.
         start = Ni > 0
         n_start = int(start.sum())
         weak = int((Ni[start] < MIN_PARTICLES * len(nc_list)).sum())
@@ -207,7 +207,7 @@ class MarkovProcessor(BaseProcessor):
                 f'particles after Δt: Δt is short for a {res}° grid and the forecast will '
                 f'underestimate transport.', median_stay=round(median_stay, 3)))
 
-        # ── Scala di colore comune a tutti i frame ────────────────────────────
+        # ── Colour scale shared by all frames ─────────────────────────────────
         pos = np.concatenate([np.asarray(f['values'])[np.asarray(f['values']) > 0] for f in frames])
         vmax = float(np.percentile(pos, 99)) if len(pos) else 1.0
         vmin = float(max(np.percentile(pos, 2), vmax * 1e-4)) if len(pos) else vmax * 1e-4
@@ -219,15 +219,15 @@ class MarkovProcessor(BaseProcessor):
             'type':         'markov',
             'scenario_id':  scenario_id,
             'n_seedings':   len(nc_list),
-            # Con lo spiaggiamento le particelle spiaggiate non hanno posizione: escono
-            # dalla catena, come quelle uscite dalla griglia.
+            # With stranding, stranded particles have no position: they leave the
+            # chain, like those that left the grid.
             'beaching':     bool(sc.get('beaching', True)),
             'res':          res,
             'dt_days':      dt_days,
             'steps':        k_max,
             'horizon_days': round(k_max * dt_days, 4),
-            # Riquadro della griglia (bordi delle celle): con res permette di rifare la
-            # stessa griglia, e di riconoscerla in una matrice di connettività.
+            # Box of the grid (cell edges): with res it allows the same grid to be built
+            # again, and to be recognised in a connectivity matrix.
             'grid_bbox':    [float(grid.lon0), float(grid.lat0),
                              float(grid.lon0 + grid.nx * res), float(grid.lat0 + grid.ny * res)],
             'sim_days':     sim_days,
@@ -251,7 +251,7 @@ class MarkovProcessor(BaseProcessor):
             'label_en': f'Propagate — {sc.get("label_en", scenario_id)}',
             'warnings': warnings,
         }
-        logger.info(f'[Markov] completato: {len(frames)} frame, warning={[w["code"] for w in warnings]}')
+        logger.info(f'[Markov] done: {len(frames)} frames, warnings={[w["code"] for w in warnings]}')
         return 'application/json', result
 
     def __repr__(self):

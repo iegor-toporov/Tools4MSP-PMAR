@@ -161,7 +161,7 @@ export const PmarComparisonModal = forwardRef(function PmarComparisonModal(
     return km2 >= 10 ? `~${Math.round(km2)} km²` : `~${km2.toFixed(1)} km²`
   }
 
-  // Tabella lunga (area, classe): stessi dati del grafico, pronti per pandas o R.
+  // Long table (area, class): the same data as the chart, ready for pandas or R.
   function downloadCsv() {
     if (!results.length) return
     saveText(comparisonCsv(results, names, results[0].meta), `pmar_comparison_${Date.now()}.csv`)

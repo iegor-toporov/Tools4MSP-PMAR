@@ -41,8 +41,8 @@ html[data-mantine-color-scheme="light"] body {
   --text-secondary:  rgba(60, 60, 67, 0.60);
 }
 
-/* Controlli di Leaflet a destra del pannello, sotto la barra tema/lingua
-   (in alto a sinistra, accanto al pannello: vedi .map-toolbar). */
+/* Leaflet controls to the right of the panel, below the theme/language bar
+   (top left, next to the panel: see .map-toolbar). */
 .leaflet-top.leaflet-left {
   top: 66px;
   left: 352px;
@@ -65,16 +65,16 @@ html[data-mantine-color-scheme="light"] body {
   box-shadow: 0 2px 16px rgba(0, 0, 0, 0.12);
 }
 
-/* ── Legenda interattiva (MapLegend.jsx) ─────────────────────────────────────
-   Una sezione per layer visibile; ogni riga è una classe di valori cliccabile. */
+/* ── Interactive legend (MapLegend.jsx) ──────────────────────────────────────
+   One section per visible layer; each row is a clickable class of values. */
 .map-legend {
   position: absolute;
   bottom: 20px;
-  /* In basso a sinistra, accanto al pannello principale (16 + 320 + 16). */
+  /* Bottom left, next to the main panel (16 + 320 + 16). */
   left: 352px;
   z-index: 1000;
   width: 200px;
-  /* Fino sotto la barra tema/lingua e lo zoom, in alto a sinistra. */
+  /* Down to below the theme/language bar and the zoom, top left. */
   max-height: calc(100vh - 160px);
   min-height: 0;
   overflow-y: auto;
@@ -185,11 +185,11 @@ html[data-mantine-color-scheme="light"] body {
   color: var(--text-secondary);
 }
 
-/* ── Tooltip della mappa ─────────────────────────────────────────────────────
-   Stessa veste per i due tooltip di hover — le celle del raster PMAR (div
-   posizionato a mano) e i poligoni di connettività (tooltip di Leaflet) — così
-   quando sono visibili insieme si leggono come due parti dello stesso oggetto.
-   Lo stile è quello dei pannelli dell'app: fondo traslucido, blur, bordo tenue. */
+/* ── Map tooltips ────────────────────────────────────────────────────────────
+   The same look for the two hover tooltips (the cells of the PMAR raster, a div
+   placed by hand, and the connectivity polygons, a Leaflet tooltip), so when both
+   are visible they read as two parts of the same object. The style is that of the
+   app's panels: translucent background, blur, faint border. */
 .pmar-cell-tooltip,
 .leaflet-tooltip.pmar-map-tooltip {
   background: var(--panel-bg);
@@ -211,8 +211,8 @@ html[data-mantine-color-scheme="light"] body {
   z-index: 1001;
 }
 
-/* Leaflet disegna la freccia con uno ::before colorato come il suo fondo bianco:
-   su un pannello traslucido stonerebbe, e il tooltip segue comunque il cursore. */
+/* Leaflet draws the arrow with a ::before coloured like its white background: on a
+   translucent panel it would look wrong, and the tooltip follows the cursor anyway. */
 .leaflet-tooltip.pmar-map-tooltip::before {
   display: none;
 }
@@ -234,9 +234,9 @@ html[data-mantine-color-scheme="light"] body {
   letter-spacing: 0.02em;
 }
 
-/* Titolo e righe metrica del tooltip di connettività: stessa gerarchia di colore
-   del tooltip delle celle (accento per l'identificativo, grigio per le etichette),
-   ma incolonnate, perché qui i valori sono tre e si confrontano a colpo d'occhio. */
+/* Title and measure rows of the connectivity tooltip: the same colour hierarchy as
+   the cell tooltip (accent for the identifier, grey for the labels), but in columns,
+   because here there are three values to compare at a glance. */
 .pmar-tt-title {
   color: var(--accent);
   font-size: 13px;
@@ -268,7 +268,7 @@ html[data-mantine-color-scheme="light"] body {
   line-height: 1.35;
 }
 
-/* Barra fissa dei bottoni di avvio, in fondo al pannello PMAR (vedi Panel.jsx). */
+/* Fixed bar of the run buttons, at the bottom of the PMAR panel (see Panel.jsx). */
 .pmar-actions {
   flex-shrink: 0;
   padding: 10px 16px 12px;
@@ -278,9 +278,9 @@ html[data-mantine-color-scheme="light"] body {
   display: none;
 }
 
-/* ── Pannello di destra "Layers" (LayersPanel.jsx) ─────────────────────────────
-   In alto a destra; si allunga col contenuto fino in fondo, o fino al riquadro
-   Analysis tools quando c'è (.is-compact). */
+/* ── Right-hand "Layers" panel (LayersPanel.jsx) ─────────────────────────────
+   Top right; it grows with its content down to the bottom, or down to the Analysis
+   tools box when there is one (.is-compact). */
 .layers-panel {
   position: absolute;
   top: 16px;
@@ -349,7 +349,7 @@ html[data-mantine-color-scheme="light"] body {
 }
 .analysis-desc-block { display: flex; flex-direction: column; gap: 1px; }
 
-/* ── Riquadro "Analysis tools" (ToolsPanel.jsx), in basso a destra ──────────── */
+/* ── "Analysis tools" box (ToolsPanel.jsx), bottom right ──────────── */
 .tools-panel {
   position: absolute;
   right: 16px;
@@ -368,11 +368,11 @@ html[data-mantine-color-scheme="light"] body {
   color: var(--text-primary);
 }
 
-/* ── Cursore dei passi di Propagate (MarkovStepper.jsx), accanto alla legenda ── */
+/* ── Step slider of Propagate (MarkovStepper.jsx), next to the legend ── */
 .markov-stepper {
   position: absolute;
   bottom: 20px;
-  left: 568px;                         /* 352 + 200 della legenda + 16 */
+  left: 568px;                         /* 352 + 200 of the legend + 16 */
   z-index: 1000;
   width: min(472px, calc(100vw - 568px - 352px));
   min-width: 300px;
@@ -384,7 +384,7 @@ html[data-mantine-color-scheme="light"] body {
   color: var(--text-primary);
 }
 
-/* ── Pannello sinistro: sezioni dell'Analisi e schede radio (ui.jsx) ─────────── */
+/* ── Left panel: Analysis sections and radio cards (ui.jsx) ─────────── */
 .analysis-accordion .mantine-Accordion-item {
   background: var(--modal-bg);
   border: 1px solid var(--modal-divider);
@@ -426,7 +426,7 @@ html[data-mantine-color-scheme="light"] body {
 }
 .radio-card-body { margin-top: 8px; padding-left: 22px; }
 
-/* Elenco delle aree Tools4MSP nella tab Simulation. */
+/* List of the Tools4MSP areas in the Simulation tab. */
 .t4msp-area {
   display: flex;
   justify-content: space-between;

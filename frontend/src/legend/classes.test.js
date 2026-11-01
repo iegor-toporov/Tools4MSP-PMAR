@@ -39,10 +39,10 @@ describe('logClasses', () => {
   })
 
   it('keeps out-of-range values in the open end classes, and has no class for <= 0', () => {
-    assert.equal(classIndex(0.5, cls), 0)          // sotto vmin
+    assert.equal(classIndex(0.5, cls), 0)          // below vmin
     assert.equal(classIndex(1, cls), 0)            // = vmin
-    assert.equal(classIndex(10, cls), 1)           // limite: appartiene alla classe sopra
-    assert.equal(classIndex(5e6, cls), 5)          // sopra vmax
+    assert.equal(classIndex(10, cls), 1)           // boundary: it belongs to the class above
+    assert.equal(classIndex(5e6, cls), 5)          // above vmax
     assert.equal(classIndex(0, cls), null)
     assert.equal(classIndex(-3, cls), null)
     assert.equal(classIndex(NaN, cls), null)
@@ -81,7 +81,7 @@ describe('PROBABILITY_BANDS', () => {
     assert.equal(classIndex(0.03, PROBABILITY_BANDS), 1)
     assert.equal(classIndex(0.25, PROBABILITY_BANDS), 4)
     assert.equal(classIndex(1, PROBABILITY_BANDS), 5)
-    // il passaggio può superare 1 per riga, ma non per arco: resta comunque nell'ultima
+    // passage can exceed 1 per row, but not per edge: it still falls in the last band
     assert.equal(classIndex(1.2, PROBABILITY_BANDS), 5)
   })
 })

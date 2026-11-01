@@ -22,7 +22,7 @@ export function sampleProfile(latA, lonA, latB, lonB, rd, nSamples = 300) {
     if (col < 0 || col >= raster_nx || row < 0 || row >= raster_ny) continue
     const v    = raster_values[row]?.[col] ?? 0
     const dist = Math.hypot((lat - latA) * 111.32, (lon - lonA) * 111.32 * cosLat)
-    // Posizione del campione e id della cella che lo contiene, per l'export.
+    // Position of the sample and id of the cell that contains it, for the export.
     const centre = cellCenter(rd, row, col)
     pts.push({ dist, value: v, lat, lon, cellId: cellId(centre.lon, centre.lat, raster_res) })
   }
@@ -129,7 +129,7 @@ export const PmarProfileModal = forwardRef(function PmarProfileModal(
 
   const hasData = result.pts?.some(p => p.value > 0)
 
-  // Un campione per riga: distanza, posizione, cella e valore lungo la linea.
+  // One sample per row: distance, position, cell and value along the line.
   function downloadCsv() {
     saveText(profileCsv(result, result.meta), `pmar_profile_${Date.now()}.csv`)
   }

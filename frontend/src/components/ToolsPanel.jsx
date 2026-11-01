@@ -5,10 +5,10 @@ import {
 import { useLang } from '../LanguageContext'
 
 /**
- * Riquadro "Analysis tools" in basso a destra, sotto il pannello Layers. Gli
- * strumenti lavorano sulla heatmap del layer attivo (PMAR, o Markov sul frame
- * mostrato): senza un raster restano disattivati. La matrice di connettività ha il
- * suo bottone nella scheda del layer.
+ * "Analysis tools" box at the bottom right, below the Layers panel. The tools work on
+ * the heatmap of the active layer (PMAR, or Markov on the frame shown): without a
+ * raster they stay disabled. The connectivity matrix has its own button in the card
+ * of the layer.
  */
 const TOOLS = [
   { key: 'histogram',  Icon: IconChartBar,      labelKey: 'histogramBtn'  },

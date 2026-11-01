@@ -6,15 +6,15 @@ import { LABEL_STYLES, SectionLabel, RadioCard, InfoTip, lbl } from '../ui'
 import RunButton from './RunButton'
 import BboxPicker, { bboxOf } from './BboxPicker'
 
-// Limiti del backend (processes/ConnectivityProcess.py).
+// Limits of the backend (processes/ConnectivityProcess.py).
 export const GRID_RES_MIN = 0.05
 export const GRID_RES_MAX = 5
 const MAX_SEA_CELLS = 300
 
 /**
- * "Structural connectivity": matrice di transizione o di passaggio fra i nodi
- * (processes/ConnectivityProcess.py). I nodi sono i poligoni dell'area di semina della
- * simulazione, quelli di uno shapefile caricato, o le celle di una griglia generata.
+ * "Structural connectivity": transition or passage matrix between the nodes
+ * (processes/ConnectivityProcess.py). The nodes are the polygons of the simulation's
+ * release area, those of an uploaded shapefile, or the cells of a generated grid.
  */
 export default function ConnectivitySection({ ctx, onRun, loading, stopping, onStop, draw, active }) {
   const { t, sc, scenarioId, scenarioLabel, scenarioInfo, ready, limitNote, analysesFull } = ctx
@@ -25,7 +25,7 @@ export default function ConnectivitySection({ ctx, onRun, loading, stopping, onS
   const seedingOk = (sc?.n_seed_polygons ?? 0) >= 2
   const [nodes, setNodes]       = useState(seedingOk ? 'seeding_area' : 'grid')
   const [shp, setShp]           = useState(null)            // { b64, name }
-  const [columns, setColumns]   = useState(null)            // colonne dello shapefile, o null
+  const [columns, setColumns]   = useState(null)            // columns of the shapefile, or null
   const [columnsError, setColumnsError] = useState(null)
   const [labelField, setLabelField] = useState('')
   const [res, setRes]           = useState('0.25')
@@ -33,12 +33,12 @@ export default function ConnectivitySection({ ctx, onRun, loading, stopping, onS
   const [selfLoops, setSelfLoops] = useState(true)
   const fileRef = useRef(null)
 
-  // Cambiando simulazione, "Use seeding area" può non valere più.
+  // When the simulation changes, "Use seeding area" may no longer apply.
   useEffect(() => {
     if (nodes === 'seeding_area' && sc && !seedingOk) setNodes('grid')
   }, [scenarioId, seedingOk]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Il riquadro disegnato si vede solo mentre la griglia è la scelta in vista.
+  // The drawn box is shown only while the grid is the visible choice.
   useEffect(() => {
     draw.onVisible('connBbox', active && nodes === 'grid')
   }, [active, nodes]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -89,7 +89,7 @@ export default function ConnectivitySection({ ctx, onRun, loading, stopping, onS
       ...(tDays ? { t_days: tDays } : {}),
       ...(nodes === 'shapefile'
             ? { shapefile_b64: shp.b64, ...(labelField ? { node_label_field: labelField } : {}) } : {}),
-      // Senza riquadro disegnato il backend usa l'area dello scenario: è il default mostrato.
+      // Without a drawn box the backend uses the scenario's area: the default shown.
       ...(nodes === 'grid' ? { grid_res: resNum, ...(drawn ? { bbox: drawn } : {}) } : {}),
     }, {
       title: title.trim() || autoTitle,

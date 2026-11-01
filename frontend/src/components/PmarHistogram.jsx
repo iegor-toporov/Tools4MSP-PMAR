@@ -282,7 +282,7 @@ export const PmarHistogramModal = forwardRef(function PmarHistogramModal({ resul
   const areaKm2 = Math.abs(dLat * dLon * 111.32 * 111.32 * Math.cos(latMid * Math.PI / 180))
   const areaStr = areaKm2 >= 10 ? `~${Math.round(areaKm2)} km²` : `~${areaKm2.toFixed(1)} km²`
 
-  // Classi con i loro limiti e conteggi, più il contesto: un dato riusabile, non un'immagine.
+  // Classes with their bounds and counts, plus the context: reusable data, not an image.
   function downloadCsv() {
     saveText(histogramCsv(result, result.meta), `pmar_histogram_${Date.now()}.csv`)
   }

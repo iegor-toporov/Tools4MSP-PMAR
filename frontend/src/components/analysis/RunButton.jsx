@@ -1,8 +1,8 @@
 import { Button, Group, Stack, Text } from '@mantine/core'
 
 /**
- * "Run analysis" in fondo a una sezione: in corso diventa "…" + Stop. `hint` spiega
- * perché il bottone è disattivato (es. manca lo shapefile).
+ * "Run analysis" at the bottom of a section: while running it becomes "…" + Stop.
+ * `hint` explains why the button is disabled (e.g. the shapefile is missing).
  */
 export default function RunButton({ labels, loading, stopping, onStop, disabled, onRun, hint, limitNote }) {
   return (

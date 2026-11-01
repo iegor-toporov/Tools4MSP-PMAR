@@ -1,15 +1,15 @@
 /**
- * GeoTIFF minimale (Float32, una banda, non compressa, EPSG:4326) scritta nel browser:
- * serve a scaricare i layer che il backend non manda già come GeoTIFF (frame Markov,
- * metriche di connettività su griglia). Nessuna dipendenza: sono un header TIFF e
- * i tag GeoTIFF essenziali, che GDAL/QGIS leggono come un raster lon/lat.
+ * Minimal GeoTIFF (Float32, one band, uncompressed, EPSG:4326) written in the browser:
+ * it downloads the layers that the backend does not already send as GeoTIFF (Markov
+ * frames, connectivity measures on a grid). No dependency: a TIFF header and the
+ * essential GeoTIFF tags, which GDAL/QGIS read as a lon/lat raster.
  *
- * Ingresso nel formato raster dell'app (lo stesso di PmarLayer):
- *   values   righe dal sud al nord (values[0] = riga più a sud)
- *   lon_min, lat_min  centro della cella sud-ovest
+ * Input in the app's raster format (the same as PmarLayer):
+ *   values   rows from south to north (values[0] = southernmost row)
+ *   lon_min, lat_min  centre of the south-west cell
  *   res, nx, ny
  *
- * Modulo puro: testato in geotiff.test.js.
+ * Pure module: tested in geotiff.test.js.
  */
 
 const TYPE = { SHORT: 3, LONG: 4, DOUBLE: 12, ASCII: 2 }
@@ -18,13 +18,13 @@ const TYPE_SIZE = { [TYPE.SHORT]: 2, [TYPE.LONG]: 4, [TYPE.DOUBLE]: 8, [TYPE.ASC
 /**
  * @param {object}   raster   { values, lon_min, lat_min, res, nx, ny }
  * @param {object}   [opts]
- * @param {number|null} [opts.nodata=0]  valore senza dato; `null` = nessun tag
- * @returns {Uint8Array} il file
+ * @param {number|null} [opts.nodata=0]  no-data value; `null` = no tag
+ * @returns {Uint8Array} the file
  */
 export function encodeGeoTiff({ values, lon_min, lat_min, res, nx, ny }, { nodata = 0 } = {}) {
-  if (!(nx > 0 && ny > 0 && res > 0)) throw new Error('raster non valido')
+  if (!(nx > 0 && ny > 0 && res > 0)) throw new Error('invalid raster')
 
-  // Pixel: TIFF parte dalla riga in alto (nord).
+  // Pixels: TIFF starts from the top row (north).
   const pixels = new Float32Array(nx * ny)
   for (let r = 0; r < ny; r++) {
     const row = values[ny - 1 - r] ?? []
@@ -37,7 +37,7 @@ export function encodeGeoTiff({ values, lon_min, lat_min, res, nx, ny }, { nodat
   const west  = lon_min - res / 2
   const north = lat_min + (ny - 1) * res + res / 2
   const geoKeys = [
-    1, 1, 0, 3,            // versione, revisione, numero di chiavi
+    1, 1, 0, 3,            // version, revision, number of keys
     1024, 0, 1, 2,         // GTModelTypeGeoKey = geographic
     1025, 0, 1, 1,         // GTRasterTypeGeoKey = PixelIsArea
     2048, 0, 1, 4326,      // GeographicTypeGeoKey = WGS 84
@@ -50,7 +50,7 @@ export function encodeGeoTiff({ values, lon_min, lat_min, res, nx, ny }, { nodat
     [258, TYPE.SHORT, [32]],
     [259, TYPE.SHORT, [1]],
     [262, TYPE.SHORT, [1]],
-    [273, TYPE.LONG,  [0]],                // offset dei pixel, scritto dopo
+    [273, TYPE.LONG,  [0]],                // offset of the pixels, written later
     [277, TYPE.SHORT, [1]],
     [278, TYPE.LONG,  [ny]],
     [279, TYPE.LONG,  [pixels.byteLength]],
@@ -62,7 +62,7 @@ export function encodeGeoTiff({ values, lon_min, lat_min, res, nx, ny }, { nodat
     ...(nodataText ? [[42113, TYPE.ASCII, nodataText]] : []),
   ]
 
-  // Layout: header (8) | IFD | dati dei tag lunghi | pixel.
+  // Layout: header (8) | IFD | data of the long tags | pixels.
   const ifdSize = 2 + tags.length * 12 + 4
   let extraOffset = 8 + ifdSize
   const extra = []
@@ -71,7 +71,7 @@ export function encodeGeoTiff({ values, lon_min, lat_min, res, nx, ny }, { nodat
     const bytes = count * TYPE_SIZE[type]
     if (bytes <= 4) return { tag, type, count, val, inline: true }
     const offset = extraOffset
-    extraOffset += bytes + (bytes % 2)       // offset pari, come vuole lo standard
+    extraOffset += bytes + (bytes % 2)       // even offset, as the standard requires
     extra.push({ offset, type, val })
     return { tag, type, count, val, offset }
   })
@@ -107,15 +107,15 @@ export function encodeGeoTiff({ values, lon_min, lat_min, res, nx, ny }, { nodat
     else dv.setUint32(p + 8, e.offset, true)
     p += 12
   }
-  dv.setUint32(p, 0, true)                     // nessun altro IFD
+  dv.setUint32(p, 0, true)                     // no other IFD
   for (const x of extra) put(x.offset, x.type, x.val)
   new Uint8Array(buf, pixelOffset).set(new Uint8Array(pixels.buffer))
   return new Uint8Array(buf)
 }
 
 /**
- * Raster di una metrica di connettività su griglia generata: una cella per nodo,
- * nella posizione del suo centroide. null se i nodi non sono una griglia.
+ * Raster of a connectivity measure on a generated grid: one cell per node, at the
+ * position of its centroid. null if the nodes are not a grid.
  */
 export function connectivityRaster(data, metric) {
   if (data?.node_source !== 'grid' || !data.grid_bbox || !(data.grid_res > 0)) return null
@@ -135,7 +135,7 @@ export function connectivityRaster(data, metric) {
   return { values, lon_min: lon0 + res / 2, lat_min: lat0 + res / 2, res, nx, ny }
 }
 
-/** Centro del riquadro di una geometria (le celle di griglia sono rettangoli). */
+/** Centre of the bounding box of a geometry (grid cells are rectangles). */
 function centroid(geometry) {
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity
   const walk = a => {
@@ -148,7 +148,7 @@ function centroid(geometry) {
   return [(x0 + x1) / 2, (y0 + y1) / 2]
 }
 
-/** Nome di file sicuro dal titolo di un layer. */
+/** Safe file name from the title of a layer. */
 export function fileStem(title, fallback = 'layer') {
   const s = String(title ?? '').normalize('NFKD').replace(/[̀-ͯ]/g, '')
     .replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 80)

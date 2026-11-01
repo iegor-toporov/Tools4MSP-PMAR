@@ -2,7 +2,7 @@ import { Group, Stack, Text, TextInput, Button, ActionIcon, Tooltip } from '@man
 import { IconSquare, IconX } from '@tabler/icons-react'
 import { LABEL_STYLES } from '../ui'
 
-/** Riquadro [lon_min, lat_min, lon_max, lat_max] di un rettangolo disegnato, o null. */
+/** Box [lon_min, lat_min, lon_max, lat_max] of a drawn rectangle, or null. */
 export function bboxOf(shape) {
   if (shape?.type !== 'rectangle') return null
   const r = v => Math.round(v * 1e4) / 1e4
@@ -12,8 +12,8 @@ export function bboxOf(shape) {
 export const formatBbox = b => `[${b.map(v => `${+v.toFixed(2)}°`).join(', ')}]`
 
 /**
- * Griglia regolare: risoluzione in gradi e riquadro da disegnare sulla mappa (viola).
- * Senza riquadro vale quello dell'area di semina della simulazione.
+ * Regular grid: resolution in degrees and a box to draw on the map (purple).
+ * Without a box, that of the simulation's release area applies.
  */
 export default function BboxPicker({ t, res, onResChange, resMin, resMax, shape, defaultBbox,
                                       drawing, onDraw, onClear, disabled }) {

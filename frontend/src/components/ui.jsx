@@ -2,7 +2,7 @@ import { Tooltip, ActionIcon, Text, Group, UnstyledButton, Stack } from '@mantin
 import { IconInfoCircle } from '@tabler/icons-react'
 import { useLang } from '../LanguageContext'
 
-/** Etichette dei campi: piccole, grigie, maiuscole, come nel resto del pannello. */
+/** Field labels: small, grey, upper case, as in the rest of the panel. */
 export const LABEL_STYLES = {
   label: {
     color: 'var(--mantine-color-dimmed)',
@@ -14,8 +14,8 @@ export const LABEL_STYLES = {
 }
 
 /**
- * Icona (i) con la spiegazione al passaggio del mouse o al focus da tastiera,
- * come nel mockup. È un bottone, quindi raggiungibile col Tab.
+ * (i) icon with the explanation on mouse hover or keyboard focus, as in the mockup.
+ * It is a button, so it can be reached with Tab.
  */
 export function InfoTip({ text, label, size = 13 }) {
   const { t } = useLang()
@@ -33,7 +33,7 @@ export function InfoTip({ text, label, size = 13 }) {
   )
 }
 
-/** Etichetta con (i) accanto, per i `label` dei campi Mantine. */
+/** Label with (i) next to it, for the `label` of Mantine fields. */
 export function lbl(text, tip) {
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}>
@@ -43,7 +43,7 @@ export function lbl(text, tip) {
   )
 }
 
-/** Titolo di un gruppo di campi, con (i) facoltativa. */
+/** Title of a group of fields, with an optional (i). */
 export function SectionLabel({ children, tip }) {
   return (
     <Group gap={2} align="center" wrap="nowrap">
@@ -56,8 +56,8 @@ export function SectionLabel({ children, tip }) {
 }
 
 /**
- * Scheda a scelta singola: cerchio radio, titolo, descrizione e, quando è scelta,
- * i suoi campi. Le schede di un gruppo si escludono a vicenda (lo decide chi le usa).
+ * Single-choice card: radio circle, title, description and, when chosen, its fields.
+ * The cards of a group exclude each other (the caller decides this).
  */
 export function RadioCard({ selected, disabled, onSelect, title, description, tip, children }) {
   return (
@@ -83,7 +83,7 @@ export function RadioCard({ selected, disabled, onSelect, title, description, ti
   )
 }
 
-/** Riquadro grigio di sola lettura: righe etichetta–valore. */
+/** Read-only grey box: label–value rows. */
 export function SummaryRows({ rows }) {
   return rows
     .filter(([, v]) => v !== null && v !== undefined && v !== '')

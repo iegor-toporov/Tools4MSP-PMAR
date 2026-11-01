@@ -1,29 +1,29 @@
 /**
- * Export e formattazione della matrice di connettività.
+ * Export and formatting of the connectivity matrix.
  *
- * Modulo puro (niente React): lo usa la finestra della matrice ed è testato in
- * connectivityMatrix.test.js. La matrice arriva dal backend densa (n×n, righe =
- * origine, colonne = destinazione); quasi tutte le caselle sono zero, perché nodi
- * lontani non si scambiano particelle. I formati *sparsi* scrivono solo le coppie
- * con valore diverso da zero, come terne (riga, colonna, valore).
+ * Pure module (no React): the matrix window uses it, and it is tested in
+ * connectivityMatrix.test.js. The matrix arrives from the backend dense (n×n, rows =
+ * origin, columns = destination); almost all entries are zero, because distant nodes
+ * do not exchange particles. The *sparse* formats write only the non-zero pairs, as
+ * triples (row, column, value).
  */
 
-/** Le coppie non nulle, in ordine di riga: `{ i, j, p }` con indici 0-based. */
+/** The non-zero pairs, in row order: `{ i, j, p }` with 0-based indices. */
 export function sparseEntries(matrix) {
   const out = []
   matrix.forEach((row, i) => row.forEach((p, j) => { if (p > 0) out.push({ i, j, p }) }))
   return out
 }
 
-/** Valore CSV: tra virgolette solo se contiene virgole, virgolette o a capo. */
+/** CSV value: quoted only if it contains commas, quotes or line breaks. */
 function csvField(v) {
   const s = String(v ?? '')
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
 }
 
 /**
- * Elenco di archi (CSV): una riga per coppia non nulla. Si apre in Excel, pandas,
- * R, Gephi, networkx; è la stessa informazione della matrice, senza gli zeri.
+ * Edge list (CSV): one row per non-zero pair. It opens in Excel, pandas, R, Gephi,
+ * networkx; it is the same information as the matrix, without the zeros.
  */
 export function toEdgeListCsv(matrix, labels = []) {
   const lines = ['source_id,source_label,target_id,target_label,p']
@@ -34,10 +34,10 @@ export function toEdgeListCsv(matrix, labels = []) {
 }
 
 /**
- * Matrix Market, formato coordinate: lo leggono scipy.io.mmread (Python),
- * Matrix::readMM (R) e MATLAB, ed è quello che PMAR scrive con mmwrite. Gli indici
- * sono 1-based. Il formato non ha nomi per righe e colonne: le etichette dei nodi,
- * in ordine, vanno in un commento.
+ * Matrix Market, coordinate format: read by scipy.io.mmread (Python), Matrix::readMM
+ * (R) and MATLAB, and the format PMAR writes with mmwrite. Indices are 1-based. The
+ * format has no names for rows and columns: the node labels, in order, go into a
+ * comment.
  */
 export function toMatrixMarket(matrix, { comment = '', labels = [] } = {}) {
   const n = matrix.length
@@ -50,7 +50,7 @@ export function toMatrixMarket(matrix, { comment = '', labels = [] } = {}) {
   return lines.join('\n') + '\n'
 }
 
-/** Matrice densa (TSV): intestazione con le destinazioni, una riga per origine. */
+/** Dense matrix (TSV): a header with the destinations, one row per origin. */
 export function toDenseTsv(matrix, labels = [], corner = '') {
   const header = [corner, ...matrix.map((_, j) => labels[j] ?? j)].join('\t')
   const body = matrix.map((row, i) => [labels[i] ?? i, ...row].join('\t')).join('\n')
@@ -58,9 +58,9 @@ export function toDenseTsv(matrix, labels = [], corner = '') {
 }
 
 /**
- * Testo di una cella della tabella: probabilità 0–1 a 2 decimali. Un valore non
- * nullo sotto 0.005 mostrerebbe "0.00", come se il collegamento non esistesse:
- * si scrive "<0.01". Il valore pieno resta nel tooltip della cella.
+ * Text of a table cell: probability 0–1 with 2 decimals. A non-zero value below 0.005
+ * would show "0.00", as if the link did not exist: it is written "<0.01". The full
+ * value stays in the cell's tooltip.
  */
 export function formatCell(v) {
   if (!(v > 0)) return ''

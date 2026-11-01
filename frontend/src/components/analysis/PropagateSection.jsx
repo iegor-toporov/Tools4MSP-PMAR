@@ -4,12 +4,12 @@ import { LABEL_STYLES, SectionLabel, RadioCard, lbl } from '../ui'
 import RunButton from './RunButton'
 import BboxPicker, { bboxOf } from './BboxPicker'
 
-// Limiti del backend (processes/MarkovProcess.py).
+// Limits of the backend (processes/MarkovProcess.py).
 export const MARKOV_RES_MIN = 0.05
 export const MARKOV_RES_MAX = 5
 export const MARKOV_MIN_PARTICLES = 30
 
-/** Problema dei parametri da mostrare sotto i campi, o null. */
+/** Problem with the parameters to show below the fields, or null. */
 export function markovParamError({ dt, simDays, stepHours, res }, m) {
   const minDt = (stepHours || 1) / 24
   if (!(dt >= minDt && dt <= simDays))
@@ -20,8 +20,8 @@ export function markovParamError({ dt, simDays, stepHours, res }, m) {
 }
 
 /**
- * Particelle per cella stimate dal riquadro della griglia: il dominio vero è più
- * piccolo (solo celle con particelle), quindi la stima è per difetto.
+ * Particles per cell estimated from the box of the grid: the real domain is smaller
+ * (only cells with particles), so the estimate is a lower bound.
  */
 export function particlesPerCell(pnum, bbox, res) {
   if (!bbox || !(res > 0) || !pnum) return null
@@ -30,11 +30,11 @@ export function particlesPerCell(pnum, bbox, res) {
 }
 
 /**
- * "Propagate forward": con una matrice di transizione su una griglia regolare (solo
- * questo tipo di matrice regge una catena di Markov) si propaga nel futuro la
- * distribuzione delle particelle a t=0, per multipli di Δt (processes/MarkovProcess.py).
- * La matrice può venire da un layer di connettività già calcolato (transizione su
- * griglia generata: stessa griglia e stesso Δt) o essere nuova.
+ * "Propagate forward": with a transition matrix on a regular grid (only this kind of
+ * matrix supports a Markov chain) the distribution of the particles at t=0 is
+ * propagated forward, in multiples of Δt (processes/MarkovProcess.py). The matrix can
+ * come from a connectivity layer already computed (transition on a generated grid:
+ * same grid and same Δt) or be new.
  */
 export default function PropagateSection({ ctx, markov, draw, matrices, active }) {
   const { t, sc, scenarioId, scenarioLabel, scenarioInfo, ready, limitNote, analysesFull } = ctx
@@ -50,8 +50,8 @@ export default function PropagateSection({ ctx, markov, draw, matrices, active }
 
   const matrix = matrixMode === 'existing' ? own.find(x => x.id === matrixId) ?? null : null
 
-  // Nuove matrici, o cambio di simulazione: la scelta deve restare valida. Appena
-  // compare la prima matrice di questa simulazione la si propone.
+  // New matrices, or a change of simulation: the choice must stay valid. As soon as
+  // the first matrix of this simulation appears, it is proposed.
   const ownKey = own.map(x => x.id).join()
   const hadOwn = useRef(own.length > 0)
   useEffect(() => {
@@ -61,15 +61,15 @@ export default function PropagateSection({ ctx, markov, draw, matrices, active }
     hadOwn.current = own.length > 0
   }, [ownKey, scenarioId]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Δt non può superare la simulazione: scegliendone una più corta lo si riduce.
+  // Δt cannot exceed the simulation: choosing a shorter one reduces it.
   useEffect(() => {
     if (simDays && parseFloat(dt) > simDays) setDt(String(Math.min(10, simDays)))
   }, [scenarioId, simDays]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Il riquadro disegnato si vede solo mentre la sezione è aperta e la scelta lo usa.
+  // The drawn box is shown only while the section is open and the choice uses it.
   useEffect(() => { draw.onVisible('propBbox', active && matrixMode === 'new') }, [active, matrixMode]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Con una matrice esistente griglia e Δt sono i suoi.
+  // With an existing matrix, the grid and Δt are its own.
   const resNum = matrix ? matrix.res : parseFloat(res)
   const bbox   = matrix ? matrix.bbox : (bboxOf(draw.shapes.propBbox) ?? sc?.bounds ?? null)
   const dtNum  = matrix ? matrix.tDays : parseFloat(dt)

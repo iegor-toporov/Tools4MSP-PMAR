@@ -9,7 +9,7 @@ __pycache__/
 .env
 .env.*
 
-# Dati e output simulazioni — le directory sono tracciate via .gitkeep
+# Simulation data and output; the directories are tracked through .gitkeep
 out/*
 !out/.gitkeep
 cache/*
@@ -34,7 +34,7 @@ frontend/.vite/
 
 tmp/
 
-# Script solo per dev locale, non usato da Docker
+# Script for local development only, not used by Docker
 scripts/start.sh
 
 # Private tokens and secrets
@@ -56,6 +56,6 @@ bench/adriatic.geojson
 bench/**/__pycache__/
 
 
-# Shapefile di test per la connettività — dati generati, si rifanno con
+# Test shapefiles for connectivity: generated data, rebuilt with
 # tests/make_test_shapefiles.py
 tests/

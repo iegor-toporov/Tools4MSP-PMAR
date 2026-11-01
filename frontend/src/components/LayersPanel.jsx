@@ -22,13 +22,13 @@ const EDGE_DIRECTIONS = [
   { key: 'out',  labelKey: 'edgesOut'  },
 ]
 
-/** Giorno di un frame: interi senza decimali, frazioni (Δt in ore) con due. */
+/** Day of a frame: whole numbers without decimals, fractions (Δt in hours) with two. */
 const formatDay = d => (Number.isInteger(d) ? `${d}` : `${+d.toFixed(2)}`)
 
 /**
- * Pannello di destra "Layers": in alto i layer di base (area di semina, area di
- * studio, layer sorgente, griglia di connettività), sotto i layer creati dalle
- * analisi, il più recente in alto. Solo presentazione: lo stato vive in App.
+ * Right-hand "Layers" panel: at the top the base layers (release area, study area,
+ * source layer, connectivity grid), below them the layers created by the analyses,
+ * the most recent at the top. Presentation only: the state lives in App.
  */
 export default function LayersPanel({
   baseLayers, onToggleBase, baseSubject,
@@ -40,8 +40,8 @@ export default function LayersPanel({
   const a = t.analyses
   const [baseOpen, setBaseOpen] = useState(true)
   const [anlOpen,  setAnlOpen]  = useState(true)
-  // Le analisi restano salvate nel browser: su un portatile condiviso (lo stand di
-  // una conferenza) serve un modo rapido per ripartire da zero. Con conferma.
+  // The analyses stay saved in the browser: on a shared laptop (a conference stand) a
+  // quick way to start from scratch is needed. With confirmation.
   const [confirmClear, setConfirmClear] = useState(false)
   const full = analyses.length >= MAX_ANALYSES
 
@@ -147,7 +147,7 @@ function BaseLayerRow({ layer, onToggle, labels }) {
   )
 }
 
-/** I click sui comandi non devono anche attivare la scheda. */
+/** Clicks on the controls must not also activate the card. */
 const stop = e => e.stopPropagation()
 
 function AnalysisCard({ an, active, onActivate, onDelete, onRename, onView, onDownload,
@@ -159,7 +159,7 @@ function AnalysisCard({ an, active, onActivate, onDelete, onRename, onView, onDo
   const [showInfo, setShowInfo] = useState(false)
   const v = an.view
   const opacity = v.opacity ?? 0.8
-  // Una connettività su poligoni non è un raster: si scaricano i poligoni con le metriche.
+  // Connectivity on polygons is not a raster: the polygons are downloaded with the measures.
   const asGeojson = an.kind === 'connectivity' && an.data.node_source !== 'grid'
 
   function commitRename() {
@@ -311,7 +311,7 @@ function ConnectivityControls({ an, onView, onOpenMatrix, matrixOpen }) {
   )
 }
 
-/** Riassunto automatico: dati della simulazione usata e parametri dell'analisi. */
+/** Automatic summary: data of the simulation used and parameters of the analysis. */
 function Description({ an }) {
   const { t, lang } = useLang()
   const a = t.analyses
@@ -333,7 +333,7 @@ function Description({ an }) {
     [a.seedings,  sc.seedings > 1 ? `${sc.seedings}× / ${sc.tshift} d` : null],
     [a.timeStep,  sc.time_step_hours != null ? `${sc.time_step_hours} h` : null],
     [t.analysis.summary.forcing, sc.forcing_datasets ? forcingLabel(sc, t.analysis.forcingLabels) : null],
-    // Assente nelle analisi salvate prima dell'opzione: non si mostra.
+    // Absent in analyses saved without this option: not shown.
     [p.labelBeaching, sc.beaching === undefined ? null : sc.beaching === false ? a.no : a.yes],
   ]
   const m = p.markov

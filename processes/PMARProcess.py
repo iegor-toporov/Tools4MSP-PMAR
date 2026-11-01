@@ -43,10 +43,10 @@ T4MSP_AREA_URL  = 'https://api.tools4msp.eu/api/v2/domainareas/{area_id}/?format
 
 _T4MSP_CACHE: dict = {'areas': None, 'ts': 0.0, 'failed_ts': 0.0}
 _T4MSP_CACHE_TTL   = 3600  # seconds TODO
-# L'elenco aree è accessorio, ma viaggia nella stessa risposta dell'elenco
-# scenari: se Tools4MSP non risponde, non deve rallentare ogni richiesta.
-# Dopo un errore si riprova solo passato _T4MSP_RETRY_AFTER, e si aspetta al
-# massimo _T4MSP_TIMEOUT.
+# The list of areas is secondary, but it travels in the same response as the list of
+# scenarios: if Tools4MSP does not answer, it must not slow down every request.
+# After an error it is tried again only after _T4MSP_RETRY_AFTER, and the wait is at
+# most _T4MSP_TIMEOUT.
 _T4MSP_TIMEOUT     = 4     # seconds
 _T4MSP_RETRY_AFTER = 60    # seconds
 
@@ -78,7 +78,7 @@ def _fetch_t4msp_areas() -> list:
         _T4MSP_CACHE['failed_ts'] = now
         import logging
         logging.getLogger('pmar_process').warning(
-            f'[T4MSP] Impossibile caricare aree: {e}; nuovo tentativo tra {_T4MSP_RETRY_AFTER} s')
+            f'[T4MSP] Could not load the areas: {e}; trying again in {_T4MSP_RETRY_AFTER} s')
     return _T4MSP_CACHE['areas'] or []
 
 
@@ -152,18 +152,18 @@ PRESSURE_MODELS = {
         'needs_wind':     True,
         'needs_waves':    True,
         'needs_thermo':   True,
-        # Senza reader del fondale OpenOil usa 10 000 m ovunque: il petrolio che affonda
-        # non tocca mai il fondo, neanche dove il mare è profondo 20 m.
+        # Without a seabed reader OpenOil uses 10 000 m everywhere: oil that sinks never
+        # touches the bottom, not even where the sea is 20 m deep.
         'needs_bathymetry': True,
         'needs_vertical': True,
-        # Profondità massima delle correnti scaricate (fondale + 10 m, al più questa).
+        # Maximum depth of the downloaded currents (seabed + 10 m, at most this).
         'depth_cap':      200.0,
         'max_depth':      50.0,
         'label_it':       'Idrocarburi',
         'label_en':       'Hydrocarbons',
     },
-    # ChemicalDrift: composti della sua tabella (init_chemical_compound), il composto
-    # lo sceglie l'utente (PrecomputeProcess, input chemical_compound).
+    # ChemicalDrift: compounds from its table (init_chemical_compound); the user chooses
+    # the compound (PrecomputeProcess, input chemical_compound).
     'chemical': {
         'module':         'opendrift.models.chemicaldrift',
         'class':          'ChemicalDrift',
@@ -172,7 +172,7 @@ PRESSURE_MODELS = {
         'needs_mld':      True,
         'needs_bathymetry': True,
         'needs_vertical': True,
-        # Profondità massima delle correnti scaricate (fondale + 10 m, al più questa).
+        # Maximum depth of the downloaded currents (seabed + 10 m, at most this).
         'depth_cap':      200.0,
         'max_depth':      50.0,
         'label_it':       'Sostanze chimiche',
@@ -182,11 +182,11 @@ PRESSURE_MODELS = {
         'module':         'opendrift.models.larvalfish',
         'class':          'LarvalFish',
         'needs_wind':     False,
-        # Senza reader del fondale LarvalFish usa 100 m ovunque: sotto il fondale vero
-        # dove il mare è più basso, un fondo finto dove è più profondo.
+        # Without a seabed reader LarvalFish uses 100 m everywhere: below the real seabed
+        # where the sea is shallower, a fake bottom where it is deeper.
         'needs_bathymetry': True,
         'needs_vertical': True,
-        # Profondità massima delle correnti scaricate (fondale + 10 m, al più questa).
+        # Maximum depth of the downloaded currents (seabed + 10 m, at most this).
         'depth_cap':      200.0,
         'max_depth':      200.0,
         'label_it':       'Larve di pesce',
@@ -194,8 +194,8 @@ PRESSURE_MODELS = {
     },
 }
 
-# Composti noti a ChemicalDrift (OpenDrift 1.14.9, init_chemical_compound): IPA e
-# due antivegetativi. Il primo è il default.
+# Compounds known to ChemicalDrift (OpenDrift 1.14.9, init_chemical_compound): PAHs and
+# two antifouling agents. The first is the default.
 CHEMICAL_COMPOUNDS = (
     'Naphthalene', 'C1-Naphthalene', 'C2-Naphthalene', 'C3-Naphthalene',
     'Acenaphthene', 'Acenaphthylene', 'Fluorene', 'Anthracene', 'Phenanthrene',
@@ -362,7 +362,7 @@ class PMARProcessor(BaseProcessor):
         """
         import xarray as xr
         from pmar.pmar import PMAR
-        from pmar.utils import make_grid
+        from processes.ocean_grid import make_grid
         # Libraries will find on their own the right paths. There was a bug in pmar.py
         os.environ.pop('PROJ_LIB', None)
         os.environ.pop('PROJ_DATA', None)
@@ -374,8 +374,8 @@ class PMARProcessor(BaseProcessor):
 
         margin       = max(0.0, min(margin, 20.0))
 
-        # Analisi su scenario: libera se lo scenario è pubblico. Senza scenario si
-        # simula al volo con OpenDrift, e serve il token.
+        # Analysis of a scenario: open if the scenario is public. Without a scenario the
+        # simulation runs on the fly with OpenDrift, and the token is needed.
         unlocked = is_unlocked(data)
         if scenario_id:
             require_scenario(scenario_id, unlocked)
@@ -384,7 +384,7 @@ class PMARProcessor(BaseProcessor):
 
         with tempfile.TemporaryDirectory() as tmpdir:
 
-            # ── Scenario mode: usa traiettorie pre-calcolate ──────────────
+            # ── Scenario mode: uses pre-computed trajectories ─────────────
             if scenario_id:
                 if not scenario_id.startswith('custom_'):
                     raise ProcessorExecuteError(f'Unknown scenario: {scenario_id!r}')
@@ -416,7 +416,7 @@ class PMARProcessor(BaseProcessor):
                     f'res={res}, margin={margin}, nc_filenames={nc_filenames}'
                 )
 
-            # ── Custom mode: simula e poi analizza ────────────────────────
+            # ── Custom mode: simulate, then analyse ────────────────────────
             else:
                 geojson_input   = data.get('geojson')
                 shapefile_b64   = data.get('shapefile_b64')
@@ -464,7 +464,7 @@ class PMARProcessor(BaseProcessor):
 
                 o = _build_model(pm_cfg['class'], {**pm_cfg, 'compound': CHEMICAL_COMPOUNDS[0]})
                 o.set_config('general:coastline_action', 'stranding')
-                # Reader non lazy per ChemicalDrift: vedi PrecomputeProcess._run_scenario.
+                # Non-lazy readers for ChemicalDrift: see PrecomputeProcess._run_scenario.
                 o.add_readers_from_list(forcing_paths, lazy=pm_cfg['class'] != 'ChemicalDrift')
 
                 nc_output = os.path.join(OUT_DIR, f'pmar_{uuid.uuid4().hex}.nc')
@@ -472,7 +472,7 @@ class PMARProcessor(BaseProcessor):
                     o.seed_from_shapefile(shapefile=shp_path, number=pnum, time=start_time)
                     ts = timedelta(hours=time_step_hours)
                     logger.info(
-                        f'Avvio simulazione: model={pm_cfg["class"]}, pnum={pnum}, '
+                        f'Starting simulation: model={pm_cfg["class"]}, pnum={pnum}, '
                         f'duration={duration_days}d, time_step={time_step_hours}h'
                     )
                     _t0 = _time.monotonic()
@@ -483,9 +483,9 @@ class PMARProcessor(BaseProcessor):
                         outfile=nc_output,
                     )
                     _elapsed = (_time.monotonic() - _t0) / 60
-                    logger.info(f'Fine simulazione. Ci ha messo {_elapsed:.1f} minuti')
+                    logger.info(f'Simulation finished in {_elapsed:.1f} minutes')
                 except ValueError as e:
-                    logger.error(f'PMAR fallita: {e}', exc_info=True)
+                    logger.error(f'PMAR failed: {e}', exc_info=True)
                     if 'first timestep' in str(e):
                         raise ProcessorExecuteError(
                             "No CMEMS data in the selected area. "
@@ -493,12 +493,12 @@ class PMARProcessor(BaseProcessor):
                         )
                     raise ProcessorExecuteError(str(e))
                 except Exception as e:
-                    logger.error(f'PMAR fallita: {e}', exc_info=True)
+                    logger.error(f'PMAR failed: {e}', exc_info=True)
                     raise ProcessorExecuteError(str(e))
                 finally:
-                    pass  # DEBUG: pulizia NC disabilitata temporaneamente
+                    pass  # DEBUG: cleanup of the NetCDF files temporarily disabled
 
-            # ── Analisi PMAR (comune a entrambe le modalità) ──────────────
+            # ── PMAR analysis (shared by both modes) ──────────────────────
             pm = PRESSURE_MODELS[pressure]
             try:
                 pmar_basedir = os.path.join(tmpdir, 'pmar_out')
@@ -508,13 +508,13 @@ class PMARProcessor(BaseProcessor):
                     float(bounds[2]) + margin, float(bounds[3]) + margin,
                 ]
 
-                # Determina lista NC da analizzare (multi-seeding o singolo)
+                # List of NetCDF files to analyse (one or several releases)
                 if scenario_id:
                     nc_list = [os.path.join(SCENARIOS_DIR, fn) for fn in nc_filenames]
                 else:
                     nc_list = [nc_output]
 
-                # Prepara griglia e use_raster usando la prima istanza PMAR
+                # Prepare the grid and use_raster with the first PMAR instance
                 p = PMAR(spatial_domain=None, pressure=pressure, basedir=pmar_basedir, loglevel=50)
                 p.ds         = xr.open_dataset(nc_list[0])
                 p.study_area = study_area
@@ -525,7 +525,7 @@ class PMARProcessor(BaseProcessor):
                 use_weighted = False
 
                 if use_source == 'windfarms':
-                    logger.info('Recupero wind farms da EMODnet...')
+                    logger.info('Fetching wind farms from EMODnet...')
                     gdf_wf = _fetch_windfarms(study_area, EMODNET_CACHE_DIR)
                     if not gdf_wf.empty:
                         use_raster = _gdf_to_use_raster(gdf_wf, p.grid)
@@ -534,30 +534,30 @@ class PMARProcessor(BaseProcessor):
                             use_geojson  = json.loads(
                                 gdf_wf[['geometry']].simplify(0.01).to_json()
                             )
-                            logger.info(f'Wind farms raster pronto: {len(gdf_wf)} feature')
+                            logger.info(f'Wind farm raster ready: {len(gdf_wf)} features')
                         else:
-                            logger.warning("Nessuna wind farm sovrapposta all'area di seeding")
+                            logger.warning("No wind farm overlaps the release area")
                             use_raster = None
                     else:
-                        logger.warning("Nessuna wind farm trovata nell'area di studio")
+                        logger.warning("No wind farm found in the study area")
 
                 elif use_source == 'offshore_installations':
-                    logger.info('Recupero impianti offshore da EMODnet...')
+                    logger.info('Fetching offshore installations from EMODnet...')
                     gdf_oi = _fetch_offshore_installations(study_area, EMODNET_CACHE_DIR)
                     if not gdf_oi.empty:
                         use_raster = _gdf_to_use_raster(gdf_oi, p.grid)
                         if float(use_raster.max()) > 0:
                             use_weighted = True
                             use_geojson  = json.loads(gdf_oi[['geometry']].to_json())
-                            logger.info(f'Impianti offshore raster pronto: {len(gdf_oi)} feature')
+                            logger.info(f'Offshore installation raster ready: {len(gdf_oi)} features')
                         else:
-                            logger.warning("Nessun impianto offshore sovrapposto all'area di seeding")
+                            logger.warning("No offshore installation overlaps the release area")
                             use_raster = None
                     else:
-                        logger.warning("Nessun impianto offshore trovato nell'area di studio")
+                        logger.warning("No offshore installation found in the study area")
 
                 elif use_source == 'msp_zones':
-                    logger.info('Recupero zone MSP acquacoltura (Italia) da EMODnet...')
+                    logger.info('Fetching MSP aquaculture zones (Italy) from EMODnet...')
                     gdf_mz = _fetch_msp_zones(study_area, EMODNET_CACHE_DIR)
                     if not gdf_mz.empty:
                         use_raster = _gdf_to_use_raster(gdf_mz, p.grid)
@@ -566,42 +566,42 @@ class PMARProcessor(BaseProcessor):
                             use_geojson  = json.loads(
                                 gdf_mz[['geometry']].simplify(0.005).to_json()
                             )
-                            logger.info(f'Zone MSP raster pronto: {len(gdf_mz)} feature')
+                            logger.info(f'MSP zone raster ready: {len(gdf_mz)} features')
                         else:
-                            logger.warning("Nessuna zona MSP sovrapposta all'area di seeding")
+                            logger.warning("No MSP zone overlaps the release area")
                             use_raster = None
                     else:
-                        logger.warning("Nessuna zona MSP trovata nell'area di studio")
+                        logger.warning("No MSP zone found in the study area")
 
                 elif use_source == 'geotiff':
                     if not geotiff_b64:
                         raise ProcessorExecuteError(
                             'use_source="geotiff" requires geotiff_b64.'
                         )
-                    logger.info('Caricamento GeoTIFF come layer sorgente...')
+                    logger.info('Loading the GeoTIFF as source layer...')
                     use_raster = _geotiff_to_use_raster(geotiff_b64, p.grid)
                     if float(use_raster.max()) > 0:
                         use_weighted = True
-                        logger.info('GeoTIFF raster pronto come layer sorgente')
+                        logger.info('GeoTIFF raster ready as source layer')
                     else:
-                        logger.warning('GeoTIFF non ha valori positivi nell\'area di seeding, ignoro i pesi')
+                        logger.warning('The GeoTIFF has no positive value in the release area, ignoring the weights')
                         use_raster = None
 
-                # ── Loop multi-seeding: calcola istogramma per ogni NC ──────
+                # ── Loop over the releases: histogram of each NetCDF file ──
                 h_list = []
                 for i, nc_path in enumerate(nc_list):
-                    logger.info(f'PMAR: analisi seeding {i+1}/{len(nc_list)}: {nc_path}')
+                    logger.info(f'PMAR: analysing release {i+1}/{len(nc_list)}: {nc_path}')
                     p_i = PMAR(spatial_domain=None, pressure=pressure, basedir=pmar_basedir, loglevel=50)
                     p_i.ds         = xr.open_dataset(nc_path)
                     p_i.study_area = study_area
                     p_i.grid       = make_grid(res=res, study_area=study_area)
                     if use_weighted:
                         p_i.set_weights(res=res, study_area=study_area, use=use_raster, normalize=True)
-                        # harmonize_use (dentro set_weights) ricampiona il raster 0/1 e
-                        # lascia pesi ~1e-30 a particelle che dovrebbero pesare 0. Le loro
-                        # tracce entrano nel raster con valori minuscoli, il 2° percentile
-                        # (vmin) crolla a 1e-12 e la scala log copre 14 ordini: quasi tutte
-                        # le celle diventano rosso scuro. I pesi veri sono ≥ 1e-2 × max.
+                        # harmonize_use (inside set_weights) resamples the 0/1 raster and
+                        # leaves weights of ~1e-30 on particles that should weigh 0. Their
+                        # tracks enter the raster with tiny values, the 2nd percentile
+                        # (vmin) drops to 1e-12 and the log scale spans 14 orders: almost
+                        # every cell turns dark red. Real weights are ≥ 1e-2 × max.
                         w = p_i.ds['weight']
                         p_i.ds['weight'] = w.where(w >= float(w.max()) * 1e-6, 0)
                     h_i = p_i.get_histogram(
@@ -613,9 +613,9 @@ class PMARProcessor(BaseProcessor):
                     )
                     h_list.append(h_i)
 
-                # Con più seeding: PPI = media, e indicatori della variabilità fra i
-                # rilasci, cella per cella (MAX, Q90, σ). Con un seeding solo non
-                # c'è variabilità da descrivere: si ha solo il PPI.
+                # With several releases: PPI = mean, plus measures of the variability
+                # between releases, cell by cell (MAX, Q90, σ). With a single release
+                # there is no variability to describe: only the PPI.
                 h_std = h_max = h_q90 = None
                 if len(h_list) == 1:
                     h = h_list[0]
@@ -625,7 +625,7 @@ class PMARProcessor(BaseProcessor):
                     h_std   = h_stack.std('seeding')
                     h_max   = h_stack.max('seeding')
                     h_q90   = h_stack.quantile(0.9, dim='seeding').drop_vars('quantile', errors='ignore')
-                    logger.info(f'PMAR: media e indicatori di {len(h_list)} seeding calcolati')
+                    logger.info(f'PMAR: mean and indicators of {len(h_list)} releases computed')
 
                 p = p_i
 
@@ -641,7 +641,7 @@ class PMARProcessor(BaseProcessor):
                 arr_clean = np.where(np.isfinite(h.values) & (h.values > 0), h.values, 0.0)
 
                 logger.info(
-                    f'PMAR completato: particles={pnum}, steps={len(p.ds.time)}, '
+                    f'PMAR done: particles={pnum}, steps={len(p.ds.time)}, '
                     f'use_source={use_source}, weighted={use_weighted}, bounds={map_bounds}, '
                     f'seedings={len(nc_list)}'
                 )
@@ -684,7 +684,7 @@ class PMARProcessor(BaseProcessor):
                     elif use_source == 'msp_zones':
                         result['msp_zones_geojson'] = use_geojson
 
-                # ── Deviazione standard (solo multi-seeding) ─────────────
+                # ── Standard deviation (several releases only) ─────────────
                 if h_std is not None:
                     _, std_cb_dark, std_cb_light, std_vmin, std_vmax = _raster_to_png(h_std)
                     std_geotiff_b64 = _histogram_to_geotiff(h_std)
@@ -726,10 +726,10 @@ class PMARProcessor(BaseProcessor):
                 return 'application/json', result
 
             except ValueError as e:
-                logger.error(f'PMAR fallita (analisi): {e}', exc_info=True)
+                logger.error(f'PMAR failed (analysis): {e}', exc_info=True)
                 raise ProcessorExecuteError(str(e))
             except Exception as e:
-                logger.error(f'PMAR fallita (analisi): {e}', exc_info=True)
+                logger.error(f'PMAR failed (analysis): {e}', exc_info=True)
                 raise ProcessorExecuteError(str(e))
 
     def __repr__(self):
@@ -844,10 +844,10 @@ def _make_colorbar_png(norm, cmap, text_color):
     return base64.b64encode(buf.getvalue()).decode('utf-8')
 
 
-# Risoluzione della griglia dell'analisi (gradi), libera fra questi limiti. Deve restare
-# allineato a PMAR_RES_MIN / PMAR_RES_MAX in frontend/src/components/analysis/
-# DispersalSection.jsx. Il minimo vale anche lato API: con il link pubblico della demo,
-# una griglia molto fine su un'area grande occuperebbe il worker a lungo.
+# Resolution of the analysis grid (degrees), free between these limits. Keep it in
+# line with PMAR_RES_MIN / PMAR_RES_MAX in frontend/src/components/analysis/
+# DispersalSection.jsx. The minimum also applies on the API side: with the public demo
+# link, a very fine grid over a large area would keep the worker busy for long.
 PMAR_RES_MIN, PMAR_RES_MAX = 0.05, 5.0
 DEFAULT_RES = 0.1
 
@@ -963,7 +963,7 @@ def _geotiff_to_use_raster(geotiff_b64, grid):
     from rasterio.warp import reproject, Resampling
     from rasterio.transform import from_bounds
     import xarray as xr
-    import rioxarray  # noqa: F401 — registra l'accessor .rio
+    import rioxarray  # noqa: F401 — registers the .rio accessor
 
     tif_bytes = base64.b64decode(geotiff_b64)
 
@@ -996,9 +996,9 @@ def _geotiff_to_use_raster(geotiff_b64, grid):
     dst_arr = np.where(np.isfinite(dst_arr), dst_arr, 0.0)
     dst_arr = np.clip(dst_arr, 0, None)
 
-    # rasterio è north-up (riga 0 = nord); PMAR vuole y crescente verso nord → flipud
+    # rasterio is north-up (row 0 = north); PMAR wants y increasing northwards → flipud
     arr = np.flipud(dst_arr)
-    # CRS dichiarato per harmonize_use (vedi _gdf_to_use_raster).
+    # CRS declared for harmonize_use (see _gdf_to_use_raster).
     return (xr.DataArray(arr, coords={'y': y_vals, 'x': x_vals}, dims=['y', 'x'])
               .rio.write_crs('EPSG:4326'))
 
@@ -1010,7 +1010,7 @@ def _gdf_to_use_raster(gdf, grid):
     wind farm areas, 0.0 elsewhere.
     """
     import xarray as xr
-    import rioxarray  # noqa: F401 — registra l'accessor .rio
+    import rioxarray  # noqa: F401 — registers the .rio accessor
     from rasterio.transform import from_bounds
     from rasterio.features import rasterize
     from shapely.geometry import mapping
@@ -1043,9 +1043,9 @@ def _gdf_to_use_raster(gdf, grid):
     ]
 
     if shapes:
-        # all_touched: ogni cella toccata da un elemento ne riceve il peso. Senza, una
-        # cella conta solo se l'elemento ne copre il centro, e su celle da 0.1° si
-        # perdevano metà dei parchi eolici e un impianto offshore su cinque.
+        # all_touched: every cell touched by a feature receives its weight. Without it,
+        # a cell counts only if the feature covers its centre, and on 0.1° cells half
+        # of the wind farms and one offshore installation in five would be lost.
         arr = rasterize(
             shapes, out_shape=(ny, nx),
             transform=transform, fill=0.0, dtype=np.float32, all_touched=True,
@@ -1055,7 +1055,7 @@ def _gdf_to_use_raster(gdf, grid):
 
     # rasterio uses north-up (row 0 = north); PMAR y-axis increases southward → flip
     arr = np.flipud(arr)
-    # Il CRS va dichiarato: PMAR.set_weights passa il raster a harmonize_use, che lo
-    # riproietta con rio.reproject e senza CRS fallisce ("CRS not found").
+    # The CRS must be declared: PMAR.set_weights passes the raster to harmonize_use,
+    # which reprojects it with rio.reproject and fails without a CRS ("CRS not found").
     return (xr.DataArray(arr, coords={'y': y_vals, 'x': x_vals}, dims=['y', 'x'])
               .rio.write_crs('EPSG:4326'))

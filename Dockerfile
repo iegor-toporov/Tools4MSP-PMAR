@@ -52,9 +52,11 @@ RUN pip install --no-cache-dir --timeout 300 -r requirements.txt \
     && pip install --no-cache-dir --timeout 300 gevent gunicorn
 
 # Install PMAR from the public CNR-ISMAR repo, pinned to a commit: invalidates the
-# layer cache on every change and stays reproducible, unlike @main.
+# layer cache on every change and stays reproducible, unlike @main. 38b69b1 is the
+# v1.0 release plus three commits, the last of which adds get_cm_within_range.
+# setup.py still says 0.15.0, so pip reports that number.
 RUN GIT_TERMINAL_PROMPT=0 pip install --no-cache-dir \
-        "git+https://github.com/CNR-ISMAR/pmar.git@5fecaa2b235540527a6b74f008b7648d184b7b1d"
+        "git+https://github.com/CNR-ISMAR/pmar.git@38b69b1bc2a9e227c0e2e8598a2981c098e73186"
 
 # Copy application source
 COPY data/ ./data/

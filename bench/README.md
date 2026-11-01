@@ -29,7 +29,7 @@ python3 bench/run.py storage
 | `cachekey` | none | Hit rate of the normalised cache key against an exact-match key |
 | `containment` | none | What the containment lookup absorbs that the key could not |
 | `phase1` | none | Phase-1 wall time from scenario records, local or `--remote` |
-| `analyses` | seconds each | Phase-2 wall time and payload size per analysis family |
+| `analyses` | seconds each | Phase-2 service time (from the job record), wall time and payload size per analysis family |
 | `equivalence` | minutes | Each analysis as the interface receives it, against the PMAR library called directly on the same scenario |
 | `isolation` | minutes | Whether a running simulation degrades short-request latency (NFR2) |
 | `load` | minutes | Response times as the number of simultaneous users and analyses grows. Run it from a container on the stack's network, against the API process (see `exp_load`) |
@@ -37,8 +37,9 @@ python3 bench/run.py storage
 | `sparsity` | seconds | Fill of the transition matrix of each reference scenario |
 | `forcing` | **network** | Cold forcing retrieval against requested volume |
 
-Run the experiments that use the service one at a time. On a machine with about 7.6 GB
-for the containers, a simulation of M together with an analysis of L exceeds the memory.
+Run the experiments that use the service one at a time, and do not run other scripts in the
+containers meanwhile. On a machine with about 7.6 GB for the containers, a simulation of L
+together with any other large process exceeds the memory.
 
 `figures.py` draws the figures of chapter 6 from `results/` and the trajectory files of S, M
 and L; its header gives the command. `reference/` holds the release areas of S and of the
@@ -63,9 +64,10 @@ is a request *sequence*, because containment depends on what was downloaded befo
   so — an interquartile range over one run would be a fiction.
 - **Outliers** are flagged by a stated rule (more than 1.5 IQR from the median), not by
   eye, and are listed rather than removed.
-- **Timing** uses `time.monotonic()`, measured client-side around the whole
-  submit-poll-collect cycle, so it includes the polling granularity of one second. For
-  analyses that take seconds this matters and is stated in the chapter.
+- **Timing** uses `time.monotonic()`. Analysis and load-test times come from the job record,
+  where the worker writes when a job starts and ends with the server's clock, so they do not
+  include the client's polling; `analyses` also keeps the wall time the client waited.
+  Peak memory comes from the scenario record, measured in the process that ran the simulation.
 
 ## Measuring against the deployment server
 

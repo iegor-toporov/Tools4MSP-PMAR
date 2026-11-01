@@ -13,25 +13,25 @@ OUT_DIR   = os.path.join(_ROOT, 'out')
 CACHE_DIR = os.path.join(_ROOT, 'cache')
 
 
-# ── Contabilità della cache delle forzanti ───────────────────────────────────
-# Quante richieste sono state servite dal disco e quante hanno richiesto un
-# download, con i byte scaricati. Serve a misurare l'efficacia della cache
-# (capitolo "Evaluation"): `PrecomputeProcess` azzera i contatori all'inizio di
-# una simulazione e li salva nel record dello scenario alla fine.
+# ── Forcing cache accounting ─────────────────────────────────────────────────
+# How many requests were served from disk and how many needed a download, with the
+# bytes downloaded. It measures how well the cache works (the "Evaluation" chapter):
+# `PrecomputeProcess` resets the counters at the start of a simulation and saves them
+# in the scenario record at the end.
 #
-# Lo stato è di modulo, quindi per processo: è corretto per le simulazioni, che
-# girano sul worker dedicato con concorrenza 1. Non va letto da codice che
-# condivide il processo con altri task.
+# The state belongs to the module, so to the process: this is correct for
+# simulations, which run on the dedicated worker with concurrency 1. Code that shares
+# the process with other tasks must not read it.
 _CACHE_STATS = {'hits': 0, 'misses': 0, 'miss_paths': []}
 
 
 def reset_cache_stats():
-    """Azzera i contatori della cache. Da chiamare all'inizio di una simulazione."""
+    """Reset the cache counters. Call it at the start of a simulation."""
     _CACHE_STATS.update(hits=0, misses=0, miss_paths=[])
 
 
 def note_cache(hit, path=None):
-    """Registra l'esito di una ricerca in cache."""
+    """Record the outcome of a cache lookup."""
     if hit:
         _CACHE_STATS['hits'] += 1
     else:
@@ -41,7 +41,7 @@ def note_cache(hit, path=None):
 
 
 def cache_stats():
-    """Contatori correnti. I byte si misurano adesso, a download concluso."""
+    """Current counters. The bytes are measured now, after the download has finished."""
     downloaded = sum(os.path.getsize(f) for f in _CACHE_STATS['miss_paths']
                      if os.path.exists(f))
     return {
@@ -62,8 +62,8 @@ logger = setup_logger('opendrift_process', 'opendrift', 'opendrift.log')
 # ── Available models with UI metadata ───────────────────────────────────────
 AVAILABLE_MODELS = {
     'OceanDrift': {
-        'label':          'Tracciante passivo',
-        'description':    'Particelle passive trasportate solo dalle correnti superficiali.',
+        'label':          'Passive tracer',
+        'description':    'Passive particles carried only by the surface currents.',
         'module':         'opendrift.models.oceandrift',
         'class':          'OceanDrift',
         'needs_wind':     False,
@@ -71,8 +71,8 @@ AVAILABLE_MODELS = {
         'max_depth':      0.5,
     },
     'PlastDrift': {
-        'label':          'Plastica',
-        'description':    'Detriti plastici con galleggiabilità, deriva di Stokes e wind drag.',
+        'label':          'Plastic',
+        'description':    'Plastic debris with buoyancy, Stokes drift and wind drag.',
         'module':         'opendrift.models.plastdrift',
         'class':          'PlastDrift',
         'needs_wind':     True,
@@ -81,8 +81,8 @@ AVAILABLE_MODELS = {
         'max_depth':      0.5,
     },
     'LarvalFish': {
-        'label':          'Larve/uova di pesce',
-        'description':    'Larve e uova di pesce con galleggiabilità verticale e mixing turbolento.',
+        'label':          'Fish larvae/eggs',
+        'description':    'Fish larvae and eggs with vertical buoyancy and turbulent mixing.',
         'module':         'opendrift.models.larvalfish',
         'class':          'LarvalFish',
         'needs_wind':     False,
@@ -90,8 +90,8 @@ AVAILABLE_MODELS = {
         'max_depth':      200.0,
     },
     'OpenOil': {
-        'label':          'Idrocarburi (petrolio)',
-        'description':    'Sversamento di idrocarburi con evaporazione, emulsione e dispersione.',
+        'label':          'Hydrocarbons (oil)',
+        'description':    'Oil spill with evaporation, emulsification and dispersion.',
         'module':         'opendrift.models.openoil',
         'class':          'OpenOil',
         'needs_wind':     True,
@@ -288,7 +288,7 @@ class OpenDriftProcessor(BaseProcessor):
                 f'start={start_time.isoformat()}, duration={duration_hours}h, particles={number}'
             )
 
-        # Durata in ore: passo orario.
+        # Duration in hours: hourly step.
         forcing_paths, _, _ = fetch_forcings(model_meta, lon_min, lon_max, lat_min, lat_max,
                                              start_time, end_time, time_step_hours=1)
         logger.debug(f'Forcing files: {forcing_paths}')
@@ -385,8 +385,8 @@ def _build_model(model_name, model_meta):
             pass
 
     elif model_name == 'ChemicalDrift':
-        # Come la libreria PMAR (pmar.py, PMAR.get_trajectories): l'ordine delle
-        # configurazioni conta, init_species/init_transfer_rates vanno per ultimi.
+        # As in the PMAR library (pmar.py, PMAR.get_trajectories): the order of the
+        # settings matters, init_species/init_transfer_rates come last.
         o.set_config('drift:vertical_mixing', True)
         o.set_config('vertical_mixing:diffusivitymodel', 'windspeed_Large1994')
         o.set_config('vertical_mixing:background_diffusivity', 0.0001)
@@ -398,7 +398,7 @@ def _build_model(model_name, model_meta):
         o.set_config('chemical:transformations:degradation', True)
         o.set_config('chemical:transformations:degradation_mode', 'OverallRateConstants')
         o.init_chemical_compound(model_meta['compound'])
-        # Tutto disciolto al rilascio, come in PMAR.
+        # Everything dissolved at release, as in PMAR.
         o.set_config('seed:LMM_fraction', 1)
         o.set_config('seed:particle_fraction', 0)
         o.init_species()
@@ -407,29 +407,29 @@ def _build_model(model_name, model_meta):
     return o
 
 
-# ── Forzanti CMEMS ───────────────────────────────────────────────────────────
+# ── CMEMS forcing ────────────────────────────────────────────────────────────
 #
-# Quali dataset: `data/cmems_select.plan_family` (registro + catalogo, nessun tentativo
-# a vuoto). Dove: la cache in `cache/`, indicizzata per contenimento. Come:
-# `copernicusmarine.subset` col formato a serie temporale, su un file temporaneo
-# verificato e poi rinominato, con nuovi tentativi solo per gli errori di rete.
+# Which datasets: `data/cmems_select.plan_family` (registry + catalogue, no attempt in
+# vain). Where: the cache in `cache/`, indexed by containment. How:
+# `copernicusmarine.subset` with the time-series format, to a temporary file that is
+# checked and then renamed, with retries only for network errors.
 
 from data import cmems_select as cms
 
-# Profondità massima scaricata per i modelli verticali: oltre, il volume cresce con
-# i livelli (fino a 553 MB per 31 giorni a 4110 m) senza che le particelle ci arrivino.
+# Maximum depth downloaded for vertical models: beyond it, the volume grows with the
+# levels (up to 553 MB for 31 days at 4110 m) without the particles ever getting there.
 DEPTH_CAP_M = 200.0
-# Attese fra i tentativi dopo un errore di rete (s). I tentativi HTTP interni di
-# copernicusmarine (COPERNICUSMARINE_HTTPS_RETRIES, 5 di default) vengono prima.
+# Waits between attempts after a network error (s). The internal HTTP retries of
+# copernicusmarine (COPERNICUSMARINE_HTTPS_RETRIES, 5 by default) come first.
 _RETRY_WAITS = (5, 15, 45)
-# Download contemporanei delle famiglie di uno scenario: il tempo totale diventa quello
-# del più lento invece della somma.
+# Simultaneous downloads of the families of a scenario: the total time becomes that of
+# the slowest instead of the sum.
 _PARALLEL = 4
 _PARTIAL_DIR = os.path.join(CACHE_DIR, '.partial')
-# Download in corso in questo processo. Se il job viene annullato, il processo si
-# chiude di colpo (worker/tasks.py) e questi file a metà vanno tolti prima.
+# Downloads in progress in this process. If the job is cancelled, the process ends at
+# once (worker/tasks.py) and these half-written files must be removed first.
 ACTIVE_PARTIALS: set = set()
-# Un file a metà più vecchio del limite di un task non appartiene a nessun task vivo.
+# A half-written file older than the time limit of a task belongs to no live task.
 _STALE_PARTIAL_S = 13 * 3600
 
 
@@ -437,7 +437,7 @@ def remove_active_partials():
     """Remove the half-written files of this process's downloads in progress."""
     import glob
     for tmp in list(ACTIVE_PARTIALS):
-        for f in glob.glob(tmp + '*'):            # copernicusmarine aggiunge un suffisso
+        for f in glob.glob(tmp + '*'):            # copernicusmarine adds a suffix
             try:
                 os.remove(f)
             except OSError:
@@ -455,18 +455,18 @@ def _clear_stale_partials():
                 os.remove(f)
         except OSError:
             pass
-# "Superficie" dei dataset 3D: il primo livello dei modelli sta fra 0.49 m (globale, Mar
-# Nero, IBI) e 1.02 m (Mediterraneo). Chiedere 0–0.5 m nel Mediterraneo non trova nessun
-# livello e la richiesta fallisce.
+# "Surface" of the 3D datasets: the first model level lies between 0.49 m (global,
+# Black Sea, IBI) and 1.02 m (Mediterranean). Asking for 0–0.5 m in the Mediterranean
+# finds no level and the request fails.
 SURFACE_DEPTH_M = 1.5
 _stats_lock = __import__('threading').Lock()
 
 
 def _cache_key(lon_min, lon_max, lat_min, lat_max, start_time, end_time, suffix='cur', max_depth=0.5, margin=5.0):
-    """Chiave della cache dello schema precedente (un file per richiesta identica).
+    """Cache key of the exact-match scheme (one file per identical request).
 
-    Non la usa più il download; resta perché `bench/run.py` (esperimento `cachekey`)
-    la confronta con le alternative.
+    The download does not use it; it is kept because `bench/run.py` (the `cachekey`
+    experiment) compares it with the alternatives.
     """
     slon_min = math.floor(lon_min)
     slon_max = math.ceil(lon_max)
@@ -486,22 +486,22 @@ def _cache_key(lon_min, lon_max, lat_min, lat_max, start_time, end_time, suffix=
 
 
 def _request_box(lon_min, lon_max, lat_min, lat_max, margin):
-    """Riquadro scaricato: l'area allineata al grado intero, più il margine. Allineare
-    fa cadere richieste vicine nello stesso file."""
+    """Downloaded box: the area aligned to whole degrees, plus the margin. Aligning
+    makes nearby requests fall into the same file."""
     return [math.floor(lon_min) - margin, math.floor(lat_min) - margin,
             math.ceil(lon_max) + margin, math.ceil(lat_max) + margin]
 
 
 def _request_period(start_time, end_time):
-    """Giorni interi, con un giorno in più in fondo: l'ultimo passo ha sempre dati."""
+    """Whole days, with one extra day at the end: the last step always has data."""
     snap_start = start_time.replace(hour=0, minute=0, second=0, microsecond=0)
     n_days = math.ceil((end_time - snap_start).total_seconds() / 86400) + 1
     return snap_start, snap_start + timedelta(days=n_days), n_days
 
 
 def _file_name(family, entry, box, t0, n_days, depth_max):
-    """Nome del file in cache. I token (`cur`, `wind`, `wav`, `tem`, `mld`, `bathy`,
-    `<n>d`) sono quelli che legge `bench/run.py` (esperimento `cachedir`)."""
+    """Name of the file in the cache. The tokens (`cur`, `wind`, `wav`, `tem`, `mld`,
+    `bathy`, `<n>d`) are those read by `bench/run.py` (the `cachedir` experiment)."""
     import json as _json
     raw = _json.dumps([entry['dataset_id'], entry['variables'], box,
                        t0.isoformat() if t0 else None, n_days, depth_max])
@@ -522,11 +522,11 @@ def _file_name(family, entry, box, t0, n_days, depth_max):
 
 
 def _subset(entry, box, t0, t1, depth, tmp_path):
-    """`copernicusmarine.subset` con nuovi tentativi sugli errori di rete.
+    """`copernicusmarine.subset` with retries on network errors.
 
-    Prima col formato a serie temporale, più rapido per aree piccole e periodi lunghi
-    (misurato: 157 s contro 317 s); se il dataset non lo offre, col formato scelto
-    dalla libreria.
+    First with the time-series format, faster for small areas and long periods
+    (measured: 157 s against 317 s); if the dataset does not offer it, with the format
+    chosen by the library.
     """
     import copernicusmarine
     kw = dict(dataset_id=entry['dataset_id'], variables=entry['variables'],
@@ -534,9 +534,9 @@ def _subset(entry, box, t0, t1, depth, tmp_path):
               minimum_latitude=box[1], maximum_latitude=box[3],
               output_filename=os.path.basename(tmp_path), output_directory=os.path.dirname(tmp_path),
               overwrite=True, disable_progress_bar=True,
-              # I punti di griglia che racchiudono la richiesta: per la superficie (0–0.5 m)
-              # il primo livello del modello anche quando è più giù (Med: 1.02 m), e ai
-              # bordi del riquadro le celle che lo coprono tutto.
+              # The grid points that enclose the request: for the surface (0–0.5 m) the
+              # first model level even when it is deeper (Med: 1.02 m), and at the edges
+              # of the box the cells that cover it entirely.
               coordinates_selection_method='outside')
     if t0 is not None:
         kw.update(start_datetime=t0.strftime('%Y-%m-%dT%H:%M:%S'),
@@ -563,13 +563,13 @@ def _subset(entry, box, t0, t1, depth, tmp_path):
 
 
 class _NoData(ValueError):
-    """Il file scaricato non ha nessun valore valido nel riquadro."""
+    """The downloaded file has no valid value in the box."""
 
 
 def _validate(path, entry, need0, need1, require_full):
-    """Il file si apre, ha le variabili, non è tutto NaN e copre il periodo.
+    """The file opens, has the variables, is not all NaN and covers the period.
 
-    Ritorna (inizio, fine) del file, o (None, None) per i campi statici.
+    Return (start, end) of the file, or (None, None) for static fields.
     """
     import xarray as xr
     import pandas as pd
@@ -596,7 +596,7 @@ def _validate(path, entry, need0, need1, require_full):
 
 def _fetch_entry(family, entry, box, t0, t1, n_days, need0, need1, *, vertical,
                  depth_max, require_full):
-    """Percorso di un file con i dati di un dataset: dalla cache o scaricato e validato."""
+    """Path of a file with the data of a dataset: from the cache, or downloaded and checked."""
     dmax = None
     if entry['dims'] == '3D' and family in ('cur', 'tem', 'sal'):
         dmax = depth_max if (family == 'cur' and vertical) else SURFACE_DEPTH_M
@@ -612,7 +612,7 @@ def _fetch_entry(family, entry, box, t0, t1, n_days, need0, need1, *, vertical,
     with cms.download_lock(os.path.basename(path)):
         hit = cms.find_cached(entry['dataset_id'], entry['variables'], box,
                               need0 if family != 'bathy' else None, need1, dmax)
-        if hit:                                   # scaricato da un altro processo
+        if hit:                                   # downloaded by another process
             return hit
         os.makedirs(_PARTIAL_DIR, exist_ok=True)
         _clear_stale_partials()
@@ -646,15 +646,16 @@ def _fetch_entry(family, entry, box, t0, t1, n_days, need0, need1, *, vertical,
 
 def _fetch_family(family, box, t0, t1, n_days, need0, need1, *, hourly, vertical,
                   depth_max, catalog, required):
-    """Scarica (o prende dalla cache) i file di una famiglia di variabili.
+    """Download (or take from the cache) the files of a family of variables.
 
-    Un bacino regionale il cui file non ha dati nel riquadro (l'estensione del catalogo
-    è un rettangolo, e può includere mare che quel modello non simula) si esclude e la
-    scelta si rifà senza di lui: costa un download a vuoto, non la simulazione.
+    A regional basin whose file has no data in the box (the catalogue extent is a
+    rectangle, and can include sea that the model does not simulate) is excluded and
+    the choice is made again without it: this costs one empty download, not the
+    simulation.
 
     Returns:
-        tuple: (percorsi, provenienza). Senza dataset disponibili: errore se la famiglia
-        è indispensabile (correnti), altrimenti liste vuote.
+        tuple: (paths, provenance). With no dataset available: an error if the family
+        is essential (currents), otherwise empty lists.
     """
     excluded = set()
     while True:
@@ -686,7 +687,7 @@ def _fetch_family(family, box, t0, t1, n_days, need0, need1, *, hourly, vertical
 
 
 def _max_depth_from(paths, box):
-    """Profondità massima del fondale (m) nel riquadro, dai file di batimetria."""
+    """Maximum seabed depth (m) in the box, from the bathymetry files."""
     import xarray as xr
     best = None
     for p in paths:
@@ -707,21 +708,21 @@ def _max_depth_from(paths, box):
 
 def fetch_forcings(model_meta, lon_min, lon_max, lat_min, lat_max, start_time, end_time,
                    time_step_hours=1, margin=5.0, label=''):
-    """Tutte le forzanti di una simulazione, in parallelo.
+    """All the forcing of a simulation, in parallel.
 
     Args:
-        model_meta: voce di `PRESSURE_MODELS` (o `AVAILABLE_MODELS`): `needs_wind`,
+        model_meta: entry of `PRESSURE_MODELS` (or `AVAILABLE_MODELS`): `needs_wind`,
             `needs_waves`, `needs_thermo`, `needs_mld`, `needs_bathymetry`,
             `needs_vertical`, `max_depth`, `depth_cap`.
-        lon_min … lat_max: area di semina.
-        start_time, end_time: periodo simulato.
+        lon_min … lat_max: release area.
+        start_time, end_time: simulated period.
 
     Returns:
-        tuple: (percorsi per OpenDrift, correnti prima; provenienza per famiglia;
-        profondità massima scaricata in m).
+        tuple: (paths for OpenDrift, currents first; provenance per family; maximum
+        depth downloaded in m).
 
     Raises:
-        ProcessorExecuteError: se mancano le correnti.
+        ProcessorExecuteError: if the currents are missing.
     """
     from concurrent.futures import ThreadPoolExecutor
     catalog = cms.load_catalog()
@@ -732,7 +733,7 @@ def fetch_forcings(model_meta, lon_min, lon_max, lat_min, lat_max, start_time, e
     common = dict(hourly=hourly, vertical=vertical, catalog=catalog)
     tag = f'[{label}] ' if label else ''
 
-    # Batimetria prima: dà la profondità delle correnti dei modelli verticali.
+    # Bathymetry first: it gives the depth of the currents for vertical models.
     max_depth = model_meta.get('max_depth', 0.5)
     bathy_paths, provenance = [], {}
     if vertical or model_meta.get('needs_bathymetry'):

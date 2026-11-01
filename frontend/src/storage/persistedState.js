@@ -1,19 +1,19 @@
 /**
- * Cosa del pannello delle analisi si conserva fra una ricarica e l'altra, e come lo
- * si rilegge senza fidarsi: il contenuto viene dal browser, può essere di una
- * versione precedente dell'app o di job ormai scaduti.
+ * What of the analysis panel is kept from one reload to the next, and how it is read
+ * back without trusting it: the content comes from the browser, and may belong to an
+ * earlier version of the app or to jobs that have expired.
  *
- * - `analyses`: le analisi completate, coi loro dati e la loro vista;
+ * - `analyses`: the completed analyses, with their data and their view;
  * - `activeAnalysisId`;
- * - `pendingJobs`: analisi inviate e non ancora finite, da riprendere all'avvio.
+ * - `pendingJobs`: analyses submitted and not yet finished, to resume at start.
  *
- * Modulo puro (niente IndexedDB, niente React): testato in persistedState.test.js.
- * La lettura e la scrittura vere sono in analysesStore.js.
+ * Pure module (no IndexedDB, no React): tested in persistedState.test.js.
+ * The actual reading and writing are in analysesStore.js.
  */
 
 export const STATE_VERSION = 1
 
-/** I job restano in Redis 7 giorni (worker/tasks.py `_TTL`): oltre, non c'è più niente da riprendere. */
+/** Jobs stay in Redis for 7 days (worker/tasks.py `_TTL`): after that, there is nothing to resume. */
 export const PENDING_MAX_AGE_MS = 7 * 24 * 3600 * 1000
 
 const KINDS = new Set(['pmar', 'connectivity', 'markov'])
@@ -33,9 +33,9 @@ const isAnalysis = a => a && typeof a.id === 'string' && KINDS.has(a.kind) &&
 const isPendingJob = j => j && typeof j.jobId === 'string' && KINDS.has(j.kind)
 
 /**
- * Stato ricaricato, ripulito. Senza niente di valido: tutto vuoto.
- * @param {object} defaultView  vista di default: completa le viste salvate da versioni
- *                              che avevano meno campi
+ * Reloaded state, cleaned up. With nothing valid: everything empty.
+ * @param {object} defaultView  default view: completes saved views that have fewer
+ *                              fields
  */
 export function fromStored(raw, { max, defaultView = {}, now = Date.now() }) {
   const empty = { analyses: [], activeAnalysisId: null, pendingJobs: [] }
@@ -54,7 +54,7 @@ export function fromStored(raw, { max, defaultView = {}, now = Date.now() }) {
   return { analyses, activeAnalysisId, pendingJobs }
 }
 
-/** Analisi già presenti (aggiunte prima che lo stato salvato fosse letto) più quelle salvate. */
+/** Analyses already present (added before the saved state was read) plus the saved ones. */
 export function mergeAnalyses(current, stored, max) {
   const ids = new Set(current.map(a => a.id))
   return [...current, ...stored.filter(a => !ids.has(a.id))].slice(0, max)

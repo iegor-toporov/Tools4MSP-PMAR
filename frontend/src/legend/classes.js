@@ -1,12 +1,12 @@
 /**
- * Scale di colore della mappa e classi della legenda interattiva.
+ * Colour scales of the map and classes of the interactive legend.
  *
- * Modulo puro (niente React, niente Leaflet): lo usano sia i layer che colorano la
- * mappa sia la legenda, così un colore in legenda è per costruzione quello che si vede
- * sulla mappa. Testato in classes.test.js.
+ * Pure module (no React, no Leaflet): both the layers that colour the map and the
+ * legend use it, so a colour in the legend is by construction the one seen on the
+ * map. Tested in classes.test.js.
  */
 
-// Replica di Spectral_r di matplotlib (heatmap PMAR e poligoni di connettività).
+// Copy of matplotlib's Spectral_r (PMAR heatmap and connectivity polygons).
 const SPECTRAL_R = [
   [94,  79,  162], // 0.0  #5e4fa2
   [50,  136, 189], // 0.1  #3288bd
@@ -21,15 +21,15 @@ const SPECTRAL_R = [
   [158, 1,   66],  // 1.0  #9e0142
 ]
 
-// Le 9 tappe ColorBrewer da cui matplotlib costruisce `Reds`: è la palette con cui
-// PMAR (network_to_geojson) colora le frecce in base alla probabilità p.
+// The 9 ColorBrewer stops from which matplotlib builds `Reds`: the palette PMAR
+// (network_to_geojson) uses to colour the arrows by probability p.
 const REDS = [
   [255, 245, 240], [254, 224, 210], [252, 187, 161], [252, 146, 114], [251, 106, 74],
   [239, 59, 44],   [203, 24, 29],   [165, 15, 21],   [103, 0, 13],
 ]
 
-// RdBu_r di matplotlib (ColorBrewer, 11 tappe): blu sotto zero, bianco a zero, rosso
-// sopra. Per le mappe di differenza, dove il segno conta quanto il valore.
+// matplotlib's RdBu_r (ColorBrewer, 11 stops): blue below zero, white at zero, red
+// above. For difference maps, where the sign matters as much as the value.
 const RDBU_R = [
   [5, 48, 97],    [33, 102, 172], [67, 147, 195], [146, 197, 222], [209, 229, 240],
   [247, 247, 247],
@@ -45,28 +45,28 @@ function interpolate(stops, t) {
   return [0, 1, 2].map(k => Math.round(a[k] + f * (b[k] - a[k])))
 }
 
-/** Colore Spectral_r per t ∈ [0,1], come terna [r, g, b]. */
+/** Spectral_r colour for t ∈ [0,1], as a triple [r, g, b]. */
 export const spectralR = t => interpolate(SPECTRAL_R, t)
 
-/** Colore RdBu_r per t ∈ [0,1] (0.5 = zero), come terna [r, g, b]. */
+/** RdBu_r colour for t ∈ [0,1] (0.5 = zero), as a triple [r, g, b]. */
 export const divergingColor = t => interpolate(RDBU_R, t)
 
-/** Posizione di un valore con segno sulla scala divergente: [-dmax, dmax] → [0, 1]. */
+/** Position of a signed value on the diverging scale: [-dmax, dmax] → [0, 1]. */
 export function divergingNorm(val, dmax) {
   if (!Number.isFinite(val) || !(dmax > 0)) return null
   return Math.max(0, Math.min(1, (val / dmax + 1) / 2))
 }
 
 /**
- * Classi simmetriche attorno a zero, per le differenze. `n` pari: zero è un confine,
- * non sta in mezzo a una classe che mescolerebbe sovrastima e sottostima. Gli
- * estremi sono aperti, come per le altre classi lineari.
+ * Classes symmetric around zero, for differences. `n` even: zero is a boundary, not
+ * the middle of a class that would mix overestimates and underestimates. The outer
+ * classes are open, as for the other linear classes.
  */
 export function divergingClasses(dmax, n = 6) {
   const d = dmax > 0 ? dmax : 1
   const step = (2 * d) / n
   return Array.from({ length: n }, (_, i) => {
-    // Dal centro, non da -d: così il confine a zero è esattamente 0 e non 1e-17.
+    // From the centre, not from -d: so the boundary at zero is exactly 0 and not 1e-17.
     const from = (i - n / 2) * step
     const to   = (i + 1 - n / 2) * step
     return {
@@ -78,12 +78,12 @@ export function divergingClasses(dmax, n = 6) {
   })
 }
 
-/** Colore `Reds` per t ∈ [0,1], come stringa esadecimale (lo stesso formato di PMAR). */
+/** `Reds` colour for t ∈ [0,1], as a hex string (the same format as PMAR). */
 export function redsColor(t) {
   return '#' + interpolate(REDS, t).map(c => c.toString(16).padStart(2, '0')).join('')
 }
 
-/** Normalizzazione logaritmica in [0,1]; null per valori ≤ 0 o non finiti. */
+/** Logarithmic normalisation to [0,1]; null for values ≤ 0 or not finite. */
 export function logNorm(val, vmin, vmax) {
   if (val <= 0 || !isFinite(val)) return null
   const logMin = Math.log10(Math.max(vmin, 1e-12))
@@ -92,8 +92,8 @@ export function logNorm(val, vmin, vmax) {
 }
 
 /**
- * Normalizzazione lineare in [0,1], per metriche lineari che possono valere 0.
- * logNorm() non le serve: restituisce null per ogni valore ≤ 0.
+ * Linear normalisation to [0,1], for linear measures that can be 0.
+ * logNorm() does not suit them: it returns null for every value ≤ 0.
  */
 export function linNorm(val, vmin, vmax) {
   if (!isFinite(val)) return null
@@ -102,10 +102,10 @@ export function linNorm(val, vmin, vmax) {
 }
 
 /**
- * Classi logaritmiche per la heatmap: limiti equidistanti in log10 fra vmin e vmax.
- * Ogni classe è `{ lo, hi, t }`, con t la posizione del suo centro nella scala colori.
- * La prima e l'ultima sono aperte (lo = 0, hi = Infinity): sulla mappa i valori fuori
- * da [vmin, vmax] sono già schiacciati sui colori estremi, e devono stare in una classe.
+ * Logarithmic classes for the heatmap: bounds equally spaced in log10 between vmin and
+ * vmax. Each class is `{ lo, hi, t }`, with t the position of its centre on the colour
+ * scale. The first and last are open (lo = 0, hi = Infinity): on the map, values outside
+ * [vmin, vmax] are already clamped to the extreme colours, and must be in a class.
  */
 export function logClasses(vmin, vmax, n = 6) {
   const lo = Math.log10(Math.max(vmin, 1e-12))
@@ -120,20 +120,20 @@ export function logClasses(vmin, vmax, n = 6) {
   }))
 }
 
-/** Classi lineari per le metriche di connettività; estremi aperti come in logClasses. */
+/** Linear classes for the connectivity measures; open outer classes as in logClasses. */
 export function linearClasses(vmin, vmax, n = 5) {
   const span = vmax > vmin ? vmax - vmin : 1
   return Array.from({ length: n }, (_, i) => ({
     lo: i === 0     ? -Infinity : vmin + (i / n) * span,
     hi: i === n - 1 ? Infinity  : vmin + ((i + 1) / n) * span,
-    // Etichette: gli estremi mostrano i valori reali, non ±∞.
+    // Labels: the outer bounds show the real values, not ±∞.
     from: vmin + (i / n) * span,
     to:   vmin + ((i + 1) / n) * span,
     t:    (i + 0.5) / n,
   }))
 }
 
-/** Fasce di probabilità per le frecce (p ∈ [0, 1]); t = colore Reds a metà fascia. */
+/** Probability bands for the arrows (p ∈ [0, 1]); t = Reds colour at the middle of the band. */
 export const PROBABILITY_BANDS = [
   [0, 0.01], [0.01, 0.05], [0.05, 0.10], [0.10, 0.25], [0.25, 0.50], [0.50, 1],
 ].map(([lo, hi], i, all) => ({
@@ -144,9 +144,9 @@ export const PROBABILITY_BANDS = [
 }))
 
 /**
- * Indice della classe che contiene *value* (intervalli [lo, hi)), o null se il valore
- * non è rappresentabile. Per le classi logaritmiche (lo della prima = 0) i valori ≤ 0
- * non hanno classe, come non hanno colore sulla mappa.
+ * Index of the class that contains *value* (intervals [lo, hi)), or null if the value
+ * cannot be shown. For logarithmic classes (lo of the first = 0), values ≤ 0 have no
+ * class, as they have no colour on the map.
  */
 export function classIndex(value, classes) {
   if (!Number.isFinite(value)) return null
@@ -157,7 +157,7 @@ export function classIndex(value, classes) {
   return null
 }
 
-/** Numero leggibile per un limite di classe: 1.2k, 35, 0.05, 3e-4. */
+/** Readable number for a class bound: 1.2k, 35, 0.05, 3e-4. */
 export function formatBound(v) {
   if (!Number.isFinite(v)) return ''
   const a = Math.abs(v)
@@ -169,5 +169,5 @@ export function formatBound(v) {
   return v.toExponential(0)
 }
 
-/** Percentuale per le fasce di probabilità: 0.05 → "5 %". */
+/** Percentage for the probability bands: 0.05 → "5 %". */
 export const formatPercent = p => `${+(p * 100).toPrecision(2)} %`

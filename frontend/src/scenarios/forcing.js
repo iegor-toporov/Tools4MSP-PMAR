@@ -1,13 +1,13 @@
 /**
- * Provenienza delle correnti di una simulazione, in una riga: bacino, risoluzione,
- * passo e tipo di prodotto dei dataset CMEMS usati (`forcing_datasets.cur` dello
- * scenario, scritto da PrecomputeProcess). Più dataset (regionale + globale, o
- * reanalisi + analisi) si uniscono con " + ".
+ * Provenance of the currents of a simulation, in one line: basin, resolution, step and
+ * product type of the CMEMS datasets used (`forcing_datasets.cur` of the scenario,
+ * written by PrecomputeProcess). Several datasets (regional + global, or reanalysis +
+ * analysis) are joined with " + ".
  *
- * Modulo puro: testato in forcing.test.js.
+ * Pure module: tested in forcing.test.js.
  */
 
-/** Etichetta, o `labels.unknown` per gli scenari precedenti (senza provenienza). */
+/** Label, or `labels.unknown` for scenarios without provenance. */
 export function forcingLabel(sc, labels) {
   const cur = sc?.forcing_datasets?.cur
   if (!cur?.length) return labels.unknown

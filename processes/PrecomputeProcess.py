@@ -31,9 +31,9 @@ from processes import scenario_state as state
 
 logger = setup_logger('precompute_process', 'pmar', 'precompute_process.log')
 
-# Una simulazione alla volta: la garantisce la coda Celery `simulations`, servita da
-# un worker dedicato con un solo processo (vedi docker-compose.yml). Un semaforo qui
-# non basterebbe: vale per processo, e il worker generico ne ha più d'uno.
+# One simulation at a time: the Celery queue `simulations` guarantees it, served by a
+# dedicated worker with a single process (see docker-compose.yml). A semaphore here
+# would not be enough: it works per process, and the generic worker has more than one.
 
 PROCESS_METADATA = {
     'version': '0.1.0',
@@ -222,7 +222,7 @@ def _save_custom_shapefile(geojson_input, shapefile_b64, dest_dir, custom_id):
 
 
 def _as_bool(v):
-    """Booleano da JSON o da form: accetta anche "false" / "0" come stringhe."""
+    """Boolean from JSON or a form: also accepts "false" / "0" as strings."""
     if isinstance(v, str):
         return v.strip().lower() not in ('false', '0', 'no', 'off', '')
     return bool(v)
@@ -288,8 +288,8 @@ def _build_custom_scenario(data, shp_path=None, area_label=None, job_id=None):
                                           pressure, pnum, duration_days, time_step_hours,
                                           start_time_str, label, res)
     except Exception:
-        # Richiesta rifiutata (es. troppe particelle): lo shapefile appena salvato non
-        # appartiene a nessuno scenario. Quelli Tools4MSP sono condivisi e restano.
+        # Request rejected (e.g. too many particles): the shapefile just saved belongs to
+        # no scenario. The Tools4MSP ones are shared and stay.
         if own_shp:
             state.remove_scenario_files(custom_id, {'shapefile': shp_path})
         raise
@@ -297,20 +297,20 @@ def _build_custom_scenario(data, shp_path=None, area_label=None, job_id=None):
 
 def _describe_custom_scenario(data, custom_id, shp_path, area_label, job_id, pressure, pnum,
                               duration_days, time_step_hours, start_time_str, label, res):
-    """Seconda metà di :func:`_build_custom_scenario`, una volta salvato lo shapefile:
-    semina, bounds e JSON dello scenario in stato `queued`."""
+    """Second half of :func:`_build_custom_scenario`, once the shapefile is saved:
+    seeding, bounds and the scenario JSON in state `queued`."""
 
-    # Seeding per la connettività.
+    # Seeding for connectivity.
     #
-    # OpenDrift ripartisce `number` fra i poligoni *proporzionalmente all'area*
-    # (seed_from_geopandas), mentre una matrice di connettività confronta le righe
-    # fra loro: con uno sforzo di campionamento diverso per poligono le probabilità
-    # di passaggio dei poligoni piccoli sarebbero stimate su pochissime particelle e
-    # non confrontabili con le altre. Questa modalità rilascia perciò lo stesso numero
-    # di particelle in ogni poligono.
-    # I bounds dell'area di semina vengono registrati qui una volta sola: servono
-    # alla UI per pre-compilare il riquadro della griglia di connettività, e
-    # rileggere lo shapefile a ogni chiamata di stato costerebbe troppo.
+    # OpenDrift splits `number` among the polygons *in proportion to their area*
+    # (seed_from_geopandas), while a connectivity matrix compares its rows with each
+    # other: with a different sampling effort per polygon, the passage probabilities of
+    # small polygons would be estimated from very few particles and could not be
+    # compared with the others. This mode therefore releases the same number of
+    # particles in every polygon.
+    # The bounds of the release area are recorded here, once: the UI needs them to
+    # pre-fill the box of the connectivity grid, and reading the shapefile again at
+    # every status call would cost too much.
     seed_gdf = gpd.read_file(shp_path)
     bounds   = [round(float(v), 4) for v in seed_gdf.to_crs('EPSG:4326').total_bounds]
 
@@ -319,8 +319,8 @@ def _describe_custom_scenario(data, custom_id, shp_path, area_label, job_id, pre
     n_polygons       = None
     if pnum_per_polygon:
         pnum_per_polygon = max(1, min(int(pnum_per_polygon), 20000))
-        # explode(): la stessa unità su cui semina OpenDrift — una MultiPolygon
-        # conta come i suoi componenti, non come un poligono solo.
+        # explode(): the same unit OpenDrift seeds on; a MultiPolygon counts as its
+        # parts, not as a single polygon.
         n_polygons = int(len(seed_gdf.geometry.explode(index_parts=False)))
         total = pnum_per_polygon * n_polygons
         if total > 100000:
@@ -329,7 +329,7 @@ def _describe_custom_scenario(data, custom_id, shp_path, area_label, job_id, pre
                 f'above the limit of 100000 particles per scenario.'
             )
         seeding_mode = 'per_polygon'
-        pnum         = total  # il totale effettivo, così la scheda scenario non mente
+        pnum         = total  # the actual total, so the scenario card is correct
     else:
         pnum_per_polygon = None
 
@@ -340,8 +340,8 @@ def _describe_custom_scenario(data, custom_id, shp_path, area_label, job_id, pre
     seedings = max(1, min(int(data.get('seedings', 1)), 12))
     tshift   = max(1, min(int(data.get('tshift', 30)), 365))
 
-    # Ci sono correnti CMEMS per quest'area e questo periodo? Meglio saperlo ora che
-    # dopo la coda. Col catalogo salvato, senza rete (se manca, il controllo si salta).
+    # Are there CMEMS currents for this area and period? Better to know now than after
+    # the queue. With the saved catalogue, without network (if missing, skip the check).
     t_first = datetime.fromisoformat(start_time_str)
     t_last  = t_first + timedelta(days=tshift * (seedings - 1) + duration_days)
     problem = cms.coverage_problem(
@@ -372,8 +372,8 @@ def _describe_custom_scenario(data, custom_id, shp_path, area_label, job_id, pre
         'description':      description,
         'seedings':         seedings,
         'tshift':           tshift,
-        # Senza spiaggiamento il tracciante è conservativo: è la condizione perché le
-        # matrici di transizione delle catene di Markov sommino a 1.
+        # Without stranding the tracer is conservative: this is the condition for the
+        # transition matrices of the Markov chains to sum to 1.
         'beaching':         _as_bool(data.get('beaching', True)),
         'nc_filename':      f'{custom_id}_s0.nc',
         'nc_filenames':     [f'{custom_id}_s{n}.nc' for n in range(seedings)],
@@ -381,9 +381,9 @@ def _describe_custom_scenario(data, custom_id, shp_path, area_label, job_id, pre
         'bounds':           bounds,
         'source':           'custom',
     }
-    # Ciclo di vita (processes/scenario_state.py): nasce in coda, il worker lo porta
-    # a running e poi a ready o failed. `created_at` fissa l'ordine nell'elenco, che
-    # non deve cambiare a ogni aggiornamento di stato.
+    # Life cycle (processes/scenario_state.py): it is born queued, the worker takes it to
+    # running and then to ready or failed. `created_at` fixes the order in the list,
+    # which must not change at every state update.
     sc.update(state=state.QUEUED, job_id=job_id, created_at=state.now_iso(),
               queued_at=state.now_iso(), progress={'done': 0, 'total': sc['seedings']})
     state.write_scenario(sc)
@@ -393,14 +393,14 @@ def _describe_custom_scenario(data, custom_id, shp_path, area_label, job_id, pre
 
 
 def _accumulate_timing(scenario_id, peak_rss_mb=None, **seconds):
-    """Somma i tempi di fase nel record dello scenario.
+    """Add the phase times to the scenario record.
 
-    Uno scenario multi-seeding esegue più run, quindi i tempi si accumulano e il
-    picco di memoria è il massimo fra le run. Serve a misurare il costo della
-    fase 1 e a giustificare il limite di una simulazione per volta.
+    A scenario with several releases runs several times, so the times add up and the
+    memory peak is the maximum over the runs. It measures the cost of phase 1 and
+    supports the limit of one simulation at a time.
     """
     sc = state.read_scenario(scenario_id)
-    if sc is None:                      # eliminato nel frattempo (Stop)
+    if sc is None:                      # deleted in the meantime (Stop)
         return
     timing = dict(sc.get('timing') or {})
     for key, value in seconds.items():
@@ -451,7 +451,7 @@ def _run_scenario(scenario_id, sc, shp_path):
 
     _t_forcing = _time.monotonic()
     pm_cfg = PRESSURE_MODELS[pressure]
-    # Tutte le forzanti in parallelo, coi dataset scelti dal catalogo (OpenDriftProcess).
+    # All the forcing in parallel, with the datasets chosen from the catalogue (OpenDriftProcess).
     forcing_paths, provenance, max_depth = fetch_forcings(
         pm_cfg, bounds[0], bounds[2], bounds[1], bounds[3],
         start_time, end_time, time_step_hours, cmems_margin, label=scenario_id)
@@ -465,21 +465,21 @@ def _run_scenario(scenario_id, sc, shp_path):
     os.environ.pop('PROJ_DATA', None)
 
     o = _build_model(pm_cfg['class'], {**pm_cfg, 'compound': sc.get('chemical_compound')})
-    # 'stranding': la particella che tocca costa si ferma (e da lì in poi non ha più
-    # posizione). 'previous': torna alla posizione precedente e resta in acqua, come
-    # PMAR con beaching=False. Gli scenari vecchi, senza il campo, spiaggiavano.
+    # 'stranding': a particle that touches the coast stops (and from then on has no
+    # position). 'previous': it goes back to its previous position and stays in the
+    # water, as PMAR with beaching=False. Scenarios without the field used stranding.
     o.set_config('general:coastline_action', 'stranding' if sc.get('beaching', True) else 'previous')
-    # ChemicalDrift.prepare_run legge `.variables` di ogni reader: su un LazyReader
-    # questo lo inizializza fuori dall'ambiente, che non lo registra mai fra le fonti
-    # (correnti "mancanti" al primo passo). Per ChemicalDrift i reader si aprono subito.
+    # ChemicalDrift.prepare_run reads `.variables` of every reader: on a LazyReader this
+    # initialises it outside the environment, which never registers it as a source
+    # ("missing" currents at the first step). For ChemicalDrift the readers open at once.
     o.add_readers_from_list(forcing_paths, lazy=pm_cfg['class'] != 'ChemicalDrift')
 
     tmp_nc = os.path.join(OUT_DIR, f'precompute_{uuid.uuid4().hex}.nc')
     try:
         if sc.get('seeding_mode') == 'per_polygon':
-            # seed_from_shapefile ripartirebbe pnum proporzionalmente all'area; qui
-            # ogni poligono riceve lo stesso numero di particelle, così le righe
-            # della matrice di connettività sono confrontabili fra loro.
+            # seed_from_shapefile would split pnum in proportion to the area; here every
+            # polygon receives the same number of particles, so the rows of the
+            # connectivity matrix can be compared with each other.
             per_poly = int(sc['pnum_per_polygon'])
             polygons = list(gdf.geometry.explode(index_parts=False))
             for polygon in polygons:
@@ -542,7 +542,7 @@ def _run_scenario(scenario_id, sc, shp_path):
         write_s = _time.monotonic() - _t_write
         logger.info(f'[{scenario_id}] NC saved: {nc_output} ({write_s:.1f}s)')
 
-        # ru_maxrss è in kilobyte su Linux, in byte su macOS; i container sono Linux.
+        # ru_maxrss is in kilobytes on Linux, in bytes on macOS; the containers are Linux.
         peak_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
         _accumulate_timing(scenario_id, forcing_s=forcing_s,
                            integration_s=integration_s, write_s=write_s,
@@ -556,8 +556,8 @@ def _run_scenario(scenario_id, sc, shp_path):
 
 
 def _record_forcing(scenario_id, provenance):
-    """Annota nel JSON dello scenario i dataset CMEMS usati, per famiglia (provenienza
-    mostrata nell'interfaccia). Con più seeding si uniscono."""
+    """Record in the scenario JSON the CMEMS datasets used, per family (the provenance
+    shown in the interface). With several releases they are merged."""
     sc = state.read_scenario(scenario_id) or {}
     merged = dict(sc.get('forcing_datasets') or {})
     for family, items in provenance.items():
@@ -567,11 +567,11 @@ def _record_forcing(scenario_id, provenance):
 
 
 def _prefetch_multi_seeding(scenario_id, sc, shp_path):
-    """Con più seeding, un solo download per l'intervallo di tutti.
+    """With several releases, a single download for the period of all of them.
 
-    Ogni seeding poi trova le sue forzanti in cache, perché la cache si cerca per
-    contenimento. Solo se i seeding coprono almeno metà dell'intervallo: con seeding
-    distanti si scaricherebbero mesi che nessuno usa.
+    Each release then finds its forcing in the cache, because the cache is searched by
+    containment. Only if the releases cover at least half of the period: with releases
+    far apart, months that no one uses would be downloaded.
     """
     seedings, tshift = sc.get('seedings', 1), sc.get('tshift', 30)
     duration = sc['duration_days']
@@ -588,7 +588,7 @@ def _prefetch_multi_seeding(scenario_id, sc, shp_path):
             float(sc.get('cmems_margin', 5.0)), label=scenario_id)
         _record_forcing(scenario_id, provenance)
     except Exception as e:                                      # noqa: BLE001
-        # Non bloccante: ogni seeding riprova per conto suo.
+        # Not blocking: each release tries again on its own.
         logger.warning(f'[{scenario_id}] Forcing prefetch failed, per seeding instead: {e}')
 
 
@@ -641,13 +641,13 @@ class PrecomputeProcessor(BaseProcessor):
         super().__init__(processor_def, PROCESS_METADATA)
 
     def prepare(self, job_id, data):
-        """Chiamato dal manager **all'invio**, prima di mettere il job in coda.
+        """Called by the manager **on submission**, before the job is queued.
 
-        Controlla l'accesso, risolve la geometria e registra lo scenario come `queued`:
-        così compare subito nell'elenco (anche se un'altra simulazione occupa il
-        worker), e gli errori di input tornano subito all'utente invece di arrivare
-        come job fallito. Al worker passa solo lo `scenario_id`: il messaggio in coda
-        non deve trasportare lo shapefile in base64.
+        It checks access, resolves the geometry and records the scenario as `queued`:
+        so it appears in the list at once (even if another simulation occupies the
+        worker), and input errors go back to the user at once instead of arriving as a
+        failed job. Only the `scenario_id` goes to the worker: the queued message must
+        not carry the shapefile in base64.
         """
         require_unlocked(is_unlocked(data))
 
@@ -664,7 +664,7 @@ class PrecomputeProcessor(BaseProcessor):
             shp_path = ensure_t4msp_shapefile(area_id)
             areas    = _fetch_t4msp_areas()
             match    = next((a for a in areas if a['id'] == area_id), None)
-            # Il nome scritto dall'utente vince; senza, quello dell'area Tools4MSP.
+            # The name typed by the user wins; without it, that of the Tools4MSP area.
             if match and not area_label:
                 area_label = match['label']
 
@@ -696,8 +696,8 @@ class PrecomputeProcessor(BaseProcessor):
             ProcessorExecuteError: If no geometry source is provided, if the scenario
                 no longer exists, or if the simulation fails.
         """
-        # Arriva dal worker con il solo scenario_id preparato da `prepare` all'invio.
-        # Una chiamata diretta (senza manager) si prepara qui.
+        # It arrives from the worker with only the scenario_id prepared by `prepare` on
+        # submission. A direct call (without the manager) is prepared here.
         if set(data) == {'scenario_id'}:
             scenario_id = data['scenario_id']
         else:
@@ -711,22 +711,22 @@ class PrecomputeProcessor(BaseProcessor):
                                    progress={'done': 0, 'total': sc.get('seedings', 1)})
         logger.info(f'[PrecomputeProcess] Starting pre-computation for scenario: {scenario_id}')
 
-        # Contatori della cache azzerati per scenario, non per seeding: ciò che
-        # interessa è quanto l'intera simulazione ha dovuto scaricare.
+        # Cache counters reset per scenario, not per release: what matters is how much
+        # the whole simulation had to download.
         reset_cache_stats()
 
         try:
             _run_multi_scenario(scenario_id, sc, shp_path)
         except Exception as e:
-            # Errore vero (OpenDrift, CMEMS, soft time limit): lo scenario resta visibile
-            # come fallito, col messaggio, finché qualcuno non lo rimuove.
+            # A real error (OpenDrift, CMEMS, soft time limit): the scenario stays visible
+            # as failed, with the message, until someone removes it.
             logger.error(f'[PrecomputeProcess] Error during pre-computation of {scenario_id}: {e}', exc_info=True)
             state.mark_failed(scenario_id, e)
             raise ProcessorExecuteError(str(e))
         except BaseException:
-            # Stop (SIGTERM) o arresto del worker, se arrivano come eccezione: annullato,
-            # non è un errore. Se invece il processo muore di colpo, la pulizia la fanno
-            # la riconciliazione (job `dismissed`) o `fail_interrupted` al riavvio.
+            # Stop (SIGTERM) or worker shutdown, if they arrive as an exception: cancelled,
+            # not an error. If the process dies abruptly instead, the cleanup is done by
+            # the reconciliation (job `dismissed`) or by `fail_interrupted` at restart.
             state.remove_scenario_files(scenario_id)
             raise
 

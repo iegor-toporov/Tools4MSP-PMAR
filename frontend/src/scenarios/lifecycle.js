@@ -1,12 +1,12 @@
 /**
- * Ciclo di vita delle simulazioni come lo riporta `scenario_status`
- * (vedi processes/scenario_state.py): `queued` → `running` → `ready` | `failed`.
+ * Life cycle of the simulations as `scenario_status` reports it
+ * (see processes/scenario_state.py): `queued` → `running` → `ready` | `failed`.
  *
- * Lo stato vive sul server, non nella pagina: ricaricando, cambiando scheda o
- * dispositivo si ritrova lo stesso elenco. Qui si ricava cosa mostrare e quali
- * notifiche dare fra un polling e il successivo.
+ * The state lives on the server, not in the page: after a reload, or on another tab
+ * or device, the list is the same. Here the module derives what to show and which
+ * notifications to give between one poll and the next.
  *
- * Modulo puro (niente React, niente DOM): testato in lifecycle.test.js.
+ * Pure module (no React, no DOM): tested in lifecycle.test.js.
  */
 
 export const Status = {
@@ -16,12 +16,12 @@ export const Status = {
   FAILED:  'failed',
 }
 
-/** Ogni quanto rileggere l'elenco mentre qualcosa è in coda o in calcolo. */
+/** How often to read the list again while something is queued or running. */
 export const POLL_INTERVAL_MS = 5000
 
 export const isActive = st => st === Status.QUEUED || st === Status.RUNNING
 
-/** Stato di uno scenario; un backend vecchio, senza `state`, dà solo `computed`. */
+/** State of a scenario; a backend without `state` gives only `computed`. */
 export function statusOf(info) {
   return info.state ?? (info.computed ? Status.READY : Status.FAILED)
 }
@@ -31,12 +31,12 @@ export function anyActive(statuses) {
 }
 
 /**
- * Cambi di stato fra due letture dell'elenco, per le notifiche.
- * Contano solo gli scenari che erano attivi: alla prima lettura (`prev` null) non si
- * notifica niente, ma una simulazione che finisce dopo una ricarica sì.
- * Uno scenario attivo che sparisce è stato annullato (Stop).
+ * State changes between two readings of the list, for the notifications.
+ * Only scenarios that were active count: at the first reading (`prev` null) nothing is
+ * notified, but a simulation that finishes after a reload is.
+ * An active scenario that disappears was cancelled (Stop).
  *
- * @returns {{id: string, to: string}[]} `to` è `ready`, `failed` o `removed`
+ * @returns {{id: string, to: string}[]} `to` is `ready`, `failed` or `removed`
  */
 export function transitions(prev, next) {
   if (!prev) return []
@@ -50,15 +50,15 @@ export function transitions(prev, next) {
   return out
 }
 
-/** Minuti interi trascorsi da un timestamp ISO, o null. */
+/** Whole minutes elapsed since an ISO timestamp, or null. */
 export function minutesSince(iso, now = Date.now()) {
   const t = iso ? Date.parse(iso) : NaN
   return Number.isFinite(t) ? Math.max(0, Math.floor((now - t) / 60000)) : null
 }
 
 /**
- * Testo breve dello stato, per l'elenco e il riquadro delle simulazioni in corso.
- * @param {object} s  testi: statusReady, statusFailed, statusQueued ({n}),
+ * Short text of the state, for the list and the box of running simulations.
+ * @param {object} s  texts: statusReady, statusFailed, statusQueued ({n}),
  *                    statusRunning, statusRunningSeeding ({n}, {total})
  */
 export function statusText(sc, s) {
@@ -80,15 +80,15 @@ export function statusText(sc, s) {
   }
 }
 
-// Messaggi che scrive il backend stesso (scenario_state.py): si traducono. Gli altri
-// (OpenDrift, CMEMS…) restano come sono, perché sono la spiegazione tecnica.
+// Messages written by the backend itself (scenario_state.py): they are translated. The
+// others (OpenDrift, CMEMS…) stay as they are, because they are the technical cause.
 const KNOWN_ERRORS = {
   'interrupted (worker restart)':              'interrupted',
   'incomplete (created before job tracking)':  'incomplete',
   'job lost (no record in the queue)':         'lost',
 }
 
-/** Messaggio d'errore da mostrare; `e` = testi { interrupted, incomplete, lost, unknown }. */
+/** Error message to show; `e` = texts { interrupted, incomplete, lost, unknown }. */
 export function errorText(error, e) {
   if (!error) return e.unknown
   const key = KNOWN_ERRORS[error]
