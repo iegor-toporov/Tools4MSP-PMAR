@@ -1,0 +1,22 @@
+scenario,analysis,config,values,max_value,max_abs_diff,max_rel_diff,within_rounding,note
+S,density,"0.1 deg, source none",624,9076.0,0.0,0.0,True,
+S,density,"0.1 deg, source windfarms",624,56.875,0.0005,8.79e-06,True,weights below 1e-6 of the maximum removed
+S,connectivity,"transition, 0.25 deg",36,0.576923,4.3e-07,7.46e-07,True,
+S,propagation,"0.25 deg, dt 1 d, step 1",6,253.0,1.42e-14,5.62e-17,True,0 particle positions of 2000 in no PMAR cell
+S,propagation,"0.25 deg, dt 1 d, step 2",6,261.75,0.05,0.000191,True,0 particle positions of 2000 in no PMAR cell
+S,propagation,"0.25 deg, dt 1 d, step 5",6,304.878375,0.0216,7.09e-05,True,0 particle positions of 2000 in no PMAR cell
+S,propagation,"0.25 deg, dt 1 d, step 10",6,263.884955,0.015,5.7e-05,True,0 particle positions of 2000 in no PMAR cell
+M,density,"0.1 deg, source none",8100,80687.0,0.0,0.0,True,
+M,density,"0.1 deg, source windfarms",8100,2707.547619,0.000492,1.82e-07,True,weights below 1e-6 of the maximum removed
+M,connectivity,"transition, 0.5 deg",17956,1.0,4.94e-07,4.94e-07,True,
+M,propagation,"0.25 deg, dt 5 d, step 1",323,83.0,0.727,0.00876,False,2 cells masked as land by PMAR left out; 6 particle positions of 20000 in no PMAR cell
+M,propagation,"0.25 deg, dt 5 d, step 2",323,121.553767,0.781,0.00642,False,2 cells masked as land by PMAR left out; 6 particle positions of 20000 in no PMAR cell
+M,propagation,"0.25 deg, dt 5 d, step 5",323,253.00605,1.1,0.00434,False,2 cells masked as land by PMAR left out; 6 particle positions of 20000 in no PMAR cell
+M,propagation,"0.25 deg, dt 5 d, step 10",323,278.726877,0.328,0.00118,False,2 cells masked as land by PMAR left out; 6 particle positions of 20000 in no PMAR cell
+L,density,"0.1 deg, source none",8100,59308.5,0.0,0.0,True,
+L,density,"0.1 deg, source windfarms",8100,1066.635922,0.0005,4.69e-07,True,weights below 1e-6 of the maximum removed
+L,connectivity,"transition, 0.5 deg",17956,1.0,5e-07,5e-07,True,
+L,propagation,"0.25 deg, dt 10 d, step 1",328,112.0,1.25,0.0112,False,2 cells masked as land by PMAR left out; 38 particle positions of 110800 in no PMAR cell
+L,propagation,"0.25 deg, dt 10 d, step 2",328,131.894482,1.98,0.015,False,2 cells masked as land by PMAR left out; 38 particle positions of 110800 in no PMAR cell
+L,propagation,"0.25 deg, dt 10 d, step 5",328,341.990338,4.07,0.0119,False,2 cells masked as land by PMAR left out; 38 particle positions of 110800 in no PMAR cell
+L,propagation,"0.25 deg, dt 10 d, step 10",328,701.877551,9.67,0.0138,False,2 cells masked as land by PMAR left out; 38 particle positions of 110800 in no PMAR cell

@@ -4,14 +4,23 @@ A DTO web application for on-demand anthropogenic pressure modelling and assessm
 
 ## GUI Preview
 
-![PMAR analysis - particle density heatmap using Tracer model. Res 0.05º.](images/PMAR_example_1.png)
-<p align="center">PMAR analysis - particle density heatmap using Tracer model. Res 0.05º.
-</p>
+![Dispersal analysis on a 30-day scenario of the whole Adriatic: particle density weighted by EMODnet offshore wind farms, with the histogram tool open.](images/ui-density-M.png)
+<p align="center">Dispersal from source on a 30-day scenario of the whole Adriatic (10,000 particles): particle density weighted by the EMODnet offshore wind farms, with the histogram tool, the layer list and the analysis tools.</p>
 
 <br>
 
-![PMAR analysis - particle density heatmap using Tracer model. Res 0.05º. Tools as floating windows on top.](images/PMAR_example_2.png)
-<p align="center">PMAR analysis - particle density heatmap using Tracer model. Res 0.05º. Tools as floating windows on top.</p>
+![Structural connectivity of a multi-release Adriatic scenario on a 0.5° grid, with the connections of one cell.](images/ui-connectivity-L.png)
+<p align="center">Structural connectivity of a multi-release Adriatic scenario (4 releases of 90 days) on a 0.5° grid: cells coloured by in-strength, arrows showing the connections of the selected cell.</p>
+
+<br>
+
+![Markov-chain propagation of the same scenario at the second step of 90 days.](images/ui-propagation-L.png)
+<p align="center">Propagate forward: Markov-chain propagation of the same scenario with Δt = 90 days, shown at step 2 (180 days), with the step slider under the map.</p>
+
+<br>
+
+<p align="center"><img src="images/ui-simulations-panel.png" width="320" alt="Simulation panel with the simulations in progress and the form for a new multi-release simulation."></p>
+<p align="center">Simulation panel: simulations in progress (one running its second release of three, one waiting in the queue) and the form for a new simulation, with the multi-seeding box that lists the start and end of every release.</p>
 
 ## Architecture
 

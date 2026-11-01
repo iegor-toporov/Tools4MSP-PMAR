@@ -28,10 +28,9 @@ python3 bench/run.py storage
 | `cachedir` | none | What the forcing cache actually holds, by field |
 | `cachekey` | none | Hit rate of the normalised cache key against an exact-match key |
 | `containment` | none | What the containment lookup absorbs that the key could not |
-| `convergence` | none | Propagated against directly simulated distributions, over horizons |
-| `validation` | none | Noise floor, hold-out, persistence and season-matched split of the propagation error |
 | `phase1` | none | Phase-1 wall time from scenario records, local or `--remote` |
 | `analyses` | seconds each | Phase-2 wall time and payload size per analysis family |
+| `equivalence` | minutes | Each analysis as the interface receives it, against the PMAR library called directly on the same scenario |
 | `isolation` | minutes | Whether a running simulation degrades short-request latency (NFR2) |
 | `load` | minutes | Response times as the number of simultaneous users and analyses grows. Run it from a container on the stack's network, against the API process (see `exp_load`) |
 | `reference` | hours | Phases of the reference scenarios S, M and L (ch. 6), with an empty and a full cache, and a particle sweep on M. `--records NAME=id` reads back runs already on disk |
@@ -53,14 +52,9 @@ several gigabytes across the default sweep, and that cost falls on them as well 
 Run it deliberately and not in a loop. It also wants a quiet machine, since it is the only
 experiment whose numbers are network timings.
 
-`containment` and `convergence` are free but not trivial. `containment` drives the real
-`find_cached` against a temporary cache directory, so it measures the shipped lookup rather
-than a restatement of it; its unit is a request *sequence*, because containment depends on
-what was downloaded before. `convergence` compares the propagated distribution with the
-simulated one read back from the same trajectory file, and `--subsample` varies the particle
-count at fixed everything else by taking random subsets of the trajectories, which is valid
-because a passive tracer's particles do not interact. Use `--out` to keep separate sweeps
-from overwriting each other.
+`containment` is free but not trivial: it drives the real `find_cached` against a temporary
+cache directory, so it measures the shipped lookup rather than a restatement of it; its unit
+is a request *sequence*, because containment depends on what was downloaded before.
 
 ## Conventions
 

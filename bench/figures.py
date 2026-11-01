@@ -286,8 +286,50 @@ def fig_load(out, prefix='load'):
     plt.close(fig)
 
 
+
+# ─────────────────────────────── cache ──────────────────────────────────────
+
+def fig_cache(out):
+    """Downloads for 200 requests, earlier key against containment, one pair per row."""
+    rows = read('containment')
+    short = {
+        'identical request repeated': 'identical request',
+        'start hour varies': 'start hour varies',
+        'area moves within one degree cell': 'area moves within a degree',
+        'area moves across degree cells': 'area moves across degrees',
+        'start day varies over a month': 'start day varies',
+        'duration varies (7/14/30 d)': 'duration varies',
+        'shorter period after a 30-day one': 'shorter after a 30-day request',
+        'narrower margin after a wide one': 'narrower after a wide request',
+        'surface after a 200 m request': 'surface after a 200 m request',
+        'periods lengthening, 7 to 30 days': 'periods growing',
+    }
+    labels = [short.get(r['variation'], r['variation']) for r in rows]
+    y = np.arange(len(rows))[::-1].astype(float)
+    y[:6] += 0.7                      # a gap before the sequences where order matters
+    fig, ax = plt.subplots(figsize=(WIDTH, 3.4))
+    h = 0.36
+    key = [num(r['key_downloads']) for r in rows]
+    con = [num(r['containment_downloads']) for r in rows]
+    ax.barh(y + h / 2, key, h, color='#999999', label='earlier key')
+    ax.barh(y - h / 2, con, h, color=COLOURS['M'], label='containment')
+    for yi, k, c in zip(y, key, con):
+        ax.text(k * 1.08, yi + h / 2, f'{k:.0f}', va='center', fontsize=6.5)
+        ax.text(c * 1.08, yi - h / 2, f'{c:.0f}', va='center', fontsize=6.5)
+    ax.set_yticks(y)
+    ax.set_yticklabels(labels)
+    ax.set_xscale('log')
+    ax.set_xlim(0.8, 400)
+    ax.set_xlabel('downloads for 200 requests (fewer is better)')
+    ax.text(380, (y[5] + y[6]) / 2, 'from here, the order of the requests matters',
+            fontsize=7, ha='right', va='center', style='italic')
+    ax.legend(frameon=False, loc='lower right', bbox_to_anchor=(1, 1.0), ncol=2)
+    fig.savefig(os.path.join(out, 'eval-cache.pdf'))
+    plt.close(fig)
+
 FIGURES = {'maps': fig_maps, 'phase1': fig_phase1, 'scaling': fig_scaling,
-           'explore': fig_explore, 'load': fig_load}
+           'explore': fig_explore, 'load': fig_load, 'cache': fig_cache,
+}
 
 
 def main():

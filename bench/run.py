@@ -264,146 +264,6 @@ def exp_cachekey(args):
               f"{r['hit_rate']:>8.1%}   {r['expected']}")
 
 
-def exp_convergence(args):
-    """Propagated against directly simulated distributions, over horizons.
-
-    Ch. 5 reports a single unfavourable configuration and asks for this
-    experiment before drawing a usable conclusion. The design it specifies: fix
-    area, duration and dt; vary the particle count so that particles per cell
-    span an order of magnitude around the 30 the platform recommends; at each
-    setting compare the propagated distribution with the simulated one at a
-    sequence of horizons.
-
-    The criteria are fixed here, before any run, because deciding them after
-    seeing the curves would make them worthless:
-
-        AGREE   total variation distance <= 0.10
-        USABLE  total variation distance <= 0.25
-        BEYOND  the first horizon above 0.25, which is the trust limit reported
-
-    Total variation distance is taken between the two distributions *restricted
-    to the domain and renormalised*, so that it measures misplacement of the
-    material still in play and does not double-count the absorbed mass, which
-    is reported separately in the same row. Both are needed: a chain can hold
-    the right shape while losing the wrong amount of mass, and the Black Sea
-    configuration of ch. 5 does exactly that.
-
-    Nothing here is simulated. It reads scenarios already on disk and uses the
-    same library functions the markov process uses, so what is measured is the
-    formulation rather than a separate implementation of it.
-    """
-    sys.path.insert(0, ROOT)
-    import numpy as np
-    from processes import markov_core as mk
-    from processes.ConnectivityProcess import _load_scenario
-    from processes.MarkovProcess import _positions
-
-    AGREE, USABLE = 0.10, 0.25
-    rows = []
-    combos = [(sid, res, dt, nsub) for sid in args.scenarios
-              for res in args.res for dt in args.dt for nsub in args.subsample]
-    for sid, res, dt, nsub in combos:
-        sc, nc_list = _load_scenario(sid)
-        step_h = float(sc.get('time_step_hours') or 1)
-        dt_steps = max(1, int(round(dt * 24.0 / step_h)))
-        dt_days = dt_steps * step_h / 24.0
-        bounds = args.bbox or sc.get('bounds')
-        grid = mk.Grid(bounds, res)
-
-        # How many output steps the shortest release has, so every horizon
-        # compared below has a simulated counterpart in every release.
-        import xarray as xr
-        n_time = min(int(xr.open_dataset(nc).sizes['time']) for nc in nc_list)
-        k_max = (n_time - 1) // dt_steps
-        if k_max < 2:
-            print(f'  {sid} res={res} dt={dt_days:g}d: {k_max} horizons; skipped')
-            continue
-        steps = [k * dt_steps for k in range(k_max + 1)]
-
-        per_seed = [_positions(nc, steps, grid) for nc in nc_list]
-
-        # Varying the particle count at fixed area, duration, grid and dt. A
-        # random subset of the trajectories of an existing run is distributed
-        # exactly as a smaller run would have been, because the particles are
-        # seeded independently and a passive tracer does not interact with its
-        # neighbours; for a model with interaction this shortcut would be wrong.
-        if nsub:
-            rng = np.random.default_rng(args.seed)
-            sliced = []
-            for cells in per_seed:
-                n = len(next(iter(cells.values())))
-                if nsub > n:
-                    sliced = None
-                    break
-                take = rng.choice(n, size=nsub, replace=False)
-                sliced.append({k: v[take] for k, v in cells.items()})
-            if sliced is None:
-                print(f'  {sid}: {nsub} exceeds the {n} particles available; skipped')
-                continue
-            per_seed = sliced
-
-        M, dom, Ni = mk.transition_matrix([c[0] for c in per_seed],
-                                          [c[dt_steps] for c in per_seed], grid.size)
-        q0 = Ni / len(nc_list)
-        frames = mk.propagate(M, q0, k_max)
-
-        to_dom = np.full(grid.size, -1, dtype=np.int64)
-        to_dom[dom] = np.arange(len(dom))
-        occupied = int((Ni > 0).sum())
-        per_cell = float(np.median(Ni[Ni > 0])) / len(nc_list)
-        m0 = q0.sum()
-        breach = None
-        # The short-dt diagnostic the markov process warns on: the median share
-        # of a cell's particles still in it after one interval.
-        stay = M.diagonal()[Ni > 0]
-        median_stay = float(np.median(stay)) if len(stay) else float('nan')
-
-        for k, step in enumerate(steps):
-            # simulated: where the particles actually are at k*dt
-            sim = np.zeros(len(dom))
-            for cells in per_seed:
-                idx = cells[step]
-                inside = idx[idx >= 0]
-                d = to_dom[inside]
-                np.add.at(sim, d[d >= 0], 1.0)
-            sim /= len(nc_list)
-            prop = frames[k]
-            a_sim = 1.0 - sim.sum() / m0
-            a_prop = 1.0 - prop.sum() / m0
-            if sim.sum() > 0 and prop.sum() > 0:
-                tvd = 0.5 * float(np.abs(sim / sim.sum() - prop / prop.sum()).sum())
-            else:
-                tvd = float('nan')
-            if breach is None and tvd > USABLE:
-                breach = round(k * dt_days, 1)
-            rows.append({
-                'scenario': sid, 'res': res, 'dt_days': dt_days,
-                'median_stay': round(median_stay, 4),
-                'releases': len(nc_list),
-                'particles': nsub or sc.get('pnum'),
-                'domain_cells': len(dom), 'occupied_cells': occupied,
-                'particles_per_cell': round(per_cell, 1),
-                'k': k, 'day': round(k * dt_days, 1),
-                'tvd': round(tvd, 4),
-                'absorbed_sim': round(a_sim, 4),
-                'absorbed_prop': round(a_prop, 4),
-                'absorbed_gap': round(a_prop - a_sim, 4),
-                'verdict': ('agree' if tvd <= AGREE else
-                            'usable' if tvd <= USABLE else 'beyond'),
-            })
-        last = rows[-1]
-        print(f"  {sid}  res={res}  dt={dt_days:g}d  n={nsub or sc.get('pnum')}  "
-              f"{per_cell:5.1f} p/cell over "
-              f"{occupied} occupied cells ({len(dom)} in domain), {k_max} horizons, "
-              f"median stay {median_stay:.2f}")
-        print(f"      tvd at the last horizon {last['tvd']:.3f}, "
-              f"absorbed sim {last['absorbed_sim']:.1%} vs prop "
-              f"{last['absorbed_prop']:.1%}, gap {last['absorbed_gap']:+.1%}")
-        print(f"      trust limit (tvd > {USABLE}): "
-              + (f'{breach:g} d' if breach is not None else 'not reached'))
-    write_csv(args.out, rows)
-
-
 def exp_load(args):
     """Response times as the number of simultaneous users grows.
 
@@ -543,154 +403,6 @@ def exp_load(args):
 
     write_csv(args.out + '_sync', rows_sync)
     write_csv(args.out + '_jobs', rows_jobs)
-
-
-def exp_validation(args):
-    """Decompose the propagation error: noise floor, hold-out, seasonality.
-
-    The convergence experiment compares the chain with the simulation it was
-    estimated from. This one answers the questions that comparison leaves
-    open, on the same stored scenarios and with no new simulation.
-
-      noise floor     the particles of every release are split at random into
-                      halves A and B. The distance between the simulated
-                      distributions of A and B is pure sampling noise, what two
-                      identical simulations with different seeds disagree by.
-      hold-out        the chain is estimated on A and compared with B, which it
-                      has never seen.
-      baselines       persistence (material stays where it started) and a
-                      uniform spread over the occupied cells.
-      seasonality     on the first release alone, two chains are compared with
-                      the same reference. The stationary one uses the matrix of
-                      the release's own first interval at every step. The
-                      seasonal one uses, for the interval starting on a given
-                      day, the first-interval matrix of the release that started
-                      closest before that day: right season, but particles that
-                      were seeded fresh, uniformly, so it still carries the
-                      no-memory error. What the seasonal chain removes is the
-                      error of using one season's currents for all of them.
-
-    A chain with one matrix per interval fitted to the same particles is not
-    used: it reproduces their distribution exactly, by construction, so it
-    would show nothing but the noise floor.
-
-    All distances are total variation over in-domain distributions,
-    renormalised, on the full grid index space.
-    """
-    sys.path.insert(0, ROOT)
-    import numpy as np
-    import xarray as xr
-    from scipy.sparse import coo_array, diags
-    from processes import markov_core as mk
-    from processes.ConnectivityProcess import _load_scenario
-    from processes.MarkovProcess import _positions
-
-    def tvd(a, b):
-        sa, sb = a.sum(), b.sum()
-        if sa <= 0 or sb <= 0:
-            return float('nan')
-        return 0.5 * float(np.abs(a / sa - b / sb).sum())
-
-    def matrix_T(c0, c1, n):
-        ok = c0 >= 0
-        i, j = c0[ok], c1[ok]
-        stay = j >= 0
-        N = coo_array((np.ones(int(stay.sum())), (i[stay], j[stay])), shape=(n, n)).tocsr()
-        Ni = np.bincount(i, minlength=n).astype(float)
-        inv = np.divide(1.0, Ni, out=np.zeros_like(Ni), where=Ni > 0)
-        return (diags(inv) @ N).T.tocsr()
-
-    def hist(cells, n):
-        c = cells[cells >= 0]
-        return np.bincount(c, minlength=n).astype(float)
-
-    pooled, seasonal = [], []
-    for sid in args.scenarios:
-        sc, nc_list = _load_scenario(sid)
-        step_h = float(sc.get('time_step_hours') or 1)
-        dt_steps = max(1, int(round(args.dt * 24.0 / step_h)))
-        dt_days = dt_steps * step_h / 24.0
-        tshift = float(sc.get('tshift') or 0)
-        grid = mk.Grid(args.bbox or sc.get('bounds'), args.res)
-        n = grid.size
-        n_time = min(int(xr.open_dataset(nc).sizes['time']) for nc in nc_list)
-        k_max = (n_time - 1) // dt_steps
-        steps = [k * dt_steps for k in range(k_max + 1)]
-
-        rng = np.random.default_rng(args.seed)
-        RA, RB = [], []            # per release: {step: cells} for halves A and B
-        for nc in nc_list:
-            cells = _positions(nc, steps, grid)
-            m = len(cells[0])
-            perm = rng.permutation(m)
-            a, b = perm[: m // 2], perm[m // 2:]
-            RA.append({s: cells[s][a] for s in steps})
-            RB.append({s: cells[s][b] for s in steps})
-        half = len(RA[0][0])
-
-        # ---- pooled over releases: floor, in-sample, hold-out, baselines
-        A = {s: np.concatenate([r[s] for r in RA]) for s in steps}
-        B = {s: np.concatenate([r[s] for r in RB]) for s in steps}
-        simA = {s: hist(A[s], n) for s in steps}
-        simB = {s: hist(B[s], n) for s in steps}
-        q0 = simA[0].copy(); m0 = q0.sum()
-        uniform = (q0 > 0).astype(float)
-        PT = matrix_T(A[0], A[dt_steps], n)
-        q = q0.copy()
-        for k, s in enumerate(steps):
-            if k:
-                q = PT @ q
-            pooled.append({
-                'scenario': sid, 'res': args.res, 'dt_days': dt_days,
-                'particles_per_half_release': half, 'k': k, 'day': round(k * dt_days, 1),
-                'noise_floor': round(tvd(simA[s], simB[s]), 4),
-                'chain_insample': round(tvd(q, simA[s]), 4),
-                'chain_holdout': round(tvd(q, simB[s]), 4),
-                'persistence': round(tvd(q0, simB[s]), 4),
-                'uniform': round(tvd(uniform, simB[s]), 4),
-                'absorbed_sim': round(1 - simB[s].sum() / simB[0].sum(), 4),
-                'absorbed_chain': round(1 - q.sum() / m0, 4),
-            })
-
-        # ---- first release only: stationary against season-matched chain
-        if len(nc_list) > 1 and tshift > 0:
-            first = [matrix_T(r[0], r[dt_steps], n) for r in RA]   # one per release
-            a0, b0 = RA[0], RB[0]
-            p0 = hist(a0[0], n)
-            sA = {s: hist(a0[s], n) for s in steps}
-            sB = {s: hist(b0[s], n) for s in steps}
-            q_st, q_se = p0.copy(), p0.copy()
-            used = []
-            for k, s in enumerate(steps):
-                if k:
-                    start_day = (k - 1) * dt_days
-                    r = min(int(start_day // tshift), len(first) - 1)
-                    used.append(r)
-                    q_st = first[0] @ q_st
-                    q_se = first[r] @ q_se
-                seasonal.append({
-                    'scenario': sid, 'res': args.res, 'dt_days': dt_days, 'tshift': tshift,
-                    'k': k, 'day': round(k * dt_days, 1),
-                    'release_matrix_used': used[-1] if k else 0,
-                    'noise_floor': round(tvd(sA[s], sB[s]), 4),
-                    'stationary': round(tvd(q_st, sB[s]), 4),
-                    'season_matched': round(tvd(q_se, sB[s]), 4),
-                    'persistence': round(tvd(p0, sB[s]), 4),
-                })
-
-        print(f"  {sid}: {k_max} horizons of {dt_days:g} d, {half} particles per release in each half")
-        print(f"  pooled   {'day':>5} {'floor':>6} {'in-smp':>6} {'hold':>6} {'persist':>7} {'unif':>6}")
-        for r in pooled[-(k_max + 1):]:
-            print(f"           {r['day']:>5} {r['noise_floor']:>6} {r['chain_insample']:>6} "
-                  f"{r['chain_holdout']:>6} {r['persistence']:>7} {r['uniform']:>6}")
-        if seasonal and seasonal[-1]['scenario'] == sid:
-            print(f"  release0 {'day':>5} {'floor':>6} {'station':>7} {'season':>6} {'persist':>7}  matrix")
-            for r in seasonal[-(k_max + 1):]:
-                print(f"           {r['day']:>5} {r['noise_floor']:>6} {r['stationary']:>7} "
-                      f"{r['season_matched']:>6} {r['persistence']:>7}  r{r['release_matrix_used']}")
-    write_csv(args.out, pooled)
-    if seasonal:
-        write_csv(args.out + '_seasonal', seasonal)
 
 
 def exp_forcing(args):
@@ -1004,8 +716,8 @@ def exp_analyses(args):
 # Chapter 6 reports every simulation-side measurement on the same small set of
 # scenarios, so a reader meets three names and finds them everywhere. S is the
 # configuration of the script baseline; M is a month over the whole basin; L is
-# the convergence campaign of ch. 5 (bench/adriatic_campaign.py), which already
-# has a recorded run and is not repeated here. July 2024 is chosen because no
+# the Adriatic run built by bench/adriatic_campaign.py, which already has a
+# recorded run and is not repeated here. July 2024 is chosen because no
 # forcing for it was cached, so the first run of S and of M is a cold one.
 
 S_BOX = [[12.4, 44.6], [13.0, 44.6], [13.0, 45.0], [12.4, 45.0], [12.4, 44.6]]
@@ -1138,6 +850,159 @@ def exp_sparsity(args):
               f"{r['dense_kb']} KB dense, {r['sparse_kb']} KB sparse")
     write_csv(args.out, rows)
 
+
+def exp_equivalence(args):
+    """Does the interface show what PMAR computes? Each analysis against the library.
+
+    For every analysis family, the result the client receives through the API is
+    compared with the same quantity computed by calling the PMAR library directly
+    on the same scenario, the way a scientist would in a script. Only the inputs
+    that are not PMAR's to compute are shared: the activity layer rasterised onto
+    the grid, and the grid cells used as connectivity nodes.
+
+    Expected differences, stated before the runs: the rounding of the response (3
+    decimals for density, 6 for matrices, 4 significant digits for propagation),
+    and, for weighted density, the weights below 1e-6 of the maximum that the
+    platform removes on purpose. PMAR's propagation is reprojected onto the
+    land-sea mask of its grid, so coastal cells that the mask counts as land come
+    back as NaN; they are left out of the comparison and counted in the note.
+    PMAR also leaves out of its states the particles in those cells and the
+    particles exactly on a cell edge (its point-in-polygon test excludes the
+    boundary), while the platform assigns every particle by arithmetic; the
+    note reports how many particles this concerns.
+    """
+    sys.path.insert(0, ROOT)
+    import numpy as np
+    import xarray as xr
+    import geopandas as gpd
+    import shapely
+    os.environ.pop('PROJ_LIB', None)
+    os.environ.pop('PROJ_DATA', None)
+    from pmar.pmar import PMAR
+    from pmar.utils import make_grid
+    from processes.markov_core import Grid
+    from processes.ConnectivityProcess import (_load_scenario, _make_grid_polygons,
+                                               _scenario_bbox, align_bbox)
+    from processes.PMARProcess import (_fetch_windfarms, _gdf_to_use_raster,
+                                       EMODNET_CACHE_DIR)
+    import tempfile
+    api = Api()
+    rows = []
+    tmp = tempfile.mkdtemp()
+
+    def pmar_for(nc):
+        p = PMAR(spatial_domain=None, pressure='generic', basedir=tmp, loglevel=50)
+        p.ds = xr.open_dataset(nc)
+        return p
+
+    def row(name, analysis, config, ref, got, note, tol):
+        ref, got = np.asarray(ref, float), np.asarray(got, float)
+        masked = np.isnan(ref)
+        if masked.any():
+            note = f'{int(masked.sum())} cells masked as land by PMAR left out; {note}'
+            ref, got = ref[~masked], got[~masked]
+        diff = np.abs(ref - got)
+        scale = float(np.abs(ref).max()) or 1.0
+        rows.append({'scenario': name, 'analysis': analysis, 'config': config,
+                     'values': int(ref.size), 'max_value': round(scale, 6),
+                     'max_abs_diff': float(f'{diff.max():.3g}'),
+                     'max_rel_diff': float(f'{diff.max() / scale:.3g}'),
+                     'within_rounding': bool(diff.max() <= tol), 'note': note})
+        r = rows[-1]
+        print(f"  {name:2} {analysis:12} {config:24} max diff {r['max_abs_diff']:<9} "
+              f"relative {r['max_rel_diff']:<9} {'within rounding' if r['within_rounding'] else note}")
+
+    for item in args.cases:
+        name, sid, conn_res, prop_res, dt = item.split(':')
+        sc, nc_list = _load_scenario(sid)
+        # the exact bounds of the release polygon, as the process reads them; the
+        # record keeps them rounded to 4 decimals, which would shift the grid
+        b = gpd.read_file(sc['shapefile']).to_crs('EPSG:4326').total_bounds
+        res, margin = 0.1, 1.0
+        study = [b[0] - margin, b[1] - margin, b[2] + margin, b[3] + margin]
+
+        # ---- dispersal from source, without and with a source layer
+        for source in ('none', 'windfarms'):
+            _, out, _ = api.run('pmar', {'scenario_id': sid, 'res': res, 'margin': margin,
+                                         'use_source': source})
+            if not out or 'raster_values' not in out:
+                print(f'  {name} density {source}: no result'); continue
+            got = np.array(out['raster_values'], float)
+            use = None
+            if source != 'none':
+                if not out.get('windfarms_geojson'):
+                    print(f'  {name}: no wind farm in the study area, skipped'); continue
+                grid = make_grid(res=res, study_area=study)
+                use = _gdf_to_use_raster(_fetch_windfarms(study, EMODNET_CACHE_DIR), grid)
+            hs = []
+            for nc in nc_list:
+                p = pmar_for(nc)
+                p.study_area, p.grid = study, make_grid(res=res, study_area=study)
+                if use is not None:
+                    p.set_weights(res=res, study_area=study, use=use, normalize=True)
+                hs.append(p.get_histogram(res=res, study_area=study, weighted=use is not None,
+                                          dim=['trajectory', 'time']))
+            h = xr.concat(hs, dim='s').mean('s').values if len(hs) > 1 else hs[0].values
+            ref = np.where(np.isfinite(h) & (h > 0), h, 0.0)
+            row(name, 'density', f'{res} deg, source {source}', ref, got,
+                'weights below 1e-6 of the maximum removed' if use is not None else '',
+                0.0005 + 1e-9)
+
+        # ---- structural connectivity, transition
+        bbox = align_bbox(_scenario_bbox(sc), float(conn_res))
+        gdf, _ = _make_grid_polygons(float(conn_res), bbox)
+        _, out, _ = api.run('connectivity', {'scenario_id': sid, 'grid_res': float(conn_res),
+                                             'mode': 'transition'})
+        got = np.array(out['matrix'], float)
+        cms = [pmar_for(nc).get_cm(t=-1, cm_grid=gdf) for nc in nc_list]
+        ref = np.asarray((sum(cms) / len(cms)).todense(), float)
+        row(name, 'connectivity', f'transition, {conn_res} deg', ref, got, '', 5e-7 + 1e-12)
+
+        # ---- propagation forward
+        _, out, _ = api.run('markov', {'scenario_id': sid, 'res': float(prop_res),
+                                       'dt_days': float(dt)})
+        g, rres = out['grid'], float(prop_res)
+        gb = out['grid_bbox']
+        step_h = float(sc.get('time_step_hours') or 1)
+        dt_steps = int(round(float(dt) * 24 / step_h))
+        ps = [pmar_for(nc) for nc in nc_list]
+        ics, cms = [], []
+        for p in ps:
+            p.study_area, p.grid = gb, make_grid(res=rres, study_area=gb)
+            ics.append(p.get_histogram(res=rres, study_area=gb, weighted=False,
+                                       dim=['trajectory'], t=0))
+            cms.append(p.get_cm(t=dt_steps, res=rres, study_area=gb))
+        ic = sum(ics) / len(ics)
+        cm = sum(cms) / len(cms)
+        # particles the platform places in a cell and PMAR in none, at t0 and t0+dt
+        G, unassigned, total = Grid(gb, rres), 0, 0
+        for p in ps:
+            tree = shapely.STRtree(p.cm_grid.geometry.values)
+            for t in (0, dt_steps):
+                lon = p.ds.lon.isel(time=t).values
+                lat = p.ds.lat.isel(time=t).values
+                inside = np.flatnonzero(G.cell_index(lon, lat) >= 0)
+                found, _ = tree.query(shapely.points(lon, lat), predicate='within')
+                unassigned += len(np.setdiff1d(inside, found))
+            total += p.ds.sizes['trajectory']
+        unassigned_note = (f'{unassigned} particle positions of {2 * total} '
+                           f'in no PMAR cell')
+        for k in args.steps:
+            if k >= len(out['frames']):
+                continue
+            pred = ps[0].predict_with_cm(ic, cm=cm, k=k)
+            ref, got = [], []
+            for c, v in zip(out['cells'], out['frames'][k]['values']):
+                row_i, col = divmod(c, g['nx'])
+                lon, lat = g['lon_min'] + col * rres, g['lat_min'] + row_i * rres
+                ref.append(float(pred.sel(x=lon, y=lat, method='nearest')))
+                got.append(v)
+            ref, got = np.array(ref), np.array(got)
+            tol = 5e-4 * np.nanmax(np.abs(ref)) + 1e-9   # 4 significant digits
+            row(name, 'propagation', f'{prop_res} deg, dt {dt} d, step {k}', ref, got,
+                unassigned_note, tol)
+    write_csv(args.out, rows)
+
 def exp_isolation(args):
     """NFR2: does a running simulation degrade the latency of short requests?
 
@@ -1264,12 +1129,11 @@ EXPERIMENTS = {
     'cachekey': (exp_cachekey, 'offline', 'cache hit rate under key normalisation'),
     'containment': (exp_containment, 'offline', 'what the containment lookup absorbs that the key could not'),
     'forcing':  (exp_forcing,  'net',     'cold forcing retrieval against requested volume'),
-    'convergence': (exp_convergence, 'offline', 'propagated vs simulated distributions over horizons'),
     'load':     (exp_load,     'api',     'response times as the number of simultaneous users grows'),
-    'validation': (exp_validation, 'offline', 'noise floor, hold-out and time-varying decomposition of the propagation error'),
     'cachedir': (exp_cachedir, 'offline', 'composition of the forcing cache'),
     'analyses': (exp_analyses, 'api',     'phase-2 cost per analysis family'),
     'isolation': (exp_isolation, 'sim',   'NFR2: latency under simulation load'),
+    'equivalence': (exp_equivalence, 'api', 'each analysis as the interface receives it, against the PMAR library'),
     'sparsity': (exp_sparsity, 'api',    'fill of the transition matrix'),
     'reference': (exp_reference, 'sim',  'phase-1 cost of the reference scenarios, cold and warm'),
     'phase1':   (exp_phase1,   'offline', 'phase-1 wall time from scenario records'),
@@ -1285,16 +1149,6 @@ def main():
         if name in ('cachekey', 'containment'):
             s.add_argument('--n', type=int, default=200)
             s.add_argument('--seed', type=int, default=20261025)
-        if name == 'convergence':
-            s.add_argument('--scenarios', nargs='+', required=True)
-            s.add_argument('--res', type=float, nargs='+', default=[0.25])
-            s.add_argument('--dt', type=float, nargs='+', default=[10.0])
-            s.add_argument('--bbox', type=float, nargs=4, default=None)
-            s.add_argument('--subsample', type=int, nargs='+', default=[0],
-                           help='particles per release to keep; 0 = all')
-            s.add_argument('--seed', type=int, default=20261028)
-            s.add_argument('--out', default='convergence',
-                           help='CSV basename, so separate sweeps do not overwrite')
         if name == 'reference':
             s.add_argument('--names', nargs='*', default=['S', 'M', 'Mp'])
             s.add_argument('--records', nargs='*', default=[],
@@ -1305,6 +1159,12 @@ def main():
             s.add_argument('--cases', nargs='+', required=True,
                            help='NAME:scenario_id:grid_deg')
             s.add_argument('--out', default='sparsity')
+        if name == 'equivalence':
+            s.add_argument('--cases', nargs='+', default=[
+                'S:custom_64978f32:0.25:0.25:1', 'M:custom_e4f2e106:0.5:0.25:5',
+                'L:custom_e3f0da47:0.5:0.25:10'], help='NAME:id:conn_res:prop_res:dt_days')
+            s.add_argument('--steps', type=int, nargs='+', default=[1, 2, 5, 10])
+            s.add_argument('--out', default='equivalence')
         if name == 'load':
             s.add_argument('--scenario', default='custom_e4f2e106')  # scenario M
             s.add_argument('--sync-levels', type=int, nargs='+', default=[1, 2, 4, 8, 16, 32])
@@ -1313,13 +1173,6 @@ def main():
             s.add_argument('--repeat', type=int, default=3)
             s.add_argument('--probe', choices=['processes', 'scenario_status'], default='processes')
             s.add_argument('--out', default='load')
-        if name == 'validation':
-            s.add_argument('--scenarios', nargs='+', required=True)
-            s.add_argument('--res', type=float, default=0.25)
-            s.add_argument('--dt', type=float, default=10.0)
-            s.add_argument('--bbox', type=float, nargs=4, default=None)
-            s.add_argument('--seed', type=int, default=20261029)
-            s.add_argument('--out', default='validation')
         if name == 'forcing':
             s.add_argument('--days', type=int, nargs='+', default=[3, 10, 30])
             s.add_argument('--repeat', type=int, default=3)

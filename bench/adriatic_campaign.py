@@ -1,22 +1,18 @@
-"""The Adriatic convergence campaign of ch. 5.
-
-Three simulations differing only in particle count, so that particles per cell
-at the 0.25 deg grid the interface defaults to spans an order of magnitude
-around the thirty the platform recommends. Everything else is held fixed:
-release area, period, releases, integration step and forcing.
+"""Scenario L of ch. 6: the whole Adriatic basin, four releases of 90 days.
 
 The release area is the whole Adriatic basin, from the shapefile the platform
 already ships, simplified at 0.01 deg. The simplification changes the area by
 0.1 per cent and removes three quarters of the vertices, which matters only for
-the size of the request; at a 0.25 deg analysis grid it is immaterial.
+the size of the request.
 
 Beaching is off, as a Markov configuration requires: a stranded particle has no
-position and would silently leave the chain.
+position and would silently leave the chain. The particle count is given per
+cell of the 0.25 deg grid; scenario L used 50 per cell, 13 850 particles.
 
 Run inside the backend container, once, and expect roughly fifteen minutes of
 integration after the forcing download:
 
-    docker compose exec -T backend python -I /app/bench/adriatic_campaign.py
+    docker compose exec -T backend python -I /app/bench/adriatic_campaign.py --per-cell 50
 """
 import argparse
 import json
@@ -73,7 +69,7 @@ def main():
     out = []
     for per_cell in args.per_cell:
         pnum = per_cell * SEA_CELLS_AT_025
-        label = f'Adriatic convergence {per_cell}/cell'
+        label = f'Adriatic basin {per_cell}/cell'
         print(f'\n== {label}: {pnum} particles x {COMMON["seedings"]} releases ==')
         t0 = time.monotonic()
         if pnum >= OOM_AT:
@@ -96,10 +92,7 @@ def main():
                     'scenario_id': sid, 'wall_s': round(wall, 1)})
     bench.write_csv('adriatic_campaign', out)
     if out:
-        print('\nnow run:')
-        print('  python -I /app/bench/run.py convergence --out convergence_adriatic \\')
-        print('      --res 0.25 --dt 10 --scenarios '
-              + ' '.join(r['scenario_id'] for r in out))
+        print('\nscenarios: ' + ' '.join(r['scenario_id'] for r in out))
 
 
 if __name__ == '__main__':
