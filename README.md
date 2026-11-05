@@ -180,7 +180,7 @@ PUBLIC_SCENARIOS=custom_927fb7ae,custom_xxxxxxxx,custom_yyyyyyyy
 | Without the token (visitors) | With the token |
 |---|---|
 | Analysis (PPI, connectivity, tools) on the scenarios in `PUBLIC_SCENARIOS` only | Everything, on every scenario |
-| No `precompute`, no `opendrift`, no `pmar` without `scenario_id` (they run OpenDrift) | Simulations allowed |
+| No `precompute`, and no `pmar` without `scenario_id` (they run OpenDrift) | Simulations allowed |
 
 The check runs in the backend (`processes/access.py`), not only in the UI: a request sent
 straight to the API without the token fails with `ACCESS_DENIED`. The token travels as the
@@ -194,6 +194,10 @@ With `SIMULATION_TOKEN` unset the app behaves exactly as without demo mode. With
 `PUBLIC_SCENARIOS` empty, visitors see every scenario but still cannot run simulations.
 
 ## OpenDrift process
+
+> **Not published at the moment.** The process is commented out in `pygeoapi-config.yml` and
+> its tab is hidden in the interface, so the API lists ten processes. The code stays in
+> `processes/OpenDriftProcess.py`: uncomment its four lines in the configuration to publish it again.
 
 **Endpoint:** `POST /processes/opendrift/execution`
 
@@ -429,7 +433,7 @@ through the scenario status process.
 
 Simulations need several GB of memory and can run for hours, so **only one runs at a time**:
 
-- `precompute` and `opendrift` jobs go to the Celery queue `simulations`
+- `precompute` jobs (and `opendrift` ones, when that process is published) go to the Celery queue `simulations`
   (`worker/manager.py`, `SIMULATION_PROCESSES`), served by the `simulation-worker` service with
   `--concurrency=1`. A second simulation is **queued**, not rejected.
 - PMAR and connectivity analyses go to the default queue, served by `celery-worker` with
@@ -1009,6 +1013,8 @@ read back (`storage/persistedState.test.js`).
 ## Frontend features
 
 ### OpenDrift tab
+
+Hidden for now, like the `opendrift` process it calls (see [OpenDrift process](#opendrift-process)).
 
 - Interactive seeding: draw a **circle**, a **rectangle**, or free **polygons** on the map (polygons are sent to this process as their bounding rectangle)
 - Animated particle trajectories with play/pause, time slider, and speed control

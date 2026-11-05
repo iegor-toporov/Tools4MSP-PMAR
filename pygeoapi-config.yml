@@ -67,10 +67,13 @@ metadata:
 
 resources:
 
-    opendrift:
-      type: process
-      processor:
-            name: processes.OpenDriftProcess.OpenDriftProcessor
+    # Direct OpenDrift simulation with animated trajectories: not published for now,
+    # and its tab is hidden in the interface. The code stays in
+    # processes/OpenDriftProcess.py; uncomment the four lines below to publish it again.
+    # opendrift:
+    #   type: process
+    #   processor:
+    #         name: processes.OpenDriftProcess.OpenDriftProcessor
 
     pmar:
       type: process
