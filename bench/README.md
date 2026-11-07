@@ -35,6 +35,7 @@ python3 bench/run.py storage
 | `load` | minutes | Response times as the number of simultaneous users and analyses grows. Run it from a container on the stack's network, against the API process (see `exp_load`) |
 | `reference` | hours | Phases of the reference scenarios S, M and L (ch. 6), with an empty and a full cache, and a particle sweep on M. `--records NAME=id` reads back runs already on disk |
 | `sparsity` | seconds | Fill of the transition matrix of each reference scenario |
+| `edge` | seconds | Particles that reach the edge of the forcing box and stop there |
 | `forcing` | **network** | Cold forcing retrieval against requested volume |
 
 Run the experiments that use the service one at a time, and do not run other scripts in the

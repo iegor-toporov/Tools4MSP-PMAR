@@ -1,0 +1,4 @@
+name,scenario_id,forcing_margin,box,particles,at_edge_at_end,not_moving_at_end,share_at_end,share_of_positions
+S,custom_64978f32,2.0,10.0 42.0 15.0 47.0,1000,0,0,0.0,0.0
+M,custom_e4f2e106,0.0,12.0 39.0 21.0 46.0,10000,905,859,0.0905,0.0258
+L,custom_e3f0da47,0.0,12.0 39.0 21.0 46.0,55400,2902,2854,0.0524,0.0229

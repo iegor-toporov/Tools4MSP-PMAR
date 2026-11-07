@@ -1188,6 +1188,48 @@ def exp_phase1(args):
               f"{r['us_per_particle_step']} us/p-step")
 
 
+def exp_edge(args):
+    """Particles that reach the edge of the forcing box and stop there.
+
+    Outside the box a particle has no current to move it, but it stays active and
+    keeps a position at every step, so nothing in the file flags it.
+    """
+    import math
+    import numpy as np
+    import xarray as xr
+    rows = []
+    for item in args.cases:
+        name, sid = item.split(':')
+        with open(os.path.join(SCENARIOS, f'{sid}.json')) as fh:
+            sc = json.load(fh)
+        w, s, e, n = sc['bounds']
+        m = sc.get('cmems_margin', 5.0)
+        box = [math.floor(w) - m, math.floor(s) - m, math.ceil(e) + m, math.ceil(n) + m]
+        particles = at_edge = stopped = positions = near = 0
+        for k in range(sc.get('seedings', 1)):
+            with xr.open_dataset(os.path.join(SCENARIOS, f'{sid}_s{k}.nc'), decode_times=False) as ds:
+                lon = np.where(ds['lon'].values > 1e30, np.nan, ds['lon'].values)
+                lat = np.where(ds['lat'].values > 1e30, np.nan, ds['lat'].values)
+            edge = (lon - box[0] < args.tolerance) | (box[2] - lon < args.tolerance) \
+                 | (lat - box[1] < args.tolerance) | (box[3] - lat < args.tolerance)
+            moved = np.hypot(lon[:, -1] - lon[:, -2], lat[:, -1] - lat[:, -2])
+            particles += lon.shape[0]
+            at_edge += int(edge[:, -1].sum())
+            stopped += int((edge[:, -1] & (moved < 1e-6)).sum())
+            positions += int(np.isfinite(lat).sum())
+            near += int(edge.sum())
+        rows.append({'name': name, 'scenario_id': sid, 'forcing_margin': m,
+                     'box': ' '.join(str(v) for v in box), 'particles': particles,
+                     'at_edge_at_end': at_edge, 'not_moving_at_end': stopped,
+                     'share_at_end': round(at_edge / particles, 4),
+                     'share_of_positions': round(near / positions, 4)})
+        r = rows[-1]
+        print(f"  {name}: {at_edge} of {particles} at the edge at the end "
+              f"({r['share_at_end']:.1%}), {stopped} not moving, "
+              f"{r['share_of_positions']:.1%} of all positions")
+    write_csv(args.out, rows)
+
+
 EXPERIMENTS = {
     'storage':  (exp_storage,  'offline', 'trajectory size vs particles/steps/model'),
     'cachekey': (exp_cachekey, 'offline', 'cache hit rate under key normalisation'),
@@ -1201,6 +1243,7 @@ EXPERIMENTS = {
     'sparsity': (exp_sparsity, 'api',    'fill of the transition matrix'),
     'reference': (exp_reference, 'sim',  'phase-1 cost of the reference scenarios, cold and warm'),
     'phase1':   (exp_phase1,   'offline', 'phase-1 wall time from scenario records'),
+    'edge':     (exp_edge,     'offline', 'particles stopped at the edge of the forcing box'),
 }
 
 
@@ -1219,6 +1262,12 @@ def main():
                            help='NAME=scenario_id of runs already on disk')
             s.add_argument('--sweep', type=int, nargs='*', default=[1000, 2500, 5000])
             s.add_argument('--out', default='reference')
+        if name == 'edge':
+            s.add_argument('--cases', nargs='+', default=[
+                'S:custom_64978f32', 'M:custom_e4f2e106', 'L:custom_e3f0da47'],
+                help='NAME:scenario_id')
+            s.add_argument('--tolerance', type=float, default=0.08, help='degrees')
+            s.add_argument('--out', default='edge')
         if name == 'sparsity':
             s.add_argument('--cases', nargs='+', required=True,
                            help='NAME:scenario_id:grid_deg')
